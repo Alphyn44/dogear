@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Don't cancel the other versions when one fails — knowing whether a break is
+      # version-specific is most of the diagnosis.
+      fail-fast: false
+      matrix:
+        # The intersection of Vite's engines (^20.19.0 || >=22.12.0) and vitest's
+        # (^20.0.0 || ^22.0.0 || >=24.0.0). The two floors are the lowest versions we
+        # claim to support in package.json `engines`; 24 is what development happens on.
+        # Node 21 and 23 are correctly excluded — vitest does not support them.
+        node: ['20.19.0', '22.12.0', '24']
+
+    name: verify (node ${{ matrix.node }})
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run format:check
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      # The example typechecks only after the build, because it resolves @dogear/vite
+      # through its exports map to dist/ rather than to source.
+      - run: npm run typecheck:example
+
+      # Builds the consumer app. F2 (#6) adds the sentinel grep over its dist/ here —
+      # this step is what gives that check something to scan.
+      - run: npm run build:example

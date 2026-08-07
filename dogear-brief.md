@@ -21,11 +21,11 @@ obligations to anyone. That's a design constraint, not a disclaimer: it means th
 ceremony stays low, the scope stays honest, and features exist because they get used
 rather than because they demo well.
 
-The npm scope is a **personal account** named `dogear`, not an organization — same
-zero setup as any handle, without the doubled name of `@handle/dogear-core`. If that
-handle is taken, the fallback is `@<handle>/dogear-{cli,core,vite}` and nothing else
-here changes. (The unscoped `dogear` package name belongs to an unrelated hapi/statsd
-plugin last published in 2020.)
+The npm scope is a free **organization** named `dogear`, owned by the personal account
+that publishes it — that gets the clean scope without the doubled name of
+`@handle/dogear-core`. If the org name is taken, the fallback is
+`@<handle>/dogear-{cli,core,vite}` and nothing else here changes. (The unscoped `dogear`
+package name belongs to an unrelated hapi/statsd plugin last published in 2022.)
 
 ---
 
@@ -771,7 +771,7 @@ Increasing order of how much can go wrong.
 
 | | Milestone | Contains | Why here |
 |---|---|---|---|
-| **M0** | Prove the pipe | A1–A4 | Path resolution, hook registration, and JSON shape are where the interesting failures live. Debug them with a **hardcoded** payload and an `alert('loaded')` script — no UI, no source resolution. |
+| **M0** | Prove the pipe | scaffold, A1–A4 | Path resolution, hook registration, and JSON shape are where the interesting failures live. Debug them with a **hardcoded** payload and an `alert('loaded')` script — no UI, no source resolution. M0 opens with the workspace scaffold — the npm workspaces root, the three package skeletons, and CI — because every story below it presumes a monorepo that no story creates. |
 | **M1** | Overlay | B1–B7 | Modifier-click, hover outline, comment box, in-memory queue, POST on submit. Ships with selector + text only, and is **already useful** — an agent can often find a component from a distinctive class or text. |
 | **M2** | Localization | C1–C5 | The attribute transform. Deterministic, synchronous, unit-testable against fixture files. |
 | **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
@@ -857,18 +857,32 @@ Each dev server serves its own endpoint and knows its own root, so port collisio
 repos cannot cause confusion. Worth stating because it's a real advantage over the
 extension approach, which only sees a URL.
 
-**Package naming → `@dogear/*` under a personal scope.**
-The unscoped `dogear` is taken by an unrelated 2020 hapi plugin. A personal account named
-`dogear` gets the clean scope with no organization to create and no doubled name. GitHub
-repo names are per-owner, so other `dogear` repos are irrelevant — the only cost is
-search-result noise.
+**Package naming → `@dogear/*` via a free npm organization.**
+The unscoped `dogear` is taken by an unrelated hapi plugin (v5.0.0, last published
+2022-06-15). An npm scope exists only if you own a user or an org of that name, and on npm
+an "organization" carries no team semantics — it is simply the mechanism for owning a scope
+that isn't already your username. It is free for unlimited public packages and keeps
+publishing under one identity. An earlier draft called for a second *personal account*
+named `dogear` on the theory that it was less setup; it isn't — an org is one form, while a
+second account is a second login and 2FA to maintain forever, and it turns any future
+handoff into a password-sharing problem. OIDC trusted publishing is configured per package
+and behaves identically either way. GitHub repo names are per-owner, so other `dogear`
+repos are irrelevant — the only cost is search-result noise.
 
 **Framework scope → React first-class; others unsupported for now.**
 The attribute transform is JSX-only. With the fiber walk cut, Vue and Svelte get nothing
 but the selector floor until someone writes their transforms.
 
-**Tooling → npm workspaces, TypeScript, tsup, vitest.**
-npm workspaces because pnpm isn't installed and this doesn't need it. Nothing exotic.
+**Tooling → npm workspaces, TypeScript 7, tsup, vitest, Prettier. No ESLint.**
+npm workspaces because pnpm isn't installed and this doesn't need it. TypeScript 7 is the
+native compiler and current `latest`; typechecking runs on every turn that touches a `.ts`
+file, so its speed is felt constantly. The only place the native port is exposed is `.d.ts`
+emit, which goes through the compiler API — transpilation is esbuild and never touches
+`tsc`. The fallback if that path misbehaves is `tsc --emitDeclarationOnly`.
+
+No ESLint: with `strict` on and Prettier owning formatting, a linter's remaining yield on a
+project this size didn't justify the config surface. `lint` is defined as
+`format:check && typecheck` so the name still means something.
 
 ---
 

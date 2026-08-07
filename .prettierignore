@@ -1,0 +1,27 @@
+# Keep this in sync with .claude/hooks/prettier-format.sh, which formats on every
+# edit. If the two disagree, `npm run format:check` fails on files the hook just
+# "fixed" — or worse, silently reformats prose nobody asked it to touch.
+
+node_modules/
+dist/
+coverage/
+package-lock.json
+
+.dogear/
+.codegraph/
+
+# Markdown and YAML are hand-formatted. Prettier rewraps prose and re-indents YAML
+# aggressively, which turns a one-line change to the brief into a 200-line diff.
+# prettier-format.sh excludes these extensions for the same reason.
+*.md
+*.yml
+*.yaml
+
+# Harness configuration, not project source. settings.json keeps each hook on one
+# line deliberately — a list of six near-identical entries reads better compact, and
+# Prettier expands every one of them to four lines. Same judgement as the Markdown
+# exclusion above: hand-formatted content stays hand-formatted.
+#
+# .prettierignore is honoured by `prettier --write <file>` too, so prettier-format.sh
+# skips these automatically and the two cannot drift.
+.claude/

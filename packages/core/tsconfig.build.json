@@ -1,0 +1,17 @@
+{
+  // Declaration emit only. tsup produces the .js (esbuild); this produces the .d.ts,
+  // because tsup's bundled rollup-plugin-dts cannot run against TypeScript 7.
+  // See tsup.config.ts for the full reasoning.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  // Tests and the tsup config are typechecked by tsconfig.json but must never reach
+  // dist/ — a stray dist/index.test.d.ts would ship in the `files: ["dist"]` tarball.
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "dogear-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Monorepo root for dogear — point at an element, comment on it, hand it to your agent.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alphyn44/dogear.git"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @dogear/core -w @dogear/vite -w @dogear/cli",
+    "build:example": "npm run build -w dogear-example-react",
+    "dev:example": "npm run dev -w dogear-example-react",
+    "typecheck": "npm run typecheck -w @dogear/core -w @dogear/vite -w @dogear/cli",
+    "typecheck:example": "npm run typecheck -w dogear-example-react",
+    "test": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "npm run format:check && npm run typecheck",
+    "verify": "npm run format:check && npm run typecheck && npm test && npm run build && npm run typecheck:example"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "prettier": "^3.9.6",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

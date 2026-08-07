@@ -109,6 +109,39 @@ The brief has the full reasoning; the code is authoritative on mechanism.
 
 ---
 
+## Commands
+
+Node `^20.19.0 || >=22.12.0` (Vite's own floor). One `npm install` at the repo root
+resolves all four workspaces.
+
+| Command | What it does |
+|---|---|
+| `npm run verify` | The full gate: `format:check → typecheck → test → build → typecheck:example` |
+| `npm run typecheck` | `tsc --noEmit` per package. Deliberately excludes the example — see below |
+| `npm test` | vitest across all packages |
+| `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
+| `npm run build:example` | Production Vite build of `examples/react-app` — what F2's leak check scans |
+| `npm run dev:example` | Dev server for the example app |
+| `npm run format` | Prettier write; `format:check` is the read-only form |
+| `npm run lint` | Alias for `format:check && typecheck`. **There is no ESLint** |
+
+Two things that will bite otherwise:
+
+- **Declarations come from `tsc`, not tsup.** tsup's `dts` bundles `rollup-plugin-dts`
+  compiled against the TypeScript 5.7 compiler API, and it dies on
+  `useCaseSensitiveFileNames` under TypeScript 7. So every `tsup.config.ts` sets
+  `dts: false`, and each publishable package carries a `tsconfig.build.json` for
+  declaration emit. JS emit is esbuild and was never affected.
+- **`typecheck` excludes `examples/react-app`.** The example resolves `@dogear/vite`
+  through its exports map to `dist/`, so typechecking it requires a build first — and
+  `stop-verify.sh` runs `typecheck` on every turn that touches TypeScript. Use
+  `npm run typecheck:example` after a build, or just `npm run verify`.
+
+The example consumes the **built** plugin, never its source. Rebuild before it picks up a
+change: `npm run build -w @dogear/vite`.
+
+---
+
 ## Code Style
 
 - **TypeScript throughout**, `strict` on.

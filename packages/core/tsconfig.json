@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // core is the browser half — it must never reach for a Node API at runtime.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // ...but the colocated vitest tests DO run in Node (index.test.ts reads
+    // package.json off disk). Including node types here is a pragmatic single-project
+    // setup; the discipline that keeps runtime code browser-only is review, not tsc.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "tsup.config.ts"]
+}

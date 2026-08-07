@@ -1,0 +1,29 @@
+{
+  "name": "@dogear/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The dogear CLI: init, mcp, prune, status.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alphyn44/dogear.git",
+    "directory": "packages/cli"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "dogear": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
