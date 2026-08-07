@@ -75,14 +75,44 @@ if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(])git[[:space:]]+(commit|push|pull|fetch|me
   block "Git mutations are blocked. The user reviews diffs and runs git commit/push/sync manually."
 fi
 
-# GitHub CLI (gh) — READ-ONLY, with ONE scoped carve-out for PR descriptions.
-# gh is installed for PR/CI inspection; the user merges, creates, comments,
-# closes, and syncs everything manually. The assistant may READ state: gh
-# pr|run|issue|repo|workflow|release view/list/checks/diff/status/watch (those
-# verbs pass through). Every mutating subcommand is blocked — matched wherever it
-# appears, so a compound `gh pr list && gh pr merge` is still caught. `gh` and the
-# Windows `gh.exe` (incl. an absolute path) both match.
+# GitHub CLI (gh) — read-only by default, with scoped carve-outs for PR
+# descriptions, issue management, and label create/edit. `gh` and the Windows
+# `gh.exe` (incl. an absolute path) both match.
 #
+# Reading always passes: gh pr|run|issue|repo|workflow|release
+# view/list/checks/diff/status/watch.
+#
+# ---------------------------------------------------------------------------
+# HARD DENIES — checked BEFORE the carve-out flags below, and deliberately so.
+#
+# The flags are computed over the WHOLE command string, which means a compound
+# like:
+#     gh issue create "x" && gh issue delete 5
+# would set the issue carve-out flag from the `create` and wave the `delete`
+# straight through. Anything irreversible is therefore denied here first, where
+# no downstream flag can reach it.
+# ---------------------------------------------------------------------------
+
+# Issue destruction. Issues cannot be bulk-deleted, `gh issue delete` needs
+# admin and prompts one at a time, and issue NUMBERS are consumed permanently —
+# so a bad batch has no clean undo, unlike almost any other mistake here.
+# transfer/pin/lock change repo-level state rather than an issue's content.
+if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+issue[[:space:]]+(delete|transfer|pin|unpin|lock|unlock|develop)([[:space:]]|$) ]]; then
+  block "gh issue delete/transfer/pin/lock/develop is blocked. Issues can't be bulk-deleted and their numbers are consumed permanently — close them instead, which is reversible."
+fi
+
+# Deleting a label strips it from every issue carrying it — destructive and not
+# meaningfully undoable. Creating and editing labels is allowed below.
+if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+label[[:space:]]+(delete|clone)([[:space:]]|$) ]]; then
+  block "gh label delete/clone is blocked — deleting a label strips it from every issue that carries it."
+fi
+
+# PR lifecycle stays entirely the user's. Listed here (not just in the general
+# alternation below) so the PR-description carve-out can never reach it.
+if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+pr[[:space:]]+(create|merge|close|reopen|ready|review|comment|lock|unlock|checkout)([[:space:]]|$) ]]; then
+  block "gh pr mutations are blocked. The user creates, comments on, merges, and closes PRs manually."
+fi
+
 # Carve-out: `gh pr edit <n> --body/--body-file/--title` sets the PR DESCRIPTION,
 # which the /pr-prep command is permitted to do (a visible, reversible edit).
 # Scoped to description edits ONLY: the command must be `gh pr edit`, carry a
@@ -95,6 +125,20 @@ if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+pr[[:space:]]+ed
   gh_pr_edit_safe=true
 fi
 
+# Carve-out: issue management. Issues are cheap, visible, and reversible —
+# closing undoes a create for every practical purpose, and the destructive verbs
+# already died in the hard-deny block above.
+gh_issue_safe=false
+if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+issue[[:space:]]+(create|comment|edit|close|reopen)([[:space:]]|$) ]]; then
+  gh_issue_safe=true
+fi
+
+# Carve-out: label create/edit, so epic/milestone labels can be set up.
+gh_label_safe=false
+if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+label[[:space:]]+(create|edit)([[:space:]]|$) ]]; then
+  gh_label_safe=true
+fi
+
 # gh run rerun/cancel re-triggers or aborts a CI run. Verify the fix LOCALLY
 # instead — a pushed fix re-runs CI on its own, and a rerun confirms nothing a
 # local repro doesn't.
@@ -103,8 +147,10 @@ if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+run[[:space:]]+(
 fi
 
 if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+(pr|issue|repo|release|run|cache|label|gist|project|ruleset|codespace|extension)[[:space:]]+(create|merge|close|delete|edit|comment|review|reopen|ready|lock|unlock|rename|transfer|develop|fork|archive|unarchive|sync|set-default|enable|disable|cancel|rerun|upload|pin|unpin|install|remove|upgrade|clone|restore|checkout) ]] \
-   && [[ "$gh_pr_edit_safe" == false ]]; then
-  block "gh mutation blocked. The assistant is read-only on GitHub except a scoped 'gh pr edit --body/--body-file/--title' (PR description). The user runs gh merge/create/comment/close and every git commit/push/merge/sync manually."
+   && [[ "$gh_pr_edit_safe" == false ]] \
+   && [[ "$gh_issue_safe" == false ]] \
+   && [[ "$gh_label_safe" == false ]]; then
+  block "gh mutation blocked. Permitted: issue create/comment/edit/close/reopen, label create/edit, and a scoped 'gh pr edit --body/--body-file/--title'. Everything else on GitHub — PRs, releases, repo settings — the user runs manually."
 fi
 
 # gh workflow run triggers CI (its verb 'run' collides with the `gh run` noun, so it

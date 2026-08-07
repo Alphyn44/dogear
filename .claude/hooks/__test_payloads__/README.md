@@ -17,6 +17,8 @@ Expected exit codes:
 | `npm-install.json` | `block-destructive-bash.sh` | exit 2 (blocked: dependency mutation) |
 | `queue-edit.json` | `block-sensitive-paths.sh` | exit 2 (blocked: agent-owned queue state) |
 | `stderr-pager.json` | `block-redundant-stderr-pager.sh` | exit 2 (blocked: redundant `2>&1 \| pager`) |
+| `gh-compound-bypass.json` | `block-destructive-bash.sh` | exit 2 (a permitted `gh issue create` must not wave through a `gh issue delete` in the same command) |
+| `gh-pr-compound-bypass.json` | `block-destructive-bash.sh` | exit 2 (same, for the PR-description carve-out vs `gh pr merge`) |
 
 ## Why these exist
 

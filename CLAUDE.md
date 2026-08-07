@@ -52,6 +52,17 @@ Use `AskUserQuestion` for real forks: options plus a recommendation. I'd rather 
 Run `/ticket` for the full ticket workflow — it carries the read → grill → plan →
 implement → verify sequence.
 
+### Issues
+
+Every issue you create follows `.github/ISSUE_TEMPLATE/story.md` (or `bug.md`).
+GitHub only applies those templates to the web form, never to `gh issue create
+--body`, so matching the format is on you — read the template file and follow it.
+
+Title format is `<story ID> — <short title>`, e.g. `C1 — Attribute transform`, so
+issues map back to the brief at a glance. **The brief is the spec; the issue is
+the tracker.** If the two disagree, change the brief first. Never let an issue
+become a second source of truth.
+
 ### Explain Non-Obvious Choices
 
 When you pick a pattern or structure that isn't self-evident — Vite plugin hook
