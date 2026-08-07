@@ -10,9 +10,20 @@ obvious.
 ## The ticket
 
 `$ARGUMENTS` is the ticket — a file path, a GitHub issue number, a user-story ID from
-the brief (`A1`, `C2`, `D3`…), or pasted text. If it's a path, read it. If it's an
-issue number, read it with `gh issue view`. If it's a story ID, find it in
-`dogear-brief.md`. If it's empty, ask me for it before doing anything else.
+the brief (`A1`, `C2`, `D3`…), or pasted text.
+
+- **Path** — read it.
+- **Issue number** — `gh issue view <n>`.
+- **Story ID** — resolve it to its issue first with
+  `gh issue list --search "<ID> in:title"`. Every brief story is tracked as an issue
+  titled `<ID> — <short title>`, so this returns exactly one match. Read that issue,
+  *then* the brief section. The brief is the spec, but the issue carries the scoping
+  notes and the dependency state — going straight to the brief skips both.
+- **Empty** — ask me for it before doing anything else.
+
+If the ticket resolved to an issue, check its **blocked by** list before planning. If a
+blocker is still open, say so and ask whether we're starting anyway. Don't discover it
+in Step 3.
 
 ## Step 1 — Read + orient (no code yet)
 

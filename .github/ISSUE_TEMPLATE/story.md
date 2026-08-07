@@ -13,7 +13,13 @@ TITLE      "<story ID> — <short title>", e.g. "C1 — Attribute transform".
 
 LABELS     One epic label: epic:pipe | epic:pointing | epic:localization |
            epic:delivery | epic:init | epic:safety
-MILESTONE  M0–M4. Set with --label / --milestone at creation; neither is body text.
+MILESTONE  M0–M4.
+DEPENDS    Real GitHub issue dependencies, not prose. Only where the work
+           genuinely cannot begin — the milestone already carries build order,
+           and a loose edge blocks closing an issue that isn't really blocked.
+
+Set with --label / --milestone / --blocked-by / --blocking at creation, or
+--add-blocked-by / --add-blocking afterwards. None of them is body text.
 
 The brief is the spec, this issue is the tracker. If they disagree, change the
 brief first. Never let an issue become a second source of truth.
@@ -29,11 +35,6 @@ brief first. Never let an issue become a second source of truth.
 
 - [ ] Observable behavior, not implementation
 - [ ] One box per independently verifiable thing
-
-## Depends on
-
-<!-- Issue references: "#3", "Blocked by #3", "Blocks #7". These render live and
-     create backlinks automatically. Delete this section if nothing applies. -->
 
 ## Notes
 
