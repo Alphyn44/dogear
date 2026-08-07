@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+
+# dogear runtime state.
+# The queue is scratch — annotations are transient and machine-local. The
+# config IS meant to be committed, hence the negation.
+.dogear/*
+!.dogear/config.json
+
+# Claude Code local state.
+# ntfy.url holds an ntfy topic, which is a shared secret — anyone who knows the
+# string can read or post your notifications. It must never be committed.
+.claude/ntfy.url
+.claude/settings.local.json
+.claude/.turn-*
+
+# Throwaway PR body written by /pr-prep
+.pr-body.md
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
+
+# NOTE: .codegraph/ is not listed here — it ships its own .gitignore that
+# ignores everything inside it except that file.
