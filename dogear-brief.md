@@ -1,0 +1,927 @@
+# dogear — project brief
+
+> **Status:** source of truth for what is being built. Supersedes any earlier notes.
+> Decisions here are settled unless this document says otherwise; open items are
+> collected in [Still open](#still-open) and nowhere else.
+
+---
+
+## What dogear is
+
+Click an element in your running app, leave a comment on it, and have your coding
+agent receive that comment already bound to the exact source file and line.
+
+- **Product name:** dogear (lowercase, everywhere — code, docs, UI strings)
+- **Repository:** `dogear`
+- **Packages:** `@dogear/cli`, `@dogear/core`, `@dogear/vite`
+- **License:** MIT
+
+A personal project built in the open. Not a product, not a startup, no roadmap
+obligations to anyone. That's a design constraint, not a disclaimer: it means the
+ceremony stays low, the scope stays honest, and features exist because they get used
+rather than because they demo well.
+
+The npm scope is a **personal account** named `dogear`, not an organization — same
+zero setup as any handle, without the doubled name of `@handle/dogear-core`. If that
+handle is taken, the fallback is `@<handle>/dogear-{cli,core,vite}` and nothing else
+here changes. (The unscoped `dogear` package name belongs to an unrelated hapi/statsd
+plugin last published in 2020.)
+
+---
+
+## The problem
+
+When working on a frontend with a coding agent, the hard part isn't describing *what*
+to change — "move this two tabs to the right" is unambiguous. The hard part is
+**localization**: telling the agent *which* element you mean. Today that means
+grepping around yourself to find the component, or hoping the agent's search lands on
+the right file.
+
+Tools like v0 and Claude Design solve this by owning the whole environment: you click
+a component and the model knows exactly what you're pointing at. dogear brings that
+pointing gesture to a normal local dev setup, without changing IDEs or adopting a
+different agent.
+
+## Goal
+
+**Point at a thing, say what's wrong with it, and have the agent already know where it
+lives.** Zero copy-paste, zero grepping, zero "which Button did you mean?"
+
+### Non-goals
+
+Each of these is a plausible adjacent feature that would change the shape of the tool
+if it crept in:
+
+- **Not a design tool.** dogear captures *intent about* an element. It does not edit
+  styles in the browser, generate CSS, or preview changes.
+- **Not a plan or diff annotator.** That's a genuinely different problem — annotating
+  what the agent *proposes* rather than what the app *renders*.
+- **Not a production tool.** Every layer assumes localhost. See
+  [Keeping it out of production](#keeping-it-out-of-production).
+- **Not a code generator.** dogear never writes to your source files. It writes one
+  JSON file; the agent does the editing.
+- **Not a replacement for the agent's own search.** It's a strong hint, not a
+  constraint. If the line number is stale, the agent should still find the right code
+  from the selector and text snippet it also received.
+- **Not a hosted service.** No account, no telemetry, no network egress beyond
+  localhost.
+
+---
+
+## The loop
+
+1. Run your backend and `npm run dev` as normal.
+2. In any browser, modifier-click (⌥/Alt-click) an element. An overlay outlines it and
+   opens a comment box.
+3. Type the change: "shade darker," "move 4px right," "this needs to be two tabs over."
+4. Repeat for as many elements as you want — comments batch into a queue.
+5. Submit. The queue is written to disk.
+6. In your agent, the pending comments arrive — on request via MCP, automatically if
+   your agent supports a prompt hook, or by paste if all else fails. See
+   [Delivery](#delivery-getting-the-queue-to-the-agent).
+7. The agent edits, marks items resolved, page hot-reloads, rinse and repeat.
+
+**Note step 6.** Hooks are reactive and cannot initiate a turn. The browser never
+"sends to" the agent — it writes a file, and the agent picks it up.
+
+This is a feature, not a workaround. You get a moment to review the batch and add a
+global instruction before anything runs. It also means the browser half and the agent
+half are never coupled: either can be broken, replaced, or driven by hand without the
+other noticing.
+
+---
+
+## Prior art
+
+The pointing gesture is solved several times over. **The loop is not.**
+
+`react-grab` (npm package, script tag) hovers an element and puts source context on
+your clipboard — the closest thing to dogear, and it stops at the clipboard: one
+element, no comment, no batch, no disk. `drawbridge`, `wiebekaai/browser-annotations`,
+and `OpenCode Chrome Annotation` are Chrome extensions doing variations on annotation
+with a companion server or webhook. `stagewise` left this shape entirely.
+`plannotator` annotates agent *plans and diffs* — adjacent, different input.
+
+What none of them do is take you from *comment → batch → disk → agent* without a human
+copy-pasting in the middle. You should be able to leave eight comments across three
+pages, go make coffee, come back, type "go," and have the agent hold all eight.
+
+That's the whole thesis. The rest of this document is greenfield — where prior art is
+referenced below it's for a specific technical reason, not to position against anyone.
+
+### Why a dev-server plugin rather than an extension
+
+- **Chromium only** — no Firefox, which matters if you test across browsers.
+- **Cannot write to disk** (sandboxed), so extensions need a companion local server or
+  webhook anyway — two artifacts, two installs.
+- **Content scripts run in an isolated world**, so reading framework internals means
+  injecting into the MAIN world and messaging back. Fragile.
+- **MV3 service workers get killed**; connections drop and need recovery logic.
+- **An extension only sees a URL, not a process** — so it cannot tell which project
+  `localhost:8000` belongs to. See
+  [Multiple dev servers](#multiple-dev-servers-and-multiple-repos), where this turns
+  out to matter a lot.
+
+A dev-server plugin has none of these problems, because the dev server is already a
+local process with filesystem access, same-origin with the page.
+
+**Extensions do win on some things** — worth knowing, not worth chasing in v1: they
+work on deployed/staging URLs, annotations survive reloads for free,
+`chrome.tabs.captureVisibleTab` makes screenshots trivial, and nothing lands in
+`package.json`.
+
+---
+
+## Architecture
+
+Three packages, one monorepo (npm workspaces).
+
+### `@dogear/core`
+
+Framework-agnostic. Knows nothing about Vite. Contains:
+
+- Overlay UI: hover outline, modifier-click capture, comment box, queue display
+- The source-resolution ladder
+- Clipboard export (the universal fallback)
+- POSTs JSON to a **configurable endpoint**
+
+This is most of the code. Keeping it free of Vite assumptions is the one decision that
+would be painful to retrofit — it's what lets a Chrome extension become a second
+delivery mechanism later instead of a rewrite.
+
+Core's only requirement of its host: *something* must serve the endpoint it POSTs to.
+It does not care what.
+
+### `@dogear/vite`
+
+Thin plugin. Three jobs:
+
+```js
+export default function dogear(options) {
+  return {
+    name: 'dogear',
+    apply: 'serve',                 // never runs during build
+    enforce: 'pre',                 // must see JSX before the react plugin compiles it
+    transform(code, id) { /* stamp data-dogear-src on JSX elements */ },
+    transformIndexHtml() { /* inject core */ },
+    configureServer(server) { /* endpoint → writes .dogear/queue.json */ },
+  }
+}
+```
+
+Because the plugin injects the script itself, user source never imports the toolbar —
+there's no reference that could survive into a production bundle.
+
+`enforce: 'pre'` is load-bearing. Vite runs `pre` plugins before the React plugin's JSX
+compilation, so our transform sees actual JSX syntax. Without it we'd be adding
+attributes to already-compiled `jsx()` calls.
+
+### `@dogear/cli`
+
+Installed globally, provides `dogear` on PATH. Subcommands:
+
+| Command | Purpose |
+|---|---|
+| `dogear init` | Scaffold a repo: detect setup, write config, gitignore, wire the agent |
+| `dogear mcp` | Run the MCP server over stdio |
+| `dogear hook` | Emit `UserPromptSubmit` JSON for Claude Code |
+| `dogear prune` | Drop resolved items |
+| `dogear status` | What's running, what's pending, across all registered repos |
+
+Absorbing the hook into the CLI removes a package that would otherwise exist to hold
+about fifty lines.
+
+### Delivery: getting the queue to the agent
+
+**MCP is the product. Hooks are an upgrade you get where your tooling allows it.**
+
+That ordering is deliberate. Building hook-first would mean a tool that works
+beautifully in exactly one agent and not at all anywhere else, with the portable path
+bolted on afterwards. Building MCP-first means dogear works everywhere on day one, and
+the agents that support more get more.
+
+**Baseline — the MCP server.** `dogear mcp` speaks MCP over stdio, so it works with
+Claude Code, Codex, Cursor, Zed, and anything else that speaks the protocol. This is the
+whole product: reading pending items, and — importantly — **resolving them**.
+
+The critical property is `dogear_resolve`. The alternative is instructing the model to
+hand-edit `.dogear/queue.json`, which is a reliable way to produce a malformed JSON
+file. A tool call cannot corrupt the queue.
+
+The one thing MCP cannot do is initiate. **MCP is pull** — the agent has to decide to
+call the tool, so typing "go" surfaces nothing on its own. You say "check dogear" or
+your rules file tells the agent to look. That's the baseline experience, and it is
+perfectly usable.
+
+**Upgrade — a prompt hook where the agent has one.** A `UserPromptSubmit` hook injects
+pending items as `additionalContext` alongside whatever you typed, which is what makes
+"type anything and it just happens" true. Same formatter, same queue, same resolve path
+through MCP — the hook only removes the need to ask.
+
+This is a genuine capability tier, not a fallback: if your agent supports hooks, dogear
+gets meaningfully better, and if it doesn't, nothing is broken. Claude Code is currently
+the only agent that can do it:
+
+- **Codex CLI** has a `userpromptsubmit` hook, but it's behind a feature flag
+  (`[features].codex_hooks`) and configured **globally** in `~/.codex/config.toml`
+  rather than per project. Whether it can *inject* context or only observe and block
+  is unconfirmed.
+- **Cursor**'s `beforeSubmitPrompt` (3.11+) runs cloud-side and **cannot inject
+  additional context** — there's an open feature request for exactly that.
+
+Because MCP owns the formatting and the resolve path, the hook stays thin — it is a
+trigger, not a second implementation. Any future agent that ships a context-injecting
+prompt hook becomes a one-adapter addition rather than a redesign.
+
+**Floor — the clipboard.** `Ctrl+Alt+P` in the overlay copies the formatted queue. No
+server, no config, no protocol. Works with a web chat window, an agent nobody's written
+an adapter for, or a colleague on Slack. Annoying by design — it's the thing that always
+works, including when MCP is misconfigured.
+
+Verified details of the Claude Code hook contract the implementation depends on:
+
+- **Default timeout is 30s**, not the 600s that applies to most hook types. Ours
+  completes in milliseconds; `timeout: 10` fails fast.
+- **`UserPromptSubmit` does not support matchers.** Any `matcher` field is silently
+  ignored — it always fires.
+- **Exit 2 blocks *and erases* the user's prompt.** dogear must therefore **never exit
+  2.** A missing or malformed queue exits 0 with no context.
+- **Plain stdout is also injected as context** for this event. We still emit structured
+  JSON so `suppressOutput` is available.
+- **`CLAUDE_PROJECT_DIR`** is set, which locates the repo without depending on `cwd`.
+- **Exec form cannot run `.cmd`/`.bat` shims** — and a global npm bin on Windows *is* a
+  `.cmd` shim. So `dogear init` never writes `command: "dogear"`. It writes `node` plus
+  a resolved path, preferring `${CLAUDE_PROJECT_DIR}/node_modules/...` when a local
+  install exists so the config stays portable across machines:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ {
+          "type": "command",
+          "command": "node",
+          "args": ["${CLAUDE_PROJECT_DIR}/node_modules/@dogear/cli/dist/cli.js", "hook"],
+          "timeout": 10
+      } ] }
+    ]
+  }
+}
+```
+
+### The bridge is a file, not a socket
+
+The browser writes, the readers read. They never talk directly. Every half is
+independently testable, and the state is inspectable with `cat` when something goes
+wrong. This is also why the queue is JSON and not SQLite — the agent reads it, you
+debug it, and neither should need a client.
+
+### Multiple dev servers and multiple repos
+
+You will have repo A serving `:8000`, `:8001`, `:8002` and repo B also wanting `:8000`.
+Most of this is free, and the part that isn't has a specific fix.
+
+**Free: cross-repo isolation.** The browser POSTs **same-origin**. The endpoint is
+served by the very Vite process that served the page, and that process knows its own
+root. The port never enters the routing decision, so two repos on `:8000` are simply
+two processes with different roots. There is no shared namespace in which to collide.
+
+This is worth stating plainly because **an extension cannot do this** — it sees a URL
+and has to guess which project `localhost:8000` means. That guess is why every
+extension-based tool needs a companion server with a registry.
+
+**Not free: several dev servers inside one repo.** Three Vite roots, one git repo, one
+agent session. Two rules:
+
+1. **The queue resolves from the git root, not the Vite root.** Walk up for `.git`.
+   One repo → one queue → one agent session. Resolving per-Vite-root would give a
+   monorepo three queues and leave the hook guessing which to read.
+2. **Every annotation records `origin` and `app`** — `http://localhost:8001` and the
+   workspace package name. When two apps both have a `Button`, the agent needs to know
+   which surface you were looking at.
+
+**The concurrency bug this creates**, worth writing down before it bites: two Vite
+processes appending to one file. The atomic temp filename must include the pid, and
+the write must be read-modify-write — re-read the queue immediately before writing,
+never cache it at server start. Otherwise app A's submit silently drops app B's items.
+
+**Machine-level registry.** `~/.dogear/projects.json` maps origin → repo root, written
+by each plugin instance at startup. It powers `dogear status` and is the piece a future
+sidecar or extension mode would need, since those *do* have the URL-to-project problem.
+
+---
+
+## Source resolution
+
+**This is the hard part**, and it has two failure modes pulling in opposite directions.
+
+### The `Button.tsx:12` vs `TabBar.tsx:42` problem
+
+```jsx
+// src/components/Button.tsx:12
+export function Button({ label }) {
+  return <button className="btn">{label}</button>   // ← the element literally lives here
+}
+
+// src/components/TabBar.tsx:42
+<Button label="Save" />                              // ← but you probably meant here
+```
+
+You alt-click the Save button. Which line did you point at?
+
+- *"Shade this darker"* → `Button.tsx:12`. You mean the button's own styling.
+- *"Move this two tabs over"* → `TabBar.tsx:42`. You mean this instance's placement.
+
+Both are correct. Which you want depends entirely on the comment you're about to type,
+which the resolver cannot know. **So dogear doesn't choose — it sends the chain and
+lets the agent pick**, using the comment as the disambiguator. That's why `sites` is an
+array and not a field.
+
+### The ladder
+
+**1. `data-dogear-src` attribute — primary, v1.** The Vite plugin AST-transforms JSX in
+dev and stamps `data-dogear-src="src/components/Button.tsx:12:5"` on each host element.
+Core reads it with `closest()`.
+
+- Synchronous and exact. No promises, no source maps, no framework internals.
+- Immune to framework version changes. This is the layer that won't rot.
+- Precise about host elements — which matters because React 19 removed `_debugSource`,
+  so runtime approaches can no longer tell you which `<div>` you clicked, only which
+  component created it.
+- **Costs:** only exists where the transform ran. Third-party components, portals,
+  `.js` files, and non-Vite setups have none. It pollutes the dev DOM, and each new
+  framework (Vue SFC, Svelte) needs its own transform.
+
+**2. CSS selector + text snippet — the floor, v1.** Always present, never fails, no
+dependencies. A distinctive class or a string of visible text is frequently enough for
+the agent to find the component on its own. **Layer 2 alone is already useful**, which
+is why the overlay ships before any source resolution at all.
+
+**3. Runtime fiber walk — deferred, not planned.** Where no attribute exists, a library
+like [`element-source`](https://github.com/aidenybai/element-source) (MIT, wraps bippy)
+can walk framework internals to recover a source location, covering React, Preact, Vue,
+Svelte, and Solid at runtime with no build plugin. It also yields the *owner* site —
+often exactly the `TabBar.tsx:42` answer the attribute can't give.
+
+**We are not building this in v1, and possibly not at all.** Choosing the attribute
+transform as the primary layer largely dissolves the need for it: in a Vite React app
+with the transform on, everything in *your own code* already carries its source. Layer
+3 only earns its keep for third-party components and portals — places you're less
+likely to be leaving styling comments anyway.
+
+The cost of taking it is real: `element-source` is v0.0.5, depends on `bippy@^0.5.x`
+while bippy ships 0.6.1, is async, and its entire value rests on React internals its
+own author warns about ("we don't recommend depending on internals unless you really,
+*really* have to"). Declining it keeps dogear free of React-internals risk **entirely**,
+which is a better property than the original draft claimed.
+
+So: ship without it, use it for a week, and add it only if you actually alt-click
+something with no attribute and get annoyed. It's an optional lazy-loaded dependency —
+hours of work, not a rewrite. If it were ever abandoned, MIT permits vendoring, but
+vendoring means owning a fiber-internals hack forever. That's the escape hatch, not the
+plan.
+
+Every resolved site carries a `via` field so the agent knows how much to trust it.
+
+---
+
+## Data contracts
+
+### Annotation
+
+```json
+{
+  "id": "01J8ZQK4V7X2M9NB3TFR5HAECD",
+  "status": "pending",
+  "comment": "shade this darker, it's competing with the primary CTA",
+  "createdAt": "2026-08-06T21:14:03.221Z",
+  "resolvedAt": null,
+  "origin": "http://localhost:8001",
+  "app": "@acme/admin",
+  "url": "http://localhost:8001/settings",
+  "sites": [
+    { "file": "src/components/Button.tsx", "line": 12, "column": 5,
+      "tag": "button", "component": "Button", "via": "attribute" },
+    { "file": "src/components/TabBar.tsx", "line": 42, "column": 7,
+      "tag": "div", "component": "TabBar", "via": "attribute" }
+  ],
+  "element": {
+    "tag": "button",
+    "selector": "#settings > div.tab-bar > button:nth-of-type(2)",
+    "text": "Save changes",
+    "classes": ["btn", "btn-primary"],
+    "id": null,
+    "testId": "save-btn"
+  },
+  "viewport": { "w": 1512, "h": 945, "dpr": 2 }
+}
+```
+
+- **`id`** — UUIDv7 (time-sortable, so the file reads chronologically without a sort).
+- **`status`** — `"pending"` | `"resolved"` | `"stale"`. Only `pending` reaches the agent.
+- **`origin` / `app`** — which dev server and which workspace package. Disambiguates a
+  monorepo; see [Multiple dev servers](#multiple-dev-servers-and-multiple-repos).
+- **`sites`** — nearest-first, **capped at 5**. May be empty; `element` never is.
+- **`via`** — `"attribute"` | `"runtime"`.
+- **`element.text`** — first 80 chars of `innerText`, trimmed. The re-anchoring lifeline.
+
+### Queue file — `<git-root>/.dogear/queue.json`
+
+```json
+{
+  "version": 1,
+  "updatedAt": "2026-08-06T21:14:03.221Z",
+  "items": [ /* annotations, oldest first */ ]
+}
+```
+
+- **Resolved from the git root**, so one repo is one queue regardless of how many dev
+  servers are running.
+- **Append-with-status.** Submitting appends; nothing is ever silently dropped.
+- **Written atomically** — serialize to `.dogear/queue.json.<pid>.tmp`, then `rename()`.
+  A reader never observes a partial file. The pid matters: see the concurrency note.
+- **Read-modify-write on every submit.** Never cache the queue in memory at server
+  start — a second dev server may have written since.
+- **`.dogear/queue.json` is gitignored;** `.dogear/config.json` is committed.
+
+### POST body
+
+```json
+{
+  "version": 1,
+  "note": "these are all on the settings page",
+  "batch": [ /* annotations, without status/resolvedAt — the server stamps those */ ]
+}
+```
+
+Response: `{ "ok": true, "written": 3, "pending": 5, "queuePath": ".dogear/queue.json" }`
+
+### HTTP endpoints
+
+Served by `configureServer`, under a configurable base path (default `/__dogear`,
+matching Vite's own `/__vite_ping` convention):
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/__dogear/annotations` | Submit a batch |
+| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) |
+| `POST` | `/__dogear/prune` | Drop resolved items |
+
+### MCP tools
+
+Exposed by `dogear mcp`. The server resolves its repo by walking up from `cwd` for
+`.git`, exactly as the plugin does.
+
+| Tool | Input | Returns |
+|---|---|---|
+| `dogear_pending` | `{ app?: string }` | `{ count, items }` — pending only, optionally filtered to one workspace package |
+| `dogear_resolve` | `{ ids: string[] }` | `{ resolved, remaining }` |
+| `dogear_prune` | `{}` | `{ pruned }` |
+
+### Agent-facing format
+
+One formatter, shared by the hook, the MCP server, and the clipboard export:
+
+```
+<dogear-queue count="2">
+[1] 01J8ZQK4 — src/components/Button.tsx:12  (Button, via attribute)
+    also: src/components/TabBar.tsx:42  (TabBar, via attribute)
+    app: @acme/admin — http://localhost:8001/settings
+    selector: #settings > div.tab-bar > button:nth-of-type(2)
+    text: "Save changes"
+    comment: shade this darker, it's competing with the primary CTA
+
+[2] 01J8ZQM1 — src/layouts/Sidebar.tsx:88  (Sidebar)  ⚠ stale
+    app: @acme/admin — http://localhost:8001/billing
+    selector: nav.sidebar > ul > li:nth-child(3)
+    text: "Billing"
+    comment: this needs to be two tabs over
+</dogear-queue>
+
+Items marked ⚠ stale had their text snippet disappear from the named file — the line
+number is probably wrong; locate by selector or text instead. When you have addressed
+an item, call dogear_resolve with its id.
+```
+
+The clipboard variant appends "…paste this to your agent" instead of the resolve
+instruction, since a pasting user has no MCP server.
+
+### Config
+
+`<git-root>/.dogear/config.json`, committed, written by `dogear init`:
+
+```json
+{
+  "version": 1,
+  "modifier": "alt",
+  "endpoint": "/__dogear",
+  "transform": true,
+  "include": ["**/*.tsx", "**/*.jsx"],
+  "hosts": ["localhost", "127.0.0.1", "[::1]", "*.local"],
+  "agent": "claude-code"
+}
+```
+
+Plugin options override the file; the file overrides defaults. Machine-level prefs live
+in `~/.dogear/config.json` and lose to both.
+
+---
+
+## Install and init
+
+Global once, then per repo — the model CodeGraph uses, for the same reason: the tool
+is machine-level, the configuration is repo-level.
+
+```
+npm i -g @dogear/cli        # once per machine
+cd my-repo && dogear init   # once per repo
+```
+
+`dogear init` is interactive and idempotent. It:
+
+1. **Finds the git root.** Refuses to run outside a repo — the queue location depends
+   on it.
+2. **Detects the setup** — Vite config, framework, workspace layout, how many apps.
+3. **Asks which agent you use** and wires it. Claude Code gets the hook merged into
+   `.claude/settings.json` (merged, never clobbered) plus the MCP server registered.
+   Anything else gets the MCP server registration and an `AGENTS.md` stanza.
+4. **Writes `.dogear/config.json`** and creates `.dogear/`.
+5. **Appends to `.gitignore`** — `.dogear/queue.json` and `.dogear/*.tmp`, not the whole
+   directory, since config is meant to be committed.
+6. **Adds `@dogear/vite` to devDependencies** and prints the two-line `vite.config`
+   change rather than editing it — config files are too varied to rewrite safely.
+7. **Registers the repo** in `~/.dogear/projects.json`.
+
+Re-running is safe: it diffs against what's there and only reports what changed.
+
+---
+
+## Keeping it out of production
+
+Layered, structural first:
+
+1. **`apply: 'serve'`** — the plugin doesn't exist during build. Primary defense. Covers
+   both the script injection *and* the attribute transform, so production DOM is
+   untouched.
+2. **Gated dynamic import** for non-Vite consumers:
+   `if (import.meta.env.DEV) { import('@dogear/core').then(m => m.init()) }`. Statically
+   eliminated by bundlers. Dynamic import matters — a static one keeps the module in the
+   graph.
+3. **Export conditions** in `package.json` — `"production"` and `"default"` both resolve
+   to a noop module. Unknown conditions fail safe.
+4. **`devDependencies` + CI grep** for a sentinel string in `dist/`. Fails the build
+   loudly if anything leaked.
+5. **Runtime hostname check** — bail unless localhost, `127.0.0.1`, `[::1]`, `*.local`,
+   or a private IP. Last line only.
+
+React strips fiber debug info in production builds so source resolution would fail
+anyway, but the overlay and its key handlers would still be live. Don't rely on it.
+
+---
+
+## Features and user stories
+
+Six epics. Each story is written to paste into an issue tracker without rewriting.
+
+### Epic A — The pipe (M0)
+
+*Prove browser → disk → agent end to end with a hardcoded payload, before any UI exists.*
+
+**A1 — Dev-only injection**
+As a developer, when I add the plugin and run `npm run dev`, a dogear script loads on my
+page, so I know the toolbar is available without importing anything.
+- The script is present in dev and absent from `npm run build` output.
+- No entry appears in the user's source or import graph.
+- A production build containing the sentinel string fails CI.
+
+**A2 — Endpoint persists to disk**
+As a developer, when anything POSTs a valid batch, it is persisted to
+`<git-root>/.dogear/queue.json`, so the browser→disk half is provable with `curl` alone.
+- A `curl` POST of a hardcoded batch creates the file with the correct shape.
+- The path resolves to the git root, not the Vite root.
+- The write is atomic; a reader never sees a partial file.
+- Malformed JSON returns 400 and leaves the existing queue untouched.
+
+**A3 — Minimal hook proves disk→agent**
+As a developer, when I type any prompt in Claude Code, pending items appear in the
+agent's context.
+- Claude can restate the comment and file path from a hand-written queue file.
+- Only `pending` items appear.
+- The hook exits 0 in every case — missing, empty, or malformed queue included.
+- *(Superseded by Epic D, which replaces this with the real three-tier delivery. M0's
+  version is deliberately crude — it exists to de-risk path resolution and hook
+  registration, which is where the interesting failures live.)*
+
+**A4 — Empty queue costs nothing**
+- No `additionalContext` is emitted; nothing appears in the transcript.
+- Completes well under the 10s timeout.
+
+### Epic B — Pointing (M1)
+
+*The overlay. Useful on its own, with selector + text as the only localization.*
+
+**B1 — Modifier-click captures an element**
+- Alt-click outlines the element and opens a comment box anchored to it.
+- The app's own click handler does not fire.
+- Works in Firefox, Chrome, and Safari.
+
+**B2 — Hover outline while the modifier is held**
+- Holding Alt outlines the element under the cursor; releasing clears it.
+- No layout shift, no scrollbars.
+
+**B3 — Comment and queue**
+- Typing a comment and pressing Enter adds it to an in-memory queue.
+- A badge shows the pending count.
+- Esc closes the box without queueing.
+
+**B4 — Review before submit**
+- The queue panel lists items with their comment and a short element label.
+- Any item can be edited or deleted before submitting.
+
+**B5 — Batch submit**
+- Submitting POSTs all queued items and clears the local queue on success.
+- A failed POST keeps the local queue intact and surfaces the error.
+
+**B6 — Kill switch**
+- A toggle and a keyboard shortcut disable dogear entirely; the preference persists
+  across reloads.
+- When disabled, listeners are **detached, not ignored** — real interaction testing
+  behaves exactly as if dogear were absent.
+- `dogear({ enabled: false })` has the same effect from config.
+
+**B7 — Overlay isolation**
+- The overlay renders in a shadow root; no global styles leak in or out.
+- It never appears in the user's own DOM queries or snapshot tests.
+
+### Epic C — Localization (M2)
+
+**C1 — Attribute transform**
+- Host JSX elements in `include`d files carry `data-dogear-src="file:line:col"` in dev.
+- Line and column refer to the **original source**, pre-compilation.
+- The transform runs `enforce: 'pre'` and is absent from production builds.
+- A spread (`<div {...props} />`) does not clobber the stamped attribute.
+
+**C2 — Ancestor chain**
+- Clicking yields `sites` ordered nearest-first, capped at 5.
+- The chain spans component boundaries (both `Button.tsx` and `TabBar.tsx` appear).
+
+**C3 — The floor always works**
+- Every annotation carries a CSS selector and a text snippet regardless of framework,
+  bundler, or resolution success.
+- `sites` may be empty; `element` never is.
+
+**C4 — Origin and app tagging**
+- Every annotation records its `origin` and, in a workspace, its `app`.
+- Two dev servers in one repo write to one queue without ambiguity.
+- Concurrent submits from two servers lose nothing.
+
+**C5 — Component names**
+- Where available, each site carries the component's display name.
+
+### Epic D — Delivery (M3)
+
+**D1 — MCP server**
+- `dogear mcp` exposes `dogear_pending`, `dogear_resolve`, `dogear_prune` over stdio.
+- It resolves its repo from `cwd` by walking up for `.git`.
+- `dogear_pending` accepts an optional `app` filter.
+- Works in at least Claude Code and one other MCP client.
+
+**D2 — Resolution without hand-editing**
+- The agent marks items done by calling `dogear_resolve`, never by editing JSON.
+- Resolved items stop appearing in subsequent prompts.
+- A resolve of an unknown id is a no-op, not an error.
+
+**D3 — Prompt hook as a capability upgrade** *(optional; ships only after D1–D2 work)*
+- With the hook installed, typing "go" surfaces pending items with no explicit request.
+- Without it, everything still works via MCP — the hook is additive and independently
+  removable.
+- The hook shares the MCP server's formatter and resolve path. It is a trigger, not a
+  second implementation; no dogear behavior may exist only in the hook.
+
+**D4 — Clipboard fallback**
+- `Ctrl+Alt+P` copies the formatted queue to the clipboard.
+- Works with no server, no MCP, and no agent configuration.
+- Falls back to a hidden-textarea copy where `navigator.clipboard` is unavailable.
+
+**D5 — Stale items are obvious and disposable**
+- An item is marked `stale` when its text snippet no longer appears in its named file.
+- Stale items are still shown, flagged, with an instruction to locate by selector or text.
+- Nothing is ever auto-deleted.
+
+**D6 — Prune**
+- `dogear prune` and `dogear_prune` remove resolved items and report the count.
+- Always explicit — no TTL, no background sweep.
+
+### Epic E — Install and init (M4)
+
+**E1 — Global install, per-repo init**
+- `npm i -g @dogear/cli` puts `dogear` on PATH.
+- `dogear init` refuses to run outside a git repo, with a message saying why.
+- Re-running is idempotent and reports only what changed.
+
+**E2 — Detection**
+- init identifies Vite, the framework, and the workspace layout without being told.
+- It reports what it found before changing anything.
+
+**E3 — Agent wiring**
+- **Every agent gets the MCP server registered.** That is the baseline path and is never
+  skipped.
+- init writes an `AGENTS.md` / rules stanza telling the agent to check pending
+  annotations, since MCP is pull and needs the nudge.
+- init then asks whether to add the prompt hook, offered only where the chosen agent
+  supports one. Declining leaves a fully working install.
+- Claude Code's hook is merged into `.claude/settings.json` — existing hooks survive.
+- The hook is written as `node <path> hook`, never `dogear hook`, so it works on Windows.
+- Where a local `@dogear/cli` exists, the path is repo-relative and portable.
+
+**E4 — Gitignore and config**
+- `.dogear/queue.json` and `.dogear/*.tmp` are gitignored; `.dogear/config.json` is not.
+- An existing `.gitignore` is appended to, never rewritten.
+
+**E5 — Cross-repo status**
+- `dogear status` lists registered repos, running dev servers, and pending counts.
+- It works from anywhere, not just inside a repo.
+
+### Epic F — Safety (cross-cutting)
+
+**F1 — Nothing ships to production**
+- All five layers in [Keeping it out of production](#keeping-it-out-of-production) are
+  implemented and individually tested.
+
+**F2 — CI catches leaks**
+- A build containing the sentinel string fails loudly, naming the file.
+
+**F3 — Runtime hostname bail**
+- Core refuses to initialize on a non-local hostname even if every other layer failed.
+
+### Non-functional requirements
+
+- **Browsers:** Firefox, Chrome, Safari. Firefox is the point — it's what an extension
+  can't give you.
+- **Node:** `^20.19.0 || >=22.12.0`, matching Vite's own floor (Vite is at 8.2.1).
+- **Overhead:** the transform must not make dev startup or HMR noticeably slower.
+  Measure before optimizing; the budget is "unnoticeable," not a number.
+- **Zero network egress.** Nothing leaves localhost, ever.
+
+---
+
+## Build order
+
+Increasing order of how much can go wrong.
+
+| | Milestone | Contains | Why here |
+|---|---|---|---|
+| **M0** | Prove the pipe | A1–A4 | Path resolution, hook registration, and JSON shape are where the interesting failures live. Debug them with a **hardcoded** payload and an `alert('loaded')` script — no UI, no source resolution. |
+| **M1** | Overlay | B1–B7 | Modifier-click, hover outline, comment box, in-memory queue, POST on submit. Ships with selector + text only, and is **already useful** — an agent can often find a component from a distinctive class or text. |
+| **M2** | Localization | C1–C5 | The attribute transform. Deterministic, synchronous, unit-testable against fixture files. |
+| **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
+| **M4** | Install and init | E1–E5 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
+| — | Safety | F1–F3 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
+
+Two deliberate orderings worth noting:
+
+**The attribute transform comes before any fiber work** — and in fact the fiber work is
+cut entirely (see the ladder). An earlier draft filed all source resolution last as "the
+async, version-sensitive part." That's true of the *runtime* layer only. The transform
+is a pure function from source text to source text — the most testable code in the
+project.
+
+**MCP comes before the hook**, not after. MCP owns the formatter and gives the agent a
+safe `resolve` path; the hook is then a thin trigger over the same machinery. Building
+the hook first would mean writing the formatter twice.
+
+---
+
+## Decisions log
+
+**Queue schema: overwrite vs. append-with-status → append-with-status.**
+Claude marks items done, stale entries stay visible, history is inspectable. The costs —
+filtering on read, and something must prune — are real but small and explicit. Overwrite
+makes "mark this done" unrepresentable, which kills D2 and D5.
+
+**Queue location: `<git-root>/.dogear/`, not `.claude/` and not the Vite root.**
+Git root because one repo means one agent session, and a monorepo with three dev servers
+must not produce three queues. A neutral directory rather than `.claude/` because the MCP
+path means several different agents may read it. Queue gitignored, config committed.
+
+**Queue format: JSON, not SQLite.**
+CodeGraph needs SQLite because it indexes an entire codebase. dogear's queue is a handful
+of objects that an agent reads and a human debugs. "You can `cat` it when something
+breaks" is a design goal. SQLite would only earn its place if long-run cross-session
+history became a feature, and it hasn't.
+
+**Stale re-anchoring → don't. Make staleness visible instead.**
+After an edit, `TabBar.tsx:42` may be line 47, and HMR often patches rather than
+reloading. Chasing pins through refactors is a large problem with a small payoff at this
+scale. Instead every item carries four independent anchors — file:line, CSS selector,
+text snippet, component name — so a wrong line number is recoverable rather than fatal.
+The reader flags an item stale when its snippet no longer appears in its file. It never
+deletes.
+
+**Kill switch → detach, don't ignore.**
+An in-overlay toggle with a keyboard shortcut, persisted to `localStorage`, plus
+`dogear({ enabled: false })`. Listeners are removed rather than early-returning — an
+event handler that runs and decides to do nothing is still an event handler that ran.
+
+**Source resolution → attribute transform plus selector floor. Fiber walk cut.**
+The attribute is exact wherever the transform ran, which in a Vite React app is all of
+your own code. The runtime walk would only cover third-party components and portals, at
+the cost of an async path built on React internals its own author warns against.
+Declining it keeps dogear free of React-internals risk entirely. Revisit only if real
+usage produces the annoyance.
+
+**Payload location → ancestor chain, not a single site.**
+The `Button.tsx:12` vs `TabBar.tsx:42` ambiguity is unresolvable at click time, because
+the disambiguator is the comment the user hasn't typed yet. Send the chain; let the agent
+choose.
+
+**Delivery → MCP is the product; hooks are a capability tier.**
+MCP is universal but **pull** — the agent must choose to call it, so "type anything" does
+not work on its own. A prompt hook is **push** but Claude-Code-only today: Codex's
+`userpromptsubmit` is feature-flagged, globally configured, and of unconfirmed injection
+capability, and Cursor's `beforeSubmitPrompt` runs cloud-side and cannot inject context
+at all.
+
+Building hook-first would produce a tool that works beautifully in one agent and not at
+all elsewhere, with portability bolted on later. So MCP is the baseline and carries the
+entire feature set, `dogear_resolve` included — which also removes any need to ask a
+model to hand-edit JSON. Where an agent supports hooks, dogear gets better; where it
+doesn't, nothing is missing. The hook must never be the only place a behavior lives.
+
+**Distribution → global CLI plus local plugin.**
+Machine-level tool, repo-level config — the CodeGraph model. It also absorbs the hook,
+removing a package that would have existed to hold fifty lines.
+
+**Cross-repo isolation → free, via same-origin.**
+Each dev server serves its own endpoint and knows its own root, so port collisions across
+repos cannot cause confusion. Worth stating because it's a real advantage over the
+extension approach, which only sees a URL.
+
+**Package naming → `@dogear/*` under a personal scope.**
+The unscoped `dogear` is taken by an unrelated 2020 hapi plugin. A personal account named
+`dogear` gets the clean scope with no organization to create and no doubled name. GitHub
+repo names are per-owner, so other `dogear` repos are irrelevant — the only cost is
+search-result noise.
+
+**Framework scope → React first-class; others unsupported for now.**
+The attribute transform is JSX-only. With the fiber walk cut, Vue and Svelte get nothing
+but the selector floor until someone writes their transforms.
+
+**Tooling → npm workspaces, TypeScript, tsup, vitest.**
+npm workspaces because pnpm isn't installed and this doesn't need it. Nothing exotic.
+
+---
+
+## Still open
+
+None of these block M0.
+
+- **Screenshots.** An extension gets `captureVisibleTab` free; a page script needs
+  `getDisplayMedia` (a permission prompt every time) or canvas rasterization (heavy,
+  imperfect). Possibly unnecessary — a text comment on a located element may be enough.
+  Revisit after M3 with real usage to argue from.
+- **Whether the Codex hook can inject context.** If it can, `dogear init` gains a second
+  push adapter cheaply. Requires reading Codex's hook source or testing it. The cost is
+  that it writes to a *global* config file outside your repo, which needs thought.
+- **Per-branch queues.** Switching branches mid-batch leaves annotations pointing at code
+  that moved. Probably rare enough to ignore; the staleness flag covers the damage.
+- **Multi-agent concurrency.** Two agents in one repo resolving the same items. No reason
+  to solve it until it happens.
+
+---
+
+## Repo and publishing
+
+- Single GitHub repo, npm workspaces, packages published independently.
+- Each `package.json` needs `repository.directory` pointing at its subfolder — without it
+  every npm page links to the repo root.
+- `files` array so tarballs ship `dist/` and not tests and fixtures.
+- Scoped packages need `npm publish --access public` on first publish.
+
+**Publishing uses OIDC trusted publishing from GitHub Actions. This is no longer
+optional:**
+
+- npm **permanently revoked all classic tokens on 9 December 2025.** They cannot be
+  created or restored. Granular tokens are capped at 90 days and require 2FA.
+- Trusted publishing needs no stored credential and **emits provenance attestations
+  automatically** — no `--provenance` flag. Provenance is a meaningful trust signal for a
+  tool people install into their build pipeline.
+- Trusted-publisher configurations created **after 20 May 2026** must explicitly select at
+  least one allowed action. Ours will be, so the config must name `npm publish` rather
+  than relying on the old implicit default.
+
+---
+
+## Later, maybe
+
+- **More hook adapters** as agents ship context-injecting prompt hooks. Because MCP
+  carries the whole feature set, each new one is a small additive trigger rather than a
+  port
+- **Runtime fiber walk** as an optional layer, if the attribute transform's gaps prove
+  annoying in practice
+- Next.js adapter (small, if core stays framework-agnostic)
+- Generic sidecar mode: `dogear serve` + one script tag, covering Rails/Django/Go
+  templates/anything. This is where `~/.dogear/projects.json` earns its keep, since a
+  sidecar *does* have the URL-to-project problem
+- Chrome extension as a *second* delivery mechanism for staging URLs and native screenshots
+- Vue and Svelte transforms

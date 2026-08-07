@@ -1,2 +1,21 @@
-# Auto detect text files and perform LF normalization
+# Auto detect text files and perform LF normalization in the repository.
 * text=auto
+
+# Shell scripts MUST be LF on every platform. bash fails on a CRLF shebang
+# (`/usr/bin/env bash\r: No such file or directory`), so with core.autocrlf=true
+# a plain `text=auto` checkout would break every hook in .claude/hooks/.
+*.sh text eol=lf
+
+# Source and config stay LF too. Prettier writes LF by default, so a CRLF
+# checkout would leave every file looking modified on Windows.
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.jsx  text eol=lf
+*.mjs  text eol=lf
+*.cjs  text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
