@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Repo tooling: Node only, no DOM. It reaches into packages/core/src for the
+    // sentinel constant, which is why this project sees files outside its own directory.
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

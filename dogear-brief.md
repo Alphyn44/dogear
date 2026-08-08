@@ -873,6 +873,26 @@ repos are irrelevant — the only cost is search-result noise.
 The attribute transform is JSX-only. With the fiber walk cut, Vue and Svelte get nothing
 but the selector floor until someone writes their transforms.
 
+**Leak sentinel → a distinct token, internal to core, and the noop is scanned too.**
+Layer 4 says "CI grep for a sentinel string in `dist/`", which understates two traps.
+
+First, the marker cannot be the product name. `examples/react-app` ships a `<title>` and an
+`<h1>` reading "dogear example", so grepping for `dogear` fails on a perfectly healthy
+build. Hence a distinct `__DOGEAR_DEV_ONLY__`.
+
+Second, and less obvious: the sentinel must **not** be part of core's public API. `noop.ts`
+mirrors `index.ts`'s exports, and the noop is precisely what the `production` and `default`
+conditions resolve to — so a publicly exported sentinel would ship the literal string in
+every correct production build and make the check fire on a working repo. It lives in an
+internal `sentinel.ts` that `index.ts` does not re-export, so there is nothing for the noop
+to mirror.
+
+Which `dist/` is therefore not one answer but three: the consumer bundle
+(`examples/react-app/dist`) and `packages/core/dist/noop.js` are scanned;
+`packages/core/dist/index.js` is not, since it legitimately carries the sentinel. The
+manifest is checked too — dogear in `dependencies` rather than `devDependencies` is a leak
+the content grep cannot see.
+
 **Tooling → npm workspaces, TypeScript 7, tsup, vitest, Prettier. No ESLint.**
 npm workspaces because pnpm isn't installed and this doesn't need it. TypeScript 7 is the
 native compiler and current `latest`; typechecking runs on every turn that touches a `.ts`

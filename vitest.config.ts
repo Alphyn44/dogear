@@ -12,7 +12,11 @@ export default defineConfig({
     conditions: ['development'],
   },
   test: {
-    include: ['packages/*/src/**/*.test.ts'],
+    // scripts/*.test.ts covers the leak scanner's own unit tests, which are hermetic
+    // (synthetic temp fixtures) and so belong in the fast suite. The gate that reads real
+    // build output lives in scripts/gate/ and runs under vitest.leak.config.ts instead —
+    // selecting by directory keeps the two configs from needing exclude rules.
+    include: ['packages/*/src/**/*.test.ts', 'scripts/*.test.ts'],
     environment: 'node',
   },
 })

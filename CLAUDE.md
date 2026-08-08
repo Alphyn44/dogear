@@ -116,11 +116,12 @@ resolves all four workspaces.
 
 | Command | What it does |
 |---|---|
-| `npm run verify` | The full gate: `format:check → typecheck → test → build → typecheck:example` |
-| `npm run typecheck` | `tsc --noEmit` per package. Deliberately excludes the example — see below |
-| `npm test` | vitest across all packages |
+| `npm run verify` | The full gate: `format:check → typecheck → test → build → typecheck:example → build:example → check:leak` |
+| `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
+| `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
+| `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
-| `npm run build:example` | Production Vite build of `examples/react-app` — what F2's leak check scans |
+| `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
 | `npm run dev:example` | Dev server for the example app |
 | `npm run format` | Prettier write; `format:check` is the read-only form |
 | `npm run lint` | Alias for `format:check && typecheck`. **There is no ESLint** |
@@ -139,6 +140,16 @@ Two things that will bite otherwise:
 
 The example consumes the **built** plugin, never its source. Rebuild before it picks up a
 change: `npm run build -w @dogear/vite`.
+
+**Two vitest configs, selected by directory.** `scripts/*.test.ts` is hermetic and runs in
+`npm test`; `scripts/gate/*.test.ts` reads real build output and runs only under
+`npm run check:leak`. Splitting on directory rather than filename means neither config
+needs an `exclude` to stay out of the other's way.
+
+**The leak sentinel is internal to `@dogear/core` on purpose.** `packages/core/src/sentinel.ts`
+is not re-exported from `index.ts`, because `noop.ts` mirrors index's public surface and
+the noop is exactly what production resolves to. Exporting it would push the sentinel into
+every correct production build and make the leak check fire on a healthy repo.
 
 ---
 
