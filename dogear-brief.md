@@ -893,6 +893,20 @@ Which `dist/` is therefore not one answer but three: the consumer bundle
 manifest is checked too — dogear in `dependencies` rather than `devDependencies` is a leak
 the content grep cannot see.
 
+**Sentinel in `@dogear/vite` → a second copy behind a drift test, not an import from core.**
+A1 makes the plugin the sentinel's first emitter, which raises the question of how the
+plugin reaches a constant that lives in core. The obvious answer — a `./sentinel` subpath on
+core's exports map — was rejected. Importing `@dogear/core` by name resolves through the
+exports map to `dist/`, so `npm run typecheck` would need a prior `npm run build`; typecheck
+runs on every turn that touches a `.ts` file, so that is a permanent cost for a frozen
+twenty-character string. A relative import of core's source is unavailable too:
+`packages/vite/tsconfig.build.json` sets `rootDir: "src"` and declaration emit rejects
+anything above it. And architecturally the plugin never imports dogear's browser half — it
+emits a `<script>` tag — so keeping `@dogear/core` unresolvable from the Node-side plugin
+keeps that boundary honest. The duplicated literal is safe because a test in
+`packages/vite/src` imports both and fails on divergence; test files sit outside
+`tsconfig.build.json` and the tsup entry, so the `rootDir` rule does not reach them.
+
 **Tooling → npm workspaces, TypeScript 7, tsup, vitest, Prettier. No ESLint.**
 npm workspaces because pnpm isn't installed and this doesn't need it. TypeScript 7 is the
 native compiler and current `latest`; typechecking runs on every turn that touches a `.ts`
