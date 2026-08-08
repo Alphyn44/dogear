@@ -63,6 +63,19 @@ issues map back to the brief at a glance. **The brief is the spec; the issue is
 the tracker.** If the two disagree, change the brief first. Never let an issue
 become a second source of truth.
 
+**Close an issue when its work lands on the working branch, not when that branch
+merges.** Work happens on one long-lived branch per milestone (`milestone-0-items`
+and so on), and a `Closes #N` commit trailer only fires when the commit reaches
+`main` — so relying on the trailer would leave every issue in the milestone open
+until the whole thing merged, then close them in one batch. Keep writing the
+trailer (it is a useful record, and closing an already-closed issue is a no-op),
+but close by hand as each ticket lands so the milestone progress means something.
+
+Before closing: tick the acceptance criteria that are genuinely met, and leave a
+comment recording what landed, what deviated from the plan and why, and anything
+the next ticket inherits. Design *reasoning* still belongs in the brief — the
+comment says what happened, not what we decided to build.
+
 ### Explain Non-Obvious Choices
 
 When you pick a pattern or structure that isn't self-evident — Vite plugin hook
