@@ -1,12 +1,25 @@
 import type { Plugin } from 'vite'
 
 import { CLIENT_SOURCE } from './client.js'
+import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
+import { findGitRoot } from './git-root.js'
 import { SENTINEL } from './sentinel.js'
+
+export interface DogearOptions {
+  /**
+   * Base path for dogear's HTTP endpoints. Default `/__dogear`, matching Vite's own
+   * `/__vite_ping` convention.
+   *
+   * Reading this from `.dogear/config.json` is E4's job; the brief's model is that plugin
+   * options override the file, so this is the layer that wins either way.
+   */
+  readonly endpoint?: string
+}
 
 /**
  * dogear's Vite plugin.
  *
- * It injects the dev script (A1) and nothing else yet — the endpoint is A2 and the JSX
+ * It injects the dev script (A1) and serves the annotations endpoint (A2). The JSX
  * attribute transform is C1.
  *
  * **`apply: 'serve'`** is the primary production defense, not a convenience. The plugin
@@ -24,11 +37,49 @@ import { SENTINEL } from './sentinel.js'
  * package is a devDependency that is only ever imported by a Vite config, so it has
  * no path into an application bundle to defend.
  */
-export function dogear(): Plugin {
+export function dogear(options: DogearOptions = {}): Plugin {
   return {
     name: 'dogear',
     apply: 'serve',
     enforce: 'pre',
+
+    /**
+     * The browser→disk half of the pipe (A2).
+     *
+     * Registered in the hook body rather than from a returned function, and that is the
+     * load-bearing detail. Vite installs its own middlewares after `configureServer` runs,
+     * so a middleware added here sees requests first; one added from the returned function
+     * runs after them, by which point the SPA fallback has already answered
+     * `/__dogear/annotations` with `index.html` and a 200.
+     *
+     * The endpoint is validated here rather than in the factory above so that a bad
+     * `endpoint` option cannot throw during `vite build`. The plugin is excluded from
+     * builds by `apply: 'serve'`, and a dev-tool misconfiguration taking down a production
+     * build would invert the entire point of that line.
+     */
+    configureServer(server) {
+      const endpoint = normaliseEndpoint(options.endpoint ?? DEFAULT_ENDPOINT)
+
+      // Resolved once: the repository root cannot move while this process lives. The
+      // brief's "never cache" rule is about queue *contents*, which are re-read on every
+      // single write — see queue.ts. Conflating the two would mean walking the filesystem
+      // on every request to learn something that cannot have changed.
+      const gitRoot = findGitRoot(server.config.root)
+
+      if (gitRoot === undefined) {
+        // Warn and stay inert rather than throw. The queue location is undefined outside a
+        // repository, but taking down someone's dev server over a dev tool is the wrong
+        // trade — they came here to work on their app.
+        server.config.logger.warn(
+          `[dogear] no .git found above ${server.config.root}. The annotations endpoint ` +
+            'is disabled: the queue resolves from the git root, and there is no repository ' +
+            'to resolve it from.',
+        )
+        return
+      }
+
+      server.middlewares.use(createEndpoint({ gitRoot, endpoint }))
+    },
 
     /**
      * Injecting the tag here rather than asking the user to add a `<script>` is the whole

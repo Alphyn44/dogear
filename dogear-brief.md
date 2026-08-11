@@ -391,7 +391,7 @@ Every resolved site carries a `via` field so the agent knows how much to trust i
 
 ```json
 {
-  "id": "01J8ZQK4V7X2M9NB3TFR5HAECD",
+  "id": "0199c8f4-3a21-7c5e-b3d9-1f2a4c6e8b07",
   "status": "pending",
   "comment": "shade this darker, it's competing with the primary CTA",
   "createdAt": "2026-08-06T21:14:03.221Z",
