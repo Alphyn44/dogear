@@ -137,7 +137,7 @@ resolves all four workspaces.
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
 | `npm run build:fixtures` | Production build of F1 layer 2's gated-import fixture; also scanned by `check:leak` |
-| `npm run dev:example` | Dev server for the example app |
+| `npm run dev:example` | Dev server for the example app. **Builds core and the plugin first** — see below |
 | `npm run format` | Prettier write; `format:check` is the read-only form |
 | `npm run lint` | Alias for `format:check && typecheck`. **There is no ESLint** |
 
@@ -153,8 +153,22 @@ Two things that will bite otherwise:
   `stop-verify.sh` runs `typecheck` on every turn that touches TypeScript. Use
   `npm run typecheck:example` after a build, or just `npm run verify`.
 
-The example consumes the **built** plugin, never its source. Rebuild before it picks up a
-change: `npm run build -w @dogear/vite`.
+The example consumes the **built** plugin, never its source — and since B1 the plugin serves
+`@dogear/core`'s **built** bundle at `<endpoint>/client.js`, so the overlay needs a build too.
+`dev:example` therefore builds both first. Rebuild by hand after touching either package:
+`npm run build -w @dogear/core -w @dogear/vite`. Skipping it is not silent: the route answers
+with a stub module that names the command, and `configureServer` logs the same thing.
+
+`@dogear/vite` depends on `@dogear/core` to find that bundle, and resolves
+`@dogear/core/package.json` rather than the package name — resolving the name from Node names
+no `development` condition, so it lands on `dist/noop.js`. A `./dev` subpath would read better
+and was rejected: it would be a second live entry point a bundler could follow into
+production, which is the hole F1 layer 3 exists to close.
+
+**Three vitest environments, one config.** The DOM suites (`overlay`, `session`, `listeners`,
+`teardown`, `describe`, `init.host-bail`) carry a `// @vitest-environment happy-dom` docblock;
+everything else stays `node`. All geometry is pure functions tested in the node environment,
+because happy-dom has no layout engine and `getBoundingClientRect` there returns zeros.
 
 **Three vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
 plus the hermetic `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`

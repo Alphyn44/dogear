@@ -4,14 +4,21 @@ import { relative, sep } from 'node:path'
 import type { Connect } from 'vite'
 
 import { stampAnnotation, validateBatch } from './annotation.js'
+import type { ClientDist } from './client.js'
+import { sendClientBundle, sendMissingBundleStub, sendSourcemap } from './client-route.js'
 import { appendToQueue, queuePathFor, readQueue } from './queue.js'
 
 /**
- * The HTTP half of the pipe: `POST <endpoint>/annotations` → `.dogear/queue.json`.
+ * The HTTP half of the pipe: `POST <endpoint>/annotations` → `.dogear/queue.json`, plus
+ * `GET <endpoint>/client.js`, which is how @dogear/core reaches the browser at all (B1, #8).
  *
- * Only that one route exists at M0. `GET <endpoint>/queue` arrives with B3's pending badge
- * and `POST <endpoint>/prune` with D6 — both are in the brief's endpoint table, and neither
- * has a caller yet.
+ * `GET <endpoint>/queue` arrives with B3's pending badge and `POST <endpoint>/prune` with
+ * D6 — both are in the brief's endpoint table, and neither has a caller yet.
+ *
+ * The client route lives in this middleware rather than a second one, because the promise
+ * below — everything under the base path is answered here — is only true if there is exactly
+ * one place that can answer. Two middlewares would also leave the 404's `known` list naming
+ * half the routes that exist.
  *
  * Cross-repo isolation is free here and worth not breaking: the browser POSTs same-origin,
  * so the dev server that served the page is the one that writes, and it already knows its
@@ -36,6 +43,13 @@ export interface EndpointOptions {
   readonly gitRoot: string
   /** Base path, already normalised by {@link normaliseEndpoint}. */
   readonly endpoint: string
+  /**
+   * Where @dogear/core's dev build is, or `undefined` if it has not been built.
+   *
+   * `undefined` is served as a stub module rather than an error — see
+   * {@link sendMissingBundleStub}.
+   */
+  readonly clientDist: ClientDist | undefined
 }
 
 /**
@@ -68,6 +82,11 @@ export function normaliseEndpoint(endpoint: string): string {
  */
 export function createEndpoint(options: EndpointOptions): Connect.NextHandleFunction {
   const annotationsPath = `${options.endpoint}/annotations`
+  // `index.js.map` rather than `client.js.map`: it is literally what the served bundle's
+  // trailing `//# sourceMappingURL=` comment asks the browser for, and serving it under that
+  // name means the bytes go out exactly as tsup built them. See ./client-route.ts.
+  const clientPath = `${options.endpoint}/client.js`
+  const sourcemapPath = `${options.endpoint}/index.js.map`
   const queuePath = queuePathFor(options.gitRoot)
 
   return function dogearEndpoint(req, res, next) {
@@ -78,11 +97,36 @@ export function createEndpoint(options: EndpointOptions): Connect.NextHandleFunc
       return
     }
 
+    if (pathname === clientPath || pathname === sourcemapPath) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.setHeader('Allow', 'GET')
+        sendJson(res, 405, {
+          ok: false,
+          error: `${pathname} accepts GET, received ${req.method ?? 'nothing'}`,
+        })
+        return
+      }
+
+      const dist = options.clientDist
+      if (dist === undefined) sendMissingBundleStub(res)
+      else if (pathname === clientPath) sendClientBundle(res, dist.bundle)
+      else if (dist.sourcemap !== undefined) sendSourcemap(res, dist.sourcemap)
+      else {
+        // The bundle is present but its map is not. A 404 is the honest answer and the one
+        // DevTools already knows how to ignore quietly.
+        sendJson(res, 404, {
+          ok: false,
+          error: `${pathname} is not available — @dogear/core was built without a sourcemap`,
+        })
+      }
+      return
+    }
+
     if (pathname !== annotationsPath) {
       sendJson(res, 404, {
         ok: false,
         error: `unknown dogear endpoint ${pathname}`,
-        known: [`POST ${annotationsPath}`],
+        known: [`POST ${annotationsPath}`, `GET ${clientPath}`, `GET ${sourcemapPath}`],
       })
       return
     }

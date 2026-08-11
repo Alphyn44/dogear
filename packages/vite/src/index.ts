@@ -1,6 +1,12 @@
 import type { Plugin } from 'vite'
 
-import { CLIENT_SOURCE } from './client.js'
+import type { ClientConfig, Modifier } from './client.js'
+import {
+  buildClientConfig,
+  clientTagSource,
+  MODIFIERS,
+  resolveCoreDist,
+} from './client.js'
 import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
 import { findGitRoot } from './git-root.js'
 import { SENTINEL } from './sentinel.js'
@@ -14,6 +20,22 @@ export interface DogearOptions {
    * options override the file, so this is the layer that wins either way.
    */
   readonly endpoint?: string
+  /**
+   * Which key arms the overlay. Default `'alt'`.
+   *
+   * Same precedence as {@link DogearOptions.endpoint}: E4 (#29) layers `.dogear/config.json`
+   * underneath this, and neither reaches past it.
+   *
+   * `'meta'` is the Windows key on Windows, where the OS claims it on keyup — it works, but
+   * it is a poor choice there.
+   */
+  readonly modifier?: Modifier
+}
+
+/** What `configureServer` learned, and `transformIndexHtml` needs. */
+interface Injection {
+  readonly endpoint: string
+  readonly config: ClientConfig
 }
 
 /**
@@ -38,6 +60,17 @@ export interface DogearOptions {
  * no path into an application bundle to defend.
  */
 export function dogear(options: DogearOptions = {}): Plugin {
+  /**
+   * Set by `configureServer`, read by `transformIndexHtml`. `undefined` means "do not
+   * inject" — either the hooks have not run, or dogear disabled itself.
+   *
+   * Safe as closure state on two counts. Vite awaits every `configureServer` hook before it
+   * installs the middlewares that serve HTML, so there is no ordering in which
+   * `transformIndexHtml` runs first. And `dogear()` returns a fresh object per call (pinned
+   * by a test in ./index.test.ts), so two Vite roots in one process get two closures.
+   */
+  let injection: Injection | undefined
+
   return {
     name: 'dogear',
     apply: 'serve',
@@ -59,6 +92,7 @@ export function dogear(options: DogearOptions = {}): Plugin {
      */
     configureServer(server) {
       const endpoint = normaliseEndpoint(options.endpoint ?? DEFAULT_ENDPOINT)
+      const config = buildClientConfig({ modifier: validateModifier(options.modifier) })
 
       // Resolved once: the repository root cannot move while this process lives. The
       // brief's "never cache" rule is about queue *contents*, which are re-read on every
@@ -70,15 +104,37 @@ export function dogear(options: DogearOptions = {}): Plugin {
         // Warn and stay inert rather than throw. The queue location is undefined outside a
         // repository, but taking down someone's dev server over a dev tool is the wrong
         // trade — they came here to work on their app.
+        //
+        // `injection` is left undefined, so nothing is injected either. Coupling the two is
+        // deliberate: an overlay that can point at elements but can never submit them is
+        // half a tool, and the failure would surface as a MIME error from a client.js that
+        // Vite's SPA fallback answered with index.html — which reads like a dogear bug
+        // rather than "you are not in a git repository".
         server.config.logger.warn(
-          `[dogear] no .git found above ${server.config.root}. The annotations endpoint ` +
-            'is disabled: the queue resolves from the git root, and there is no repository ' +
-            'to resolve it from.',
+          `[dogear] no .git found above ${server.config.root}. dogear is disabled: the ` +
+            'queue resolves from the git root, and there is no repository to resolve it ' +
+            'from.',
         )
         return
       }
 
-      server.middlewares.use(createEndpoint({ gitRoot, endpoint }))
+      const clientDist = resolveCoreDist()
+      if (clientDist === undefined) {
+        // Not fatal — the route answers with a stub module that says the same thing in the
+        // browser console. Said here too, because the terminal is where someone who just
+        // cloned the repo is actually looking.
+        server.config.logger.warn(
+          '[dogear] @dogear/core has not been built, so the overlay will not load. Run ' +
+            '`npm run build -w @dogear/core`.',
+        )
+      }
+
+      server.middlewares.use(createEndpoint({ gitRoot, endpoint, clientDist }))
+
+      // Assigned last, after the endpoint that may throw and after the middleware is
+      // registered — so there is no window in which the tag is injected but the route that
+      // serves its import is not.
+      injection = { endpoint, config }
     },
 
     /**
@@ -99,16 +155,41 @@ export function dogear(options: DogearOptions = {}): Plugin {
      */
     transformIndexHtml: {
       order: 'post',
-      handler: () => [
-        {
-          tag: 'script',
-          attrs: { type: 'module', 'data-dogear': SENTINEL },
-          children: CLIENT_SOURCE,
-          injectTo: 'head-prepend',
-        },
-      ],
+      handler: () =>
+        injection === undefined
+          ? []
+          : [
+              {
+                tag: 'script',
+                attrs: { type: 'module', 'data-dogear': SENTINEL },
+                children: clientTagSource(injection.endpoint, injection.config),
+                injectTo: 'head-prepend',
+              },
+            ],
     },
   }
+}
+
+/**
+ * Reject a bad `modifier` loudly, at config time.
+ *
+ * The mirror image of core's `resolveOptions`, which falls back to the default instead.
+ * Same value, two audiences: here it is a developer reading a terminal while their dev
+ * server starts, where a typo should be named; there it is a page load in a browser, where a
+ * dev tool throwing has broken the app it exists to help inspect.
+ *
+ * Validated in `configureServer` rather than in the factory, for the same reason
+ * `normaliseEndpoint` is: a misconfigured dev tool must not be able to take down a
+ * production build. `apply: 'serve'` already excludes the plugin from one, and throwing from
+ * the factory would run before that had a chance to matter.
+ */
+function validateModifier(modifier: Modifier | undefined): Modifier | undefined {
+  if (modifier === undefined || MODIFIERS.includes(modifier)) return modifier
+
+  throw new Error(
+    `dogear: modifier must be one of ${MODIFIERS.join(', ')}, received ` +
+      JSON.stringify(modifier),
+  )
 }
 
 export default dogear

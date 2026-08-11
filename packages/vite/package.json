@@ -29,6 +29,9 @@
     "build": "tsup && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "@dogear/core": "*"
+  },
   "peerDependencies": {
     "vite": "^8.0.0"
   },

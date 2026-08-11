@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import type { ClientDist } from './client.js'
 import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
 import { queuePathFor, readQueue } from './queue.js'
 
@@ -29,12 +30,27 @@ let root: string
 let server: Server
 let origin: string
 let fellThrough: boolean
+let clientDist: ClientDist
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'dogear-endpoint-'))
   fellThrough = false
 
-  const middleware = createEndpoint({ gitRoot: root, endpoint: DEFAULT_ENDPOINT })
+  // A stand-in for @dogear/core's dist, written into the fixture rather than resolved from
+  // the workspace: making this suite depend on `npm run build` would put `npm test` behind
+  // a build, which the repo deliberately keeps it out from behind.
+  writeFileSync(join(root, 'bundle.js'), BUNDLE_JS)
+  writeFileSync(join(root, 'bundle.js.map'), BUNDLE_MAP)
+  clientDist = {
+    bundle: join(root, 'bundle.js'),
+    sourcemap: join(root, 'bundle.js.map'),
+  }
+
+  const middleware = createEndpoint({
+    gitRoot: root,
+    endpoint: DEFAULT_ENDPOINT,
+    clientDist,
+  })
 
   server = createServer((req, res) => {
     middleware(req, res, () => {
@@ -63,6 +79,9 @@ const ONE_COMMENT = JSON.stringify({
   version: 1,
   batch: [{ comment: 'shade this darker' }],
 })
+
+const BUNDLE_JS = 'export function init() { return () => {} }\n'
+const BUNDLE_MAP = '{"version":3,"sources":["../src/index.ts"]}\n'
 
 describe('normaliseEndpoint', () => {
   it.each([
@@ -242,11 +261,125 @@ describe('routing', () => {
 
     expect(response.status).toBe(200)
   })
+
+  it('names every route it serves in the 404 body', async () => {
+    // The list is the only discoverable documentation a developer who typo'd a path gets.
+    // Adding a route without adding it here is the failure this catches.
+    const response = await post('{}', `${DEFAULT_ENDPOINT}/nope`)
+    const body = (await response.json()) as { known: string[] }
+
+    expect(body.known).toEqual([
+      `POST ${DEFAULT_ENDPOINT}/annotations`,
+      `GET ${DEFAULT_ENDPOINT}/client.js`,
+      `GET ${DEFAULT_ENDPOINT}/index.js.map`,
+    ])
+  })
+})
+
+describe('serving @dogear/core to the browser (B1)', () => {
+  it('serves the bundle as JavaScript', async () => {
+    // The MIME type is load-bearing, not cosmetic: the injected tag is `type="module"`, and
+    // a module served as anything but a JavaScript MIME type is refused by the browser
+    // outright — which is exactly what happens if this ever falls through to Vite's SPA
+    // fallback and comes back as text/html.
+    const response = await fetch(`${origin}${DEFAULT_ENDPOINT}/client.js`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+    expect(await response.text()).toBe(BUNDLE_JS)
+  })
+
+  it('serves the sourcemap under the name the bundle asks for', async () => {
+    // `index.js.map`, not `client.js.map` — dist/index.js ends with
+    // `//# sourceMappingURL=index.js.map`, so serving it under that name means the bytes go
+    // out exactly as tsup built them, with nothing rewritten.
+    const response = await fetch(`${origin}${DEFAULT_ENDPOINT}/index.js.map`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+    expect(await response.text()).toBe(BUNDLE_MAP)
+  })
+
+  it('is not cached, so a rebuild of core is picked up on reload', async () => {
+    const response = await fetch(`${origin}${DEFAULT_ENDPOINT}/client.js`)
+
+    expect(response.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('rejects a write to an asset route with 405 and an Allow header', async () => {
+    const response = await post('{}', `${DEFAULT_ENDPOINT}/client.js`)
+
+    expect(response.status).toBe(405)
+    expect(response.headers.get('allow')).toBe('GET')
+  })
+
+  it('serves a working stub module when core has not been built', async () => {
+    // A 200 with a valid module, deliberately, not a 5xx. A non-200 on a module import
+    // surfaces in DevTools as an opaque MIME or network error naming a URL the developer has
+    // never seen; a stub imports cleanly and prints the command to run.
+    const unbuilt = createEndpoint({
+      gitRoot: root,
+      endpoint: DEFAULT_ENDPOINT,
+      clientDist: undefined,
+    })
+    const stubServer = createServer((req, res) => {
+      unbuilt(req, res, () => {
+        res.statusCode = 418
+        res.end()
+      })
+    })
+
+    await new Promise<void>((resolve) => stubServer.listen(0, '127.0.0.1', resolve))
+    const stubOrigin = `http://127.0.0.1:${(stubServer.address() as AddressInfo).port}`
+
+    try {
+      const response = await fetch(`${stubOrigin}${DEFAULT_ENDPOINT}/client.js`)
+      const body = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(body).toContain('export function init')
+      expect(body).toContain('npm run build -w @dogear/core')
+    } finally {
+      await new Promise<void>((resolve) => stubServer.close(() => resolve()))
+    }
+  })
+
+  it('404s a sourcemap request when core was built without one', async () => {
+    const mapless = createEndpoint({
+      gitRoot: root,
+      endpoint: DEFAULT_ENDPOINT,
+      clientDist: { bundle: clientDist.bundle, sourcemap: undefined },
+    })
+    const maplessServer = createServer((req, res) => {
+      mapless(req, res, () => {
+        res.statusCode = 418
+        res.end()
+      })
+    })
+
+    await new Promise<void>((resolve) => maplessServer.listen(0, '127.0.0.1', resolve))
+    const maplessOrigin = `http://127.0.0.1:${(maplessServer.address() as AddressInfo).port}`
+
+    try {
+      const map = await fetch(`${maplessOrigin}${DEFAULT_ENDPOINT}/index.js.map`)
+      const bundle = await fetch(`${maplessOrigin}${DEFAULT_ENDPOINT}/client.js`)
+
+      // A missing map is a DevTools inconvenience, not a reason to stop serving the overlay.
+      expect(map.status).toBe(404)
+      expect(bundle.status).toBe(200)
+    } finally {
+      await new Promise<void>((resolve) => maplessServer.close(() => resolve()))
+    }
+  })
 })
 
 describe('a custom endpoint', () => {
   it('serves the configured base path and nothing else', async () => {
-    const custom = createEndpoint({ gitRoot: root, endpoint: normaliseEndpoint('/__x/') })
+    const custom = createEndpoint({
+      gitRoot: root,
+      endpoint: normaliseEndpoint('/__x/'),
+      clientDist,
+    })
     const customServer = createServer((req, res) => {
       custom(req, res, () => {
         res.statusCode = 418

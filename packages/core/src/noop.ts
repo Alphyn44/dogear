@@ -12,6 +12,8 @@
  * production bundle, which is the worst possible place for a dev tool to fail.
  */
 
+import type { InitOptions, Teardown } from './options.js'
+
 /** Counterpart to the `IS_NOOP` in ./index.ts, which is `false`. */
 export const IS_NOOP = true
 
@@ -46,4 +48,23 @@ export function isAllowedHost(_hostname: string, _hosts?: readonly string[]): bo
 /** Counterpart to `isCurrentHostAllowed` in ./index.ts. Always denies. */
 export function isCurrentHostAllowed(): boolean {
   return false
+}
+
+/**
+ * Counterpart to `init` in ./index.ts. Starts nothing.
+ *
+ * **It must return a function**, and that is the whole reason this has a body rather than
+ * being `() => undefined`. The idiom `init()` is documented under is
+ * `const stop = init(); …; stop()`, and F1's layer 2 fixture uses the dynamic form
+ * `import('@dogear/core').then((m) => m.init())`. A noop returning `undefined` turns that
+ * into `stop is not a function` — a crash, in a production bundle, from the module whose
+ * entire job is to make production a no-op.
+ *
+ * `import type` above is the only import this file may have; a value import would pull the
+ * overlay into `dist/noop.js`, which is precisely what layer 3 exists to prevent.
+ * `index.test.ts` enforces that mechanically, because the leak gate cannot see it: a
+ * bundled overlay carries no sentinel and would pass every content scan.
+ */
+export function init(_options?: InitOptions): Teardown {
+  return () => {}
 }

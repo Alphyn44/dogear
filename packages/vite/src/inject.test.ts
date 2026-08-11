@@ -37,6 +37,11 @@ let served: string
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'dogear-inject-'))
   writeFileSync(join(root, 'index.html'), RAW_HTML)
+  // B1 (#8) gated injection on finding a git root, so the fixture now needs one. A plain
+  // FILE rather than a directory, deliberately: `findGitRoot` checks with `existsSync` and
+  // not `isDirectory` because worktrees and submodules use a `.git` file, and this is the
+  // only place that shape is exercised.
+  writeFileSync(join(root, '.git'), 'gitdir: /elsewhere/.git/worktrees/fixture')
 
   server = await createServer({
     root,
@@ -72,8 +77,19 @@ describe('the HTML a dev server actually serves', () => {
     expect(served).toMatch(/<script[^>]*data-dogear=/)
   })
 
-  it('runs the M0 payload', () => {
-    expect(served).toContain('[dogear] dev script loaded')
+  it('imports @dogear/core from the dev server and starts it', () => {
+    // The M0 payload was an inline console.info. B1 (#8) replaced it with an import of the
+    // bundle the plugin now serves, because the overlay is far too large to re-send inside
+    // every HTML response.
+    expect(served).toContain('/__dogear/client.js')
+    expect(served).toContain('init(')
+  })
+
+  it("emits the tag verbatim rather than through Vite's html-proxy machinery", () => {
+    // What `order: 'post'` buys. A `pre` hook would extract this inline module into a
+    // generated `/@id/__x00__…html-proxy` module, turning one tag into two and moving the
+    // body out of the document — where none of the assertions above could see it.
+    expect(served).not.toContain('html-proxy')
   })
 
   it('leaves the source file on disk untouched — nothing is written back', () => {
@@ -81,6 +97,47 @@ describe('the HTML a dev server actually serves', () => {
     // transform, so index.html on disk must still be byte-for-byte what the fixture wrote
     // even after the server has served a page carrying the script.
     expect(readFileSync(join(root, 'index.html'), 'utf8')).toBe(RAW_HTML)
+  })
+})
+
+describe('a project that is not in a git repository', () => {
+  // The negative half of B1's decision that half-present is worse than absent. Asserted
+  // against a real dev server rather than the fake in ./index.test.ts, because the failure
+  // it prevents is a browser-visible one: an injected `client.js` import that Vite's SPA
+  // fallback answers with index.html, producing a MIME-type module error that reads like a
+  // dogear bug rather than "you are not in a git repository".
+  let outside: string
+  let outsideServer: ViteDevServer
+  let outsideServed: string
+
+  beforeAll(async () => {
+    outside = mkdtempSync(join(tmpdir(), 'dogear-nogit-'))
+    writeFileSync(join(outside, 'index.html'), RAW_HTML)
+
+    outsideServer = await createServer({
+      root: outside,
+      logLevel: 'silent',
+      server: { middlewareMode: true },
+      plugins: [dogear()],
+    })
+
+    outsideServed = await outsideServer.transformIndexHtml('/index.html', RAW_HTML)
+  }, 30_000)
+
+  afterAll(async () => {
+    await outsideServer?.close()
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it.each([SENTINEL, 'data-dogear', '/__dogear/'])(
+    'serves HTML containing no %s',
+    (needle) => {
+      expect(outsideServed).not.toContain(needle)
+    },
+  )
+
+  it('serves the page otherwise untouched', () => {
+    expect(outsideServed).toContain('<div id="root">')
   })
 })
 

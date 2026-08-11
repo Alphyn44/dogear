@@ -465,6 +465,8 @@ matching Vite's own `/__vite_ping` convention):
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/__dogear/annotations` | Submit a batch |
+| `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
+| `GET` | `/__dogear/index.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
 | `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) |
 | `POST` | `/__dogear/prune` | Drop resolved items |
 
@@ -665,8 +667,14 @@ agent's context.
 - `dogear({ enabled: false })` has the same effect from config.
 
 **B7 — Overlay isolation**
-- The overlay renders in a shadow root; no global styles leak in or out.
-- It never appears in the user's own DOM queries or snapshot tests.
+- The overlay renders in a **closed** shadow root; no style crosses in either direction.
+- Nothing it renders lives inside `<body>`, and its host tag is a name no app query asks for.
+- **While idle it has no nodes in the document at all** — the host is inserted when something
+  becomes visible and removed when nothing is.
+
+*(The second criterion originally read "it never appears in the user's own DOM queries or
+snapshot tests". See the Decisions log — that claim was vacuous for component tests and
+unachievable for browser tests, and it was amended during B7.)*
 
 ### Epic C — Localization (M2)
 
@@ -844,6 +852,100 @@ So `status` is `pending | resolved`, and `⚠ stale` is a decoration the formatt
 for an item that is still, in every other sense, pending. Settled during A3, when the
 formatter that will eventually render the marker was written; free then because nothing
 produced `stale`, and expensive once D5 has code assuming a stored value.
+
+**Overlay isolation → what B7 can actually promise. Settled during B7 by discovering the
+original criterion was false in both directions.**
+
+"It never appears in the user's own DOM queries or snapshot tests" covers two scenarios and
+does not survive either. A **component snapshot test** never sees dogear at all: the script
+reaches a page only through the dev server's `transformIndexHtml`, a jsdom component test
+loads no HTML document, and `@dogear/core` is in nobody's import graph — A1 already
+guaranteed this, so B7 was claiming credit for it. A **browser test driving the real dev
+server** is the case where B7 earns its keep, and there "never appears" is unachievable:
+anything rendered is a node, and `document.querySelectorAll('*')` finds it wherever it sits.
+
+So the criterion is now three narrower claims that are all true and all useful. A **closed**
+shadow root, so `host.shadowRoot` is `null` and nothing the app queries can reach in. The
+host **outside `<body>`**, appended to `documentElement`, which defeats the probe that
+actually matters — `document.body` serialization, what Testing Library and most snapshot
+helpers use. And **zero nodes while idle**, which is what does most of the work: a test run
+that never holds the modifier sees a document byte-identical to one dogear was never loaded
+into, whatever it queries.
+
+The host is `<dogear-overlay>` rather than `<div>` because `document.querySelectorAll('div')`
+is a query real apps make. It is not a registered custom element — no upgrade, no lifecycle,
+nothing in the registry to collide with, and an unknown element is `display: inline` exactly
+like an unstyled div. The one risk taken is the placement: DOM insertion is not HTML parsing,
+so the node stays a child of `<html>` and renders there, but it is off the beaten path. The
+mount target is a single line in `overlay.ts` if a browser is ever found to mishandle it.
+
+**Client delivery → the plugin serves core's bundle; the inline tag is just the call.**
+M0 inlined its whole payload in the `<script>`. The overlay is far too large for that: it
+would be re-sent inside every HTML response, with no caching, no sourcemap, and a `</script>`
+in the source silently ending the tag. Instead the plugin serves the built bundle at
+`<endpoint>/client.js` and injects one inline module that imports `init` and calls it with a
+JSON config literal.
+
+The config crosses as a literal rather than a query string or a data attribute because a
+module script has `document.currentScript === null` — the attribute route does not exist —
+and a literal is the only form that stays typed on the plugin side. The sentinel is still
+carried twice, in the tag attribute and the body, for the reason A1 gave.
+
+The plugin reaches the bundle by resolving `@dogear/core/package.json` and joining
+`dist/index.js`. Resolving the package *name* from Node names no `development` condition and
+lands on `dist/noop.js`, the inert build. A dedicated `./dev` subpath was rejected: it would
+be a second live entry point any bundler could follow into a production graph, which is
+precisely what layer 3 exists to close. A manifest is not code.
+
+**No git root → no injection at all, not a disabled overlay.**
+The endpoint was already skipped outside a repository, since the queue has nowhere to
+resolve to. B1 extends that to the script tag. dogear that can point at elements and never
+submit them is half a tool, and the failure mode is worse than absence: the injected
+`client.js` import would be answered by Vite's SPA fallback with `index.html`, producing a
+MIME-type module error naming a URL the developer has never seen — which reads like a dogear
+bug rather than "you are not in a git repository". One warning in the terminal, nothing on
+the page.
+
+**`init()` returns its teardown, so B6's architecture lands with B1.**
+"Detach, don't ignore" is a claim about *every* listener, which makes it structural rather
+than a feature: one listener attached ad hoc falsifies it, and finding that one by audit is
+exactly the retrofit B6 should not have to do. So B1 ships the registry — a single object
+every listener goes through, with a source test failing any module outside it that calls
+`addEventListener` — and `init()` returns the function that empties it. B6 adds a toggle, a
+shortcut, and `localStorage` on top; it touches nothing below. @dogear/vite exposes the
+result as `window.__dogear.stop`, which makes the criterion provable by hand in a console a
+milestone early.
+
+**`modifier` is a plugin option now, with E4 layering the config file underneath.**
+The plugin already has to serialise config into the injected `init(...)` call, so the
+plumbing exists either way; adding the field costs one line and gives the config-passing path
+a tested consumer instead of shipping it unexercised. The validation is deliberately
+asymmetric: the *plugin* throws on an unknown modifier, at config time, in a terminal, where
+a typo should be named — while *core* falls back to the default, because a dev tool that
+throws during page load has broken the app it exists to help you inspect. Same value, two
+audiences, two right answers.
+
+**The browser has its own claim on the modifier key, and dogear only contests it while
+visibly working.**
+Alt is not a free key. On Windows, Firefox reveals its menu bar on the modifier's *keydown*,
+while Chrome and Edge activate their menu or toolbar on the *keyup* — which is why cancelling
+one and not the other suppresses Firefox and neither Chromium. Both are cancelled now, and
+both only while dogear is actually outlining something. Cancelling unconditionally would take
+the browser's own menu key away from the user for as long as the page had focus, which is not
+dogear's to take; a lone Alt press on a page dogear is idle on still reaches the browser.
+
+The same investigation removed a `window` blur listener that disarmed the overlay. It was
+added to catch Alt+Tab delivering a keydown with no keyup, and it is the wrong trade here:
+focus moving to browser chrome is a *direct consequence of the key dogear is bound to*, so the
+outline could be raised and torn down in the same breath. Dropping it is nearly free, because
+nothing load-bearing reads the armed flag — every suppression handler reads the modifier off
+its own event, so a stuck flag cannot eat a click; the outline is cosmetic and the next
+pointer or key event re-derives the state; and `visibilitychange` still covers a hidden tab.
+Recorded honestly: the flash-and-vanish failure was **reasoned from the mechanism and never
+reproduced**. Synthetic input over CDP goes straight to the renderer and bypasses browser
+chrome, so no automated harness available here can raise it, and manual testing across Edge,
+Chrome, and Firefox showed the outline appearing and staying. The listener is gone on the
+argument, not on an observed defect.
 
 **Kill switch → detach, don't ignore.**
 An in-overlay toggle with a keyboard shortcut, persisted to `localStorage`, plus
