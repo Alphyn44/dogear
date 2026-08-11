@@ -518,13 +518,26 @@ instruction, since a pasting user has no MCP server.
   "endpoint": "/__dogear",
   "transform": true,
   "include": ["**/*.tsx", "**/*.jsx"],
-  "hosts": ["localhost", "127.0.0.1", "[::1]", "*.local"],
+  "hosts": [
+    "localhost",
+    "*.localhost",
+    "127.0.0.0/8",
+    "::1",
+    "*.local",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16"
+  ],
   "agent": "claude-code"
 }
 ```
 
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
 in `~/.dogear/config.json` and lose to both.
+
+`hosts` entries come in three shapes — an exact hostname, a `*.suffix` wildcard, or an
+IPv4 CIDR range — and the list *replaces* the defaults rather than extending them. See
+the Decisions log.
 
 ---
 
@@ -572,8 +585,9 @@ Layered, structural first:
    to a noop module. Unknown conditions fail safe.
 4. **`devDependencies` + CI grep** for a sentinel string in `dist/`. Fails the build
    loudly if anything leaked.
-5. **Runtime hostname check** — bail unless localhost, `127.0.0.1`, `[::1]`, `*.local`,
-   or a private IP. Last line only.
+5. **Runtime hostname check** — bail unless the page's hostname matches `hosts`, which
+   defaults to loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`), `*.local`, and
+   the private IPv4 ranges. Last line only, and silent when it bails.
 
 React strips fiber debug info in production builds so source resolution would fail
 anyway, but the overlay and its key handlers would still be live. Don't rely on it.
@@ -919,6 +933,42 @@ emits a `<script>` tag — so keeping `@dogear/core` unresolvable from the Node-
 keeps that boundary honest. The duplicated literal is safe because a test in
 `packages/vite/src` imports both and fails on divergence; test files sit outside
 `tsconfig.build.json` and the tsup entry, so the `rootDir` rule does not reach them.
+
+**Host allow-list → one list, three pattern kinds — private ranges inside it, not beside it.**
+This document contradicted itself, and F3 is where it got settled. The Config block listed
+`hosts` as four name patterns with no private ranges, while layer 5 said "bail unless
+localhost, `127.0.0.1`, `[::1]`, `*.local`, **or a private IP**" — which reads as a
+hard-coded allowance sitting next to the configurable list. Both are now the single list,
+and `hosts` understands exact hostnames, `*.suffix` wildcards, and IPv4 CIDR ranges.
+
+The deciding argument is what E4 inherits. Someone who narrows `hosts` to `["localhost"]`
+is saying "stop running on my LAN address", and a separate always-on private-IP rule would
+silently ignore them. One list means "what is allowed" has exactly one answer, and a
+caller-supplied list *replaces* the defaults rather than extending them.
+
+Three consequences worth recording. **`*.localhost` is in the defaults** because RFC 6761
+reserves the whole TLD to loopback, which makes `app.localhost` provably local rather than
+a guess — and suffix matching anchored at a label boundary cannot reach `localhost.evil.com`.
+**The loopback entry is `127.0.0.0/8`, not `127.0.0.1`**, since 127.0.0.2+ are equally
+loopback and get used to separate concurrent dev servers. **IPv6 ULA (`fc00::/7`) and
+link-local (`fe80::/10`) are deliberately absent**: they need `::` expansion, zone-ID
+stripping, and 128-bit prefix arithmetic for a case nobody has hit, and adding them later
+is a fourth matcher arm plus two list entries, not a redesign. IPv6 addresses are therefore
+matched exactly, so `::1` is recognised and its expanded `0:0:0:0:0:0:0:1` form is not —
+reachable only from a hand-written config entry, since browsers normalise to the short form.
+
+**The bail is silent, and the noop denies rather than re-exports.**
+Two smaller F3 forks, both of which follow from *when* layer 5 actually runs. It fires only
+in the scenario where every structural layer already failed and core is live in a real
+user's browser — so a `[dogear] refusing to initialize` console warning would announce a
+dev tool on the one page it must be invisible on. Diagnostics belong on the dev-side path,
+where B1 can add them.
+
+For the same reason `noop.ts` hand-writes its own always-denying counterparts instead of
+`export … from './host.js'`. Re-exporting would ship the matcher — CIDR arithmetic, suffix
+rules, the default list — into every correct production build, which is precisely what
+layer 3 exists to prevent, and would leave the inert module reporting `localhost` as
+allowed while being incapable of acting on it.
 
 **Tooling → npm workspaces, TypeScript 7, tsup, vitest, Prettier. No ESLint.**
 npm workspaces because pnpm isn't installed and this doesn't need it. TypeScript 7 is the

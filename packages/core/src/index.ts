@@ -1,10 +1,16 @@
 /**
  * dogear's browser half.
  *
- * Almost nothing lives here yet: the overlay is M1 (B1–B7), source resolution is M2
- * (C1–C3), and the hostname guard is F3. What exists now is the one thing the
- * packaging depends on — a way to tell this module apart from the production noop.
+ * Almost nothing lives here yet: the overlay is M1 (B1–B7) and source resolution is M2
+ * (C1–C3). What exists now is the flag the packaging depends on — a way to tell this
+ * module apart from the production noop — and F3's hostname guard, which has no caller
+ * until B1 writes the `init()` that must consult it first.
+ *
+ * Every export here needs a counterpart in ./noop.ts; `index.test.ts` compares the two
+ * surfaces and fails otherwise.
  */
+
+export { DEFAULT_HOSTS, isAllowedHost, isCurrentHostAllowed } from './host.js'
 
 /**
  * `false` here, `true` in the noop build.
