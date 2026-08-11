@@ -129,13 +129,14 @@ resolves all four workspaces.
 
 | Command | What it does |
 |---|---|
-| `npm run verify` | The full gate: `format:check → typecheck → test → build → test:built → typecheck:example → build:example → check:leak` |
+| `npm run verify` | The full gate: `format:check → typecheck → test → build → test:built → typecheck:example → build:example → build:fixtures → check:leak` |
 | `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
 | `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards. Needs a build first |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
+| `npm run build:fixtures` | Production build of F1 layer 2's gated-import fixture; also scanned by `check:leak` |
 | `npm run dev:example` | Dev server for the example app |
 | `npm run format` | Prettier write; `format:check` is the read-only form |
 | `npm run lint` | Alias for `format:check && typecheck`. **There is no ESLint** |

@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
+import * as index from './index.js'
 import { IS_NOOP } from './index.js'
+import * as noop from './noop.js'
 import { IS_NOOP as IS_NOOP_IN_NOOP_BUILD } from './noop.js'
 
 const manifest = JSON.parse(
@@ -21,6 +23,18 @@ describe('module surface', () => {
 
   it('the noop build reports itself as inert', () => {
     expect(IS_NOOP_IN_NOOP_BUILD).toBe(true)
+  })
+
+  it('the noop exports everything the real module does', () => {
+    // ./noop.ts states this rule; until now nothing enforced it. A missing counterpart is
+    // not a build-time type error — it is an undefined import that surfaces only in a
+    // production bundle, because the noop is what a production resolver actually gets.
+    //
+    // Trivially true while both modules export only IS_NOOP, which is exactly why it is
+    // worth having before B1 and C1 grow this surface. `sentinel.ts` needs no exception
+    // here: it is deliberately not re-exported from ./index.ts, so it is not part of the
+    // surface being compared. See the brief's Decisions log.
+    expect(Object.keys(noop).sort()).toEqual(Object.keys(index).sort())
   })
 })
 

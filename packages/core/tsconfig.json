@@ -8,5 +8,8 @@
     // setup; the discipline that keeps runtime code browser-only is review, not tsc.
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "tsup.config.ts"]
+  // test-built/ holds the suites that import through dist/ and shell out to Node, matching
+  // packages/cli/tsconfig.json. The gated-import fixture under it is plain .js and .html on
+  // purpose — it is built by Vite, not compiled by us, and has no business in this program.
+  "include": ["src/**/*.ts", "test-built/**/*.ts", "tsup.config.ts"]
 }

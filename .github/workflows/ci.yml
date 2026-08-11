@@ -56,6 +56,10 @@ jobs:
       # Builds the consumer app — this is what the leak check below scans.
       - run: npm run build:example
 
+      # F1 layer 2: production-builds a fixture that gates a dynamic import of core behind
+      # `import.meta.env.DEV`. The leak check below asserts the branch was eliminated.
+      - run: npm run build:fixtures
+
       # F2: fails the build if dogear's sentinel, source attribute, or package specifier
       # reached production output, naming every offending file. Must run after both
       # builds: it scans the example's dist AND packages/core/dist/noop.js.
