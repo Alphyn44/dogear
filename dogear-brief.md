@@ -669,12 +669,14 @@ agent's context.
 **B7 — Overlay isolation**
 - The overlay renders in a **closed** shadow root; no style crosses in either direction.
 - Nothing it renders lives inside `<body>`, and its host tag is a name no app query asks for.
-- **While idle it has no nodes in the document at all** — the host is inserted when something
-  becomes visible and removed when nothing is.
+- **While idle and the queue is empty it has no nodes in the document at all** — the host is
+  inserted when something becomes visible and removed when nothing is.
 
 *(The second criterion originally read "it never appears in the user's own DOM queries or
 snapshot tests". See the Decisions log — that claim was vacuous for component tests and
-unachievable for browser tests, and it was amended during B7.)*
+unachievable for browser tests, and it was amended during B7. The third gained its
+"and the queue is empty" clause during B3, when the pending badge became the first thing
+dogear renders that outlives a gesture — also in the Decisions log.)*
 
 ### Epic C — Localization (M2)
 
@@ -878,6 +880,26 @@ nothing in the registry to collide with, and an unknown element is `display: inl
 like an unstyled div. The one risk taken is the placement: DOM insertion is not HTML parsing,
 so the node stays a child of `<html>` and renders there, but it is off the beaten path. The
 mount target is a single line in `overlay.ts` if a browser is ever found to mishandle it.
+
+**Zero nodes while idle → narrowed to "and the queue is empty", by B3's pending badge.**
+
+B7 flagged this as the one case that could weaken its third guarantee, and B3 is where it
+came due. A badge that only appears while the modifier is held cannot tell you that you are
+carrying eight comments, which is most of what a pending count is for — and batching across
+several pages is the entire premise of B3. So the badge keeps the host mounted, and the
+guarantee reads "zero nodes while idle **and the queue is empty**".
+
+What the guarantee was written to protect is untouched. It exists so *a test run that never
+touches dogear sees a document byte-identical to one dogear was never loaded into* — and a
+non-empty queue can only exist because someone modifier-clicked and typed. The queue is
+in-memory, so a reload empties it; there is no path by which a test that ignores dogear
+inherits a mounted host. Teardown is unaffected and separately tested: `stop()` restores the
+document byte-for-byte with a non-empty queue.
+
+The rejected alternative was a timed flash — mount on queue, show the count, unmount a second
+later. It buys a narrower word for "idle" at the price of a count that is knowable at some
+moments and not others, which is worse than either honest option for someone trying to
+remember what they have queued.
 
 **Nothing is injected inline, because a strict CSP blocks it — F4.**
 dogear used to bootstrap from an inline `<script>` that imported the served bundle and called

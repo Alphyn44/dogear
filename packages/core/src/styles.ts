@@ -56,21 +56,45 @@ export const SHADOW_CSS = `
 
 /*
  * Restated rather than inherited: "all: initial" on the host means the shadow tree starts
- * from the browser default, which is a serif face at whatever size the UA picks.
+ * from the browser default, which is a serif face at whatever size the UA picks. Shared by
+ * both surfaces for the same reason — neither inherits anything across the boundary.
  */
-.box {
+.box, .badge {
   position: fixed;
   font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: #f6f7f9;
   background: #1b1d23;
   border: 1px solid #3a3f4b;
-  border-radius: 6px;
   box-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+}
+
+.box {
+  border-radius: 6px;
   padding: 8px;
   width: 280px;
   /* The one place pointer-events is turned back on. The host is "none" so the page keeps
-     working underneath; the box has to be typable. */
+     working underneath; the box has to be typable. B4 (#11) adds the second, when the badge
+     becomes the handle for the review panel. */
   pointer-events: auto;
+}
+
+/*
+ * B3's (#10) pending count, and the one thing dogear renders that outlives a gesture — see
+ * ./badge.ts for what that costs B7 (#14).
+ *
+ * Bottom-right because apps put nav, logos and primary CTAs top-left and top-right far more
+ * often, so it collides with the least; it is also furthest from where the comment box lands,
+ * which anchors below its target by preference and so clusters upward.
+ *
+ * No "pointer-events" here on purpose. Inheriting the host's "none" is what lets a click in
+ * this corner reach the app underneath.
+ */
+.badge {
+  right: 12px;
+  bottom: 12px;
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-size: 12px;
 }
 
 .label {
@@ -81,6 +105,17 @@ export const SHADOW_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * The key bindings. Enter-versus-Shift+Enter is a coin-flip between two live conventions and
+ * the box is modal with no other affordance, so there is nowhere else to learn it — and
+ * someone who wants a second line otherwise finds out by losing their first.
+ */
+.hint {
+  font-size: 11px;
+  color: #9aa3b2;
+  margin-top: 6px;
 }
 
 .input {

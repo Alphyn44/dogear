@@ -1,13 +1,12 @@
 /**
  * The comment box B1 (#8) opens on a captured element.
  *
- * Scope: it renders, it anchors, it takes focus, and you can type in it. **Enter (queue the
- * annotation) and the pending badge are B3 (#10)** — nothing typed here goes anywhere yet.
- *
- * Esc is the one exception, pulled forward from B3 deliberately: a box that cannot be
- * dismissed makes the whole manual verification pass — which is the only thing that can
- * settle B1 and B2's cross-browser criteria — unpleasant enough to cut corners on. Noted on
- * #10 so B3 is not closed against work that already landed.
+ * Scope: it renders, it anchors, it takes focus, and you can type in it. **The keys that act
+ * on it live in ./session.ts, not here** — Esc since B1, Enter and Shift+Enter since B3
+ * (#10). All three are handled in one window-level keydown handler so they share the
+ * hard-stop semantics Esc needs: an app that also closes a modal on Escape, or submits a form
+ * on Enter, must not do it while dogear has focus. A listener on the textarea could not
+ * promise that.
  *
  * Anchoring is a pure function for the same reason the outline's is: happy-dom has no layout
  * engine, so the DOM-environment test can only say "styles were applied", and the arithmetic
@@ -69,10 +68,20 @@ export function anchorStyle(
   return { left: `${left}px`, top: `${top}px` }
 }
 
+/**
+ * The key bindings, rendered under the input.
+ *
+ * Symbols rather than words: three bindings have to fit on one line inside a 280px box, and
+ * `⏎`/`⇧⏎` are what a keyboard-driven user already reads everywhere else.
+ */
+export const HINT = '⏎ queue · ⇧⏎ newline · esc cancel'
+
 export interface CommentBox {
   readonly element: HTMLElement
   readonly input: HTMLTextAreaElement
   readonly open: boolean
+  /** What has been typed, untrimmed. Trimming is the caller's call — see `submit` in ./session.ts. */
+  readonly value: string
   /** Show the box anchored to `target`, labelled. Does not focus — see {@link CommentBox.focus}. */
   show(target: Box, label: string, viewport: Viewport): void
   /**
@@ -101,9 +110,12 @@ export function createCommentBox(): CommentBox {
   input.className = 'input'
   input.rows = 3
   input.placeholder = "What's wrong with this?"
-  // TODO(dogear): B3 (#10) owns Enter — queue the annotation and clear the box.
 
-  element.append(label, input)
+  const hint = document.createElement('div')
+  hint.className = 'hint'
+  hint.textContent = HINT
+
+  element.append(label, input, hint)
 
   return {
     element,
@@ -111,6 +123,10 @@ export function createCommentBox(): CommentBox {
 
     get open() {
       return !element.hidden
+    },
+
+    get value() {
+      return input.value
     },
 
     show(target, text, viewport) {

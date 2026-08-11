@@ -3,9 +3,11 @@
 import type { Mock } from 'vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { HINT } from './box.js'
 import { createListenerRegistry, type ListenerRegistry } from './listeners.js'
 import type { Modifier } from './options.js'
 import { createOverlay, type Overlay } from './overlay.js'
+import type { QueueItem } from './queue.js'
 import { createSession, isHeld, type Session } from './session.js'
 
 /**
@@ -54,6 +56,46 @@ function start(modifier: Modifier = 'alt'): void {
 
 function key(type: 'keydown' | 'keyup', init: KeyboardEventInit): void {
   window.dispatchEvent(new KeyboardEvent(type, { bubbles: true, ...init }))
+}
+
+function input(): HTMLTextAreaElement {
+  return overlay.root.querySelector('.input') as HTMLTextAreaElement
+}
+
+/**
+ * A keydown from inside the shadow root.
+ *
+ * Dispatched on the host rather than on the textarea because that is what the session
+ * actually sees: an event crossing a closed shadow boundary retargets to the host, so by the
+ * time it reaches the window-level handler `event.target` is the host either way.
+ */
+function keyInBox(init: KeyboardEventInit): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  })
+  overlay.host.dispatchEvent(event)
+  return event
+}
+
+/** Capture the target and type a comment into the box, the way B3 assumes you got here. */
+function captureAndType(text: string): void {
+  mouse('click', { altKey: true })
+  input().value = text
+}
+
+/**
+ * The first queued item.
+ *
+ * A function rather than `session.queue.items[0]` because `noUncheckedIndexedAccess` types
+ * that as possibly undefined — and throwing here reads better in a failure than the
+ * property access on undefined that an assertion operator would produce.
+ */
+function firstQueued(): QueueItem {
+  const [item] = session.queue.items
+  if (item === undefined) throw new Error('nothing was queued')
+  return item
 }
 
 /** Dispatch from the target, so it travels the real capture path down from window. */
@@ -341,6 +383,206 @@ describe('B1 — capture', () => {
     session.refresh()
 
     expect(overlay.mounted).toBe(false)
+  })
+})
+
+describe('B3 — comment and queue', () => {
+  it('assembles the annotation Enter queues', () => {
+    captureAndType('  shade this darker  ')
+
+    keyInBox({ key: 'Enter' })
+
+    expect(session.queue.items).toEqual([
+      {
+        key: expect.any(Number),
+        // Trimmed, because @dogear/vite's validateBatch rejects the whole batch on a
+        // comment that is not a non-empty trimmed string.
+        comment: 'shade this darker',
+        element: { tag: 'button', id: null, classes: ['tab'], text: 'Settings' },
+        url: location.href,
+        viewport: {
+          w: window.innerWidth,
+          h: window.innerHeight,
+          dpr: window.devicePixelRatio,
+        },
+        authoredAt: expect.any(String),
+      },
+    ])
+    expect(Date.parse(firstQueued().authoredAt)).not.toBeNaN()
+  })
+
+  it('carries no id, status, createdAt or resolvedAt — the server owns all four', () => {
+    // stampAnnotation spreads client fields through, so anything sent under one of these
+    // names either gets discarded or, worse, lands in queue.json and breaks the
+    // time-sortability UUIDv7 was chosen for.
+    captureAndType('too dark')
+
+    keyInBox({ key: 'Enter' })
+
+    expect(Object.keys(firstQueued()).sort()).toEqual([
+      'authoredAt',
+      'comment',
+      'element',
+      'key',
+      'url',
+      'viewport',
+    ])
+  })
+
+  it('records the element as it was when pointed at, not as it is at Enter', () => {
+    // The text snippet is the agent's re-anchoring lifeline. Re-describing at Enter would
+    // record whatever the app re-rendered into the element while the comment was typed.
+    captureAndType('too dark')
+    target.textContent = 'Something else entirely'
+
+    keyInBox({ key: 'Enter' })
+
+    expect(firstQueued().element.text).toBe('Settings')
+  })
+
+  it('releases on Enter, so the next thing you do is point somewhere else', () => {
+    captureAndType('too dark')
+
+    keyInBox({ key: 'Enter' })
+
+    expect((overlay.root.querySelector('.box') as HTMLElement).hidden).toBe(true)
+    expect((overlay.root.querySelector('.outline--captured') as HTMLElement).hidden).toBe(
+      true,
+    )
+  })
+
+  it('shows the pending count, and counts up', () => {
+    const badge = () => overlay.root.querySelector('.badge') as HTMLElement
+
+    expect(badge().hidden).toBe(true)
+
+    captureAndType('first')
+    keyInBox({ key: 'Enter' })
+    expect(badge().hidden).toBe(false)
+    expect(badge().textContent).toBe('1 pending')
+
+    captureAndType('second')
+    keyInBox({ key: 'Enter' })
+    expect(badge().textContent).toBe('2 pending')
+  })
+
+  it('keeps the host mounted while the queue is non-empty — B7 (#14), narrowed', () => {
+    // The decision B7 handed forward. A badge you can only see while holding the modifier
+    // cannot tell you that you are carrying eight comments, which is most of what it is for.
+    captureAndType('too dark')
+
+    keyInBox({ key: 'Enter' })
+    key('keyup', { key: 'Alt', altKey: false })
+
+    expect(overlay.mounted).toBe(true)
+  })
+
+  it('leaves an untouched page with zero nodes, which is the half of B7 that survives', () => {
+    // The scenario the guarantee was written for: a test run that never touches dogear. A
+    // non-empty queue can only exist because someone clicked and typed, and it is in-memory
+    // so a reload empties it.
+    key('keydown', { key: 'Alt', altKey: true })
+    key('keyup', { key: 'Alt', altKey: false })
+
+    expect(session.queue.count).toBe(0)
+    expect(overlay.mounted).toBe(false)
+  })
+
+  it('does not let the app see the keystroke that queued', () => {
+    // Same hard stop Escape needs. An app with a global Enter handler — a form submit, a
+    // command palette — must not act on the key that filed an annotation against it.
+    const appKeys = vi.fn()
+    window.addEventListener('keydown', appKeys)
+    captureAndType('too dark')
+
+    const event = keyInBox({ key: 'Enter' })
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(appKeys).not.toHaveBeenCalled()
+
+    window.removeEventListener('keydown', appKeys)
+  })
+
+  it('leaves Shift+Enter to the textarea, so a second line is typable', () => {
+    captureAndType('first line')
+
+    const event = keyInBox({ key: 'Enter', shiftKey: true })
+
+    expect(session.queue.count).toBe(0)
+    // Not cancelled — cancelling is what would stop the newline being inserted.
+    expect(event.defaultPrevented).toBe(false)
+    expect((overlay.root.querySelector('.box') as HTMLElement).hidden).toBe(false)
+  })
+
+  it.each([
+    { text: '', why: 'an empty box' },
+    { text: '   \n  ', why: 'whitespace only' },
+  ])('queues nothing on Enter with $why, and keeps the box open', ({ text }) => {
+    // Not a harmless placeholder: validateBatch rejects the *entire* batch on one empty
+    // comment, so queueing this would take seven good annotations down with it at B5 (#12).
+    captureAndType(text)
+
+    const event = keyInBox({ key: 'Enter' })
+
+    expect(session.queue.count).toBe(0)
+    expect((overlay.root.querySelector('.box') as HTMLElement).hidden).toBe(false)
+    // Still cancelled — inserting a newline instead would be a silent "no".
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('queues nothing mid-IME, where Enter commits a candidate', () => {
+    captureAndType('あ')
+
+    keyInBox({ key: 'Enter', isComposing: true })
+
+    expect(session.queue.count).toBe(0)
+  })
+
+  it("ignores Enter in the app's own fields while the box happens to be open", () => {
+    // The host check. Without it, typing into a search box behind an open comment box would
+    // file an annotation about whatever was last clicked.
+    captureAndType('too dark')
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    })
+    target.dispatchEvent(event)
+
+    expect(session.queue.count).toBe(0)
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('queues nothing on Escape', () => {
+    captureAndType('never mind')
+
+    key('keydown', { key: 'Escape' })
+
+    expect(session.queue.count).toBe(0)
+    expect(overlay.mounted).toBe(false)
+  })
+
+  it('tears down to a byte-identical document even with a non-empty queue', () => {
+    // The other half of the B7 narrowing: "while idle and the queue is empty" weakens the
+    // idle guarantee, and must not weaken the teardown one. Asserted here rather than in
+    // teardown.test.ts because that file drives `init()`, which returns only a teardown —
+    // the shadow root is closed, so nothing outside can type a comment to fill the queue.
+    const before = document.documentElement.outerHTML
+    captureAndType('too dark')
+    keyInBox({ key: 'Enter' })
+    expect(overlay.mounted).toBe(true)
+
+    registry.detachAll()
+    overlay.destroy()
+
+    expect(document.documentElement.outerHTML).toBe(before)
+  })
+
+  it('gives the comment box a hint line, since nothing else teaches Shift+Enter', () => {
+    mouse('click', { altKey: true })
+
+    expect(overlay.root.querySelector('.hint')?.textContent).toBe(HINT)
   })
 })
 

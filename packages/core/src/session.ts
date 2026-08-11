@@ -1,18 +1,24 @@
 /**
- * B2 (#9) and B1 (#8) — the modifier state machine, the suppression set, and capture.
+ * B2 (#9) and B1 (#8) — the modifier state machine, the suppression set, and capture — plus
+ * B3's (#10) queueing on Enter.
  *
  * Everything here attaches through the registry `init()` owns, so B6's (#13) "detach, don't
  * ignore" holds by construction rather than by discipline. See ./listeners.ts.
  */
 
+import type { Badge } from './badge.js'
+import { createBadge } from './badge.js'
 import type { CommentBox } from './box.js'
 import { createCommentBox } from './box.js'
+import type { ElementDescription } from './describe.js'
 import { describeElement, labelFor } from './describe.js'
 import type { ListenerRegistry } from './listeners.js'
 import type { Modifier, ResolvedOptions } from './options.js'
 import type { Outline } from './outline.js'
 import { createOutline, isPaintable } from './outline.js'
 import type { Overlay } from './overlay.js'
+import type { Queue } from './queue.js'
+import { createQueue } from './queue.js'
 
 /** The `MouseEvent`/`KeyboardEvent` flag each modifier is carried on. */
 const MODIFIER_FLAG = {
@@ -87,6 +93,15 @@ export interface Session {
    * tests drive it directly rather than waiting on `requestAnimationFrame`.
    */
   refresh(): void
+  /**
+   * The batch this tab is holding. Read-only in practice — nothing outside adds to it.
+   *
+   * Exposed so B3's (#10) first criterion can be tested against the annotation that was
+   * actually assembled rather than against the badge's rendering of a count. It is not part
+   * of `@dogear/core`'s public surface: `init()` returns a teardown, and ./index.ts exports
+   * neither this type nor `createSession`.
+   */
+  readonly queue: Queue
 }
 
 export interface SessionDeps {
@@ -101,13 +116,23 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
   const hover: Outline = createOutline()
   const captured: Outline = createOutline('captured')
   const box: CommentBox = createCommentBox()
-  overlay.root.append(hover.element, captured.element, box.element)
+  const badge: Badge = createBadge()
+  const queue: Queue = createQueue()
+  overlay.root.append(hover.element, captured.element, box.element, badge.element)
 
   let armed = false
   let pointerX = 0
   let pointerY = 0
   let capturedElement: Element | null = null
-  let capturedLabel = ''
+  /**
+   * The description taken at the moment of capture, not at the moment of queueing.
+   *
+   * Held instead of the label string it renders, because it is also the annotation's
+   * `element` payload. Re-describing at Enter would record whatever the app had re-rendered
+   * into the element while the comment was being typed — and the text snippet is the
+   * re-anchoring lifeline for an agent, so it has to be the text that was pointed at.
+   */
+  let capturedDescription: ElementDescription | null = null
   let frameScheduled = false
 
   function viewport() {
@@ -133,9 +158,19 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     return found === null || found === overlay.host ? null : found
   }
 
-  /** Mount when there is something to see, unmount when there is not. B7's second guarantee. */
+  /**
+   * Mount when there is something to see, unmount when there is not. B7's (#14) third
+   * guarantee, and the one line that narrows it.
+   *
+   * `badge.visible` is B3's (#10) amendment: the guarantee is now "zero nodes while idle
+   * **and the queue is empty**". The scenario B7 was written for is untouched — a non-empty
+   * queue can only exist because someone modifier-clicked and typed, and the queue is
+   * in-memory so any reload empties it, so a test run that never touches dogear still sees a
+   * byte-identical document. The alternative was a count visible only while the modifier is
+   * held, which cannot tell you that you are carrying eight comments. See the brief.
+   */
   function sync(): void {
-    if (hover.visible || captured.visible || box.open) overlay.mount()
+    if (hover.visible || captured.visible || box.open || badge.visible) overlay.mount()
     else overlay.unmount()
   }
 
@@ -194,23 +229,62 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     if (!isPaintable(rect)) return
 
     capturedElement = element
-    capturedLabel = labelFor(describeElement(element))
+    capturedDescription = describeElement(element)
     captured.show(rect)
     hover.hide()
 
     // Mount before showing the box: `show` measures itself to decide whether to sit above
     // or below the target, and a detached element measures as zero.
     overlay.mount()
-    box.show(rect, capturedLabel, viewport())
+    box.show(rect, labelFor(capturedDescription), viewport())
     box.focus()
     sync()
   }
 
   function release(): void {
     capturedElement = null
-    capturedLabel = ''
+    capturedDescription = null
     captured.hide()
     box.hide()
+  }
+
+  /**
+   * B3's (#10) first criterion — turn what is captured plus what was typed into a queued
+   * annotation. Returns whether anything was queued.
+   *
+   * **An empty comment is refused rather than queued.** @dogear/vite's `validateBatch`
+   * rejects the *entire* batch if any item's comment is not a non-empty trimmed string, so an
+   * empty item here is not a harmless placeholder — it is a landmine that fails B5's (#12)
+   * submit and takes seven good annotations down with it. Refusing costs the user one
+   * keystroke; queueing costs them the batch.
+   *
+   * **No `id`, `status`, `createdAt` or `resolvedAt`.** The server owns all four — see
+   * ./queue.ts.
+   *
+   * Releases on success rather than staying open on the same element: the workflow this
+   * ticket exists for is eight comments across three pages, so the next thing you do is point
+   * somewhere else. Same path as Escape, so queueing and dismissing share one set of
+   * invariants.
+   */
+  function submit(): boolean {
+    const comment = box.value.trim()
+    if (comment === '' || capturedDescription === null) return false
+
+    queue.add({
+      comment,
+      element: capturedDescription,
+      url: location.href,
+      viewport: {
+        w: window.innerWidth,
+        h: window.innerHeight,
+        dpr: window.devicePixelRatio,
+      },
+      authoredAt: new Date().toISOString(),
+    })
+
+    badge.set(queue.count)
+    release()
+    return true
   }
 
   // ---------------------------------------------------------------------------------
@@ -251,10 +325,39 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     'keydown',
     (event) => {
       if (event.key === 'Escape' && box.open) {
-        // Pulled forward from B3 (#10) so the box is dismissable. Stopped hard, because an
-        // app that also closes a modal on Escape should not do it while dogear has focus.
+        // B3's (#10) third criterion, landed early during B1 so the box was dismissable for
+        // the manual pass. Stopped hard, because an app that also closes a modal on Escape
+        // should not do it while dogear has focus.
         release()
         sync()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      // B3's (#10) first criterion. Handled here rather than on the textarea so it inherits
+      // the same hard stop Escape needs — an app with a global Enter handler (form submit, a
+      // command palette) must not see the keystroke that queued an annotation.
+      //
+      // Three guards, and each rules out a real keypress:
+      // - `event.target === overlay.host` — events from inside a closed shadow root retarget
+      //   to the host by the time they reach window, so this is "Enter in *our* box" and not
+      //   Enter in the app's search field while our box happens to be open. Same check the
+      //   suppression loop makes below.
+      // - `!event.shiftKey` — Shift+Enter is the newline. Falling through rather than
+      //   cancelling is what lets the textarea insert it.
+      // - `!event.isComposing` — mid-IME, Enter commits the candidate. Queueing there would
+      //   submit a half-typed comment and eat the keystroke that was finishing the word.
+      if (
+        event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.isComposing &&
+        box.open &&
+        event.target === overlay.host
+      ) {
+        // Cancelled whether or not anything was queued: on the empty-comment path the box
+        // stays open and focused, and inserting a newline there would be a silent "no".
+        if (submit()) sync()
         event.preventDefault()
         event.stopImmediatePropagation()
         return
@@ -373,5 +476,5 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     )
   }
 
-  return { refresh }
+  return { refresh, queue }
 }
