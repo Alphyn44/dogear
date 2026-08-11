@@ -20,21 +20,19 @@ const JAVASCRIPT = 'text/javascript; charset=utf-8'
 /**
  * What the browser gets when @dogear/core has not been built.
  *
- * **A 200 with a working module, not a 5xx.** A non-200 on a module import surfaces in
- * DevTools as an opaque MIME or network error naming a URL the developer has never heard of;
- * a stub makes the import succeed and prints the exact command to run. It matches core's real
- * shape — `init` returning a callable teardown — so the injected tag's
- * `stop: init(...)` does not throw on the way past.
+ * **A 200 with a valid module, not a 5xx.** A non-200 on a module import surfaces in DevTools
+ * as an opaque MIME or network error naming a URL the developer has never heard of; a stub
+ * loads cleanly and prints the exact command to run.
+ *
+ * Since F4 (#34) the served file is a side-effecting entry rather than a module anyone
+ * imports from, so the stub needs no exports — it only has to say what went wrong.
  *
  * It deliberately carries no sentinel: there is nothing here to leak and nothing to scan for.
  */
-const MISSING_BUNDLE_STUB = `export function init() {
-  console.warn(
-    '[dogear] @dogear/core has not been built, so the overlay is not available. ' +
-      'Run \`npm run build -w @dogear/core\` and reload.',
-  )
-  return () => {}
-}
+const MISSING_BUNDLE_STUB = `console.warn(
+  '[dogear] @dogear/core has not been built, so the overlay is not available. ' +
+    'Run \`npm run build -w @dogear/core\` and reload.',
+)
 `
 
 export function sendClientBundle(res: ServerResponse, bundlePath: string): void {
@@ -44,10 +42,9 @@ export function sendClientBundle(res: ServerResponse, bundlePath: string): void 
 /**
  * Served byte-identical to what tsup built, under the name the bundle asks for.
  *
- * `dist/index.js` ends with `//# sourceMappingURL=index.js.map`, so the browser requests
- * `<endpoint>/index.js.map` — a slightly odd public URL, and the price of never rewriting the
- * served bytes. The alternative (rewrite that one comment line and serve `client.js.map`)
- * reads better and adds a transform that has to stay correct as tsup's output changes.
+ * `dist/client.js` ends with `//# sourceMappingURL=client.js.map`, and the route is named to
+ * match, so nothing has to be rewritten on the way out and there is no transform to keep
+ * correct as tsup's output changes.
  *
  * The map's `sources` are `../src/*.ts`, so DevTools labels core's files under `/src/`, next
  * to the app's own. Only the label is confusing: `sourcesContent` is embedded, so the content

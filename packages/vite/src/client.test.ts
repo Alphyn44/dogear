@@ -5,14 +5,20 @@ import {
   DEFAULT_MODIFIER as CORE_DEFAULT_MODIFIER,
   MODIFIERS as CORE_MODIFIERS,
 } from '../../core/src/options.js'
+// ./client-config.js, NOT ./client.js — the latter self-starts on import and would try to
+// mount an overlay in a Node test.
+import {
+  CONFIG_PARAM as CORE_CONFIG_PARAM,
+  readConfig,
+} from '../../core/src/client-config.js'
 import {
   buildClientConfig,
-  clientTagSource,
+  clientScriptSrc,
+  CONFIG_PARAM,
   DEFAULT_MODIFIER,
   MODIFIERS,
   resolveCoreDist,
 } from './client.js'
-import { SENTINEL } from './sentinel.js'
 
 /**
  * The guard on the plugin↔core contract.
@@ -53,49 +59,64 @@ describe('the modifier contract with @dogear/core', () => {
   })
 })
 
-describe('clientTagSource', () => {
-  const source = clientTagSource('/__dogear', { modifier: 'alt' })
-
-  it('imports init from the endpoint that serves it', () => {
-    expect(source).toContain('import { init } from "/__dogear/client.js"')
+describe('clientScriptSrc', () => {
+  it('points at the served bundle under the configured endpoint', () => {
+    expect(clientScriptSrc('/__dogear', { modifier: 'alt' })).toContain(
+      '/__dogear/client.js?',
+    )
   })
 
-  it('carries the sentinel in the body as well as on the tag attribute', () => {
-    expect(source).toContain(SENTINEL)
+  it('agrees with core on the parameter name', () => {
+    // The two halves cannot import each other at build time (rootDir, exports map), so this
+    // is the only thing keeping the query key in step.
+    expect(CONFIG_PARAM).toBe(CORE_CONFIG_PARAM)
   })
 
-  it('exposes the teardown, so B6 is provable by hand from a console', () => {
-    expect(source).toContain('stop: init(')
+  it('round-trips the config through the URL into core', () => {
+    // The whole contract in one assertion: what the plugin encodes is what core decodes,
+    // driven through core's real `readConfig` rather than a reimplementation of it.
+    const src = clientScriptSrc('/__dogear', { modifier: 'ctrl' })
+
+    expect(readConfig(`http://localhost:5173${src}`)).toEqual({ modifier: 'ctrl' })
   })
 
   it.each([
     { endpoint: '/__dogear', why: 'the ordinary case' },
     {
       endpoint: '/x"></script><script>alert(1)</script',
-      why: 'a hostile endpoint option',
+      why: 'an endpoint that used to be able to terminate the inline script',
     },
-    { endpoint: '/<!--', why: 'an HTML comment opener, which also confuses the parser' },
-    { endpoint: '/<script', why: 'a nested opening tag' },
-  ])('cannot be escaped out of by $why', ({ endpoint }) => {
-    // `endpoint` is user-supplied and reaches the import specifier of an INLINE script, so
-    // this is the one place a plugin option can rewrite the page. Escaping every `<` rather
-    // than matching on `</script` covers all three parser hazards at once, and stays valid
-    // JavaScript because `<` in a string literal is simply `<`.
-    const hostile = clientTagSource(endpoint, { modifier: 'alt' })
+    { endpoint: '/<!--', why: 'an HTML comment opener' },
+  ])('survives $why with the config intact', ({ endpoint }) => {
+    // `endpoint` is user-supplied and lands in an HTML attribute. There is no inline body to
+    // terminate any more, but the config still has to survive it, and `&`/`=`/`#` in a value
+    // must not split the parameter — which is what encoding the whole JSON blob buys.
+    const src = clientScriptSrc(endpoint, { modifier: 'meta' })
+    const query = src.slice(src.indexOf('?'))
 
-    expect(hostile).not.toContain('</script')
-    expect(hostile).not.toContain('<!--')
-    expect(hostile).not.toContain('<script')
+    expect(readConfig(`http://localhost:5173/x${query}`)).toEqual({ modifier: 'meta' })
   })
+})
 
-  it('emits valid JavaScript for a hostile endpoint rather than mangling it', () => {
-    // Escaping that produced a syntax error would be a different bug with the same test
-    // passing. `new Function` parses without executing.
-    const hostile = clientTagSource('/x"></script>', { modifier: 'alt' })
-
-    expect(
-      () => new Function(`return () => { ${hostile.replace(/^import .*$/m, '')} }`),
-    ).not.toThrow()
+describe('readConfig', () => {
+  it.each([
+    { url: 'http://x/client.js', why: 'no query at all' },
+    { url: 'http://x/client.js?config=', why: 'an empty value' },
+    { url: 'http://x/client.js?config=%7Bnope', why: 'malformed JSON' },
+    {
+      url: 'http://x/client.js?config=%5B1%2C2%5D',
+      why: 'valid JSON that is not an object',
+    },
+    {
+      url: 'http://x/client.js?config=null',
+      why: 'JSON null, which typeof calls an object',
+    },
+    { url: 'not a url at all', why: 'an unparseable module URL' },
+  ])('falls back to defaults for $why', ({ url }) => {
+    // Falls back rather than throwing, for the same reason `resolveOptions` does: a malformed
+    // URL is a bug in the plugin, and a dev tool throwing during page load has broken the app
+    // it exists to help you inspect.
+    expect(readConfig(url)).toEqual({})
   })
 })
 
@@ -111,7 +132,7 @@ describe('resolveCoreDist', () => {
     const dist = resolveCoreDist()
     if (dist === undefined) return
 
-    expect(dist.bundle.replaceAll('\\', '/')).toMatch(/packages\/core\/dist\/index\.js$/)
+    expect(dist.bundle.replaceAll('\\', '/')).toMatch(/packages\/core\/dist\/client\.js$/)
     expect(dist.bundle).not.toContain('noop')
   })
 })

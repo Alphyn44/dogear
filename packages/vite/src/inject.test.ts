@@ -77,18 +77,16 @@ describe('the HTML a dev server actually serves', () => {
     expect(served).toMatch(/<script[^>]*data-dogear=/)
   })
 
-  it('imports @dogear/core from the dev server and starts it', () => {
-    // The M0 payload was an inline console.info. B1 (#8) replaced it with an import of the
-    // bundle the plugin now serves, because the overlay is far too large to re-send inside
-    // every HTML response.
-    expect(served).toContain('/__dogear/client.js')
-    expect(served).toContain('init(')
+  it('loads @dogear/core from the dev server', () => {
+    // The M0 payload was an inline console.info. B1 (#8) replaced it with an inline module
+    // importing the served bundle; F4 (#34) removed the inline body entirely, because a
+    // strict `script-src 'self'` blocks inline execution.
+    expect(served).toMatch(/<script[^>]*src="\/__dogear\/client\.js\?/)
   })
 
   it("emits the tag verbatim rather than through Vite's html-proxy machinery", () => {
-    // What `order: 'post'` buys. A `pre` hook would extract this inline module into a
-    // generated `/@id/__x00__…html-proxy` module, turning one tag into two and moving the
-    // body out of the document — where none of the assertions above could see it.
+    // What `order: 'post'` buys. A `pre` hook would route the tag through Vite's core HTML
+    // handling, which rewrites script sources into its own module graph.
     expect(served).not.toContain('html-proxy')
   })
 
@@ -97,6 +95,44 @@ describe('the HTML a dev server actually serves', () => {
     // transform, so index.html on disk must still be byte-for-byte what the fixture wrote
     // even after the server has served a page carrying the script.
     expect(readFileSync(join(root, 'index.html'), 'utf8')).toBe(RAW_HTML)
+  })
+})
+
+describe("what a strict `script-src 'self'` requires (F4, #34)", () => {
+  /**
+   * The regression guard for the defect that produced #34: dogear bootstrapped from an
+   * **inline** `<script>`, which a strict Content-Security-Policy blocks outright. dogear then
+   * did nothing at all, and the only symptom was a console error most people would read as
+   * their own app's fault. `examples/react-app` sets no CSP, so nothing else here can catch a
+   * regression.
+   *
+   * **Scope, stated plainly:** observing an actual CSP *violation* needs a browser enforcing
+   * a policy, which this suite has no way to do — it asserts the two structural properties
+   * `script-src 'self'` grants a script, against the HTML a real dev server serves. That is
+   * the thing that would regress if somebody reintroduced an inline body; whether a browser
+   * agrees remains a manual check, and is why #34 was found by hand rather than by CI.
+   */
+
+  it('injects no executable content inline — the property CSP actually blocks', () => {
+    // Against the served HTML rather than the tag descriptor, because Vite's own tag
+    // serialization is what decides whether a body reaches the document at all.
+    expect(served).toMatch(/<script[^>]*data-dogear[^>]*>\s*<\/script>/)
+  })
+
+  it("loads from a same-origin path, which is what `'self'` grants", () => {
+    // A root-relative src is same-origin by construction. An absolute URL to a CDN would
+    // satisfy the assertion above and still be refused by the policy.
+    const src = /<script[^>]*data-dogear[^>]*\ssrc="([^"]+)"/.exec(served)?.[1]
+
+    expect(src).toBeDefined()
+    expect(src?.startsWith('/')).toBe(true)
+    expect(src).not.toMatch(/^https?:/)
+  })
+
+  it('still carries the sentinel, which the inline body used to be one carrier of', () => {
+    // Removing the inline script removed one of A1's two sentinel carriers. The attribute is
+    // the survivor here; the other is core's dist/client.js, which imports the constant.
+    expect(served).toContain(SENTINEL)
   })
 })
 

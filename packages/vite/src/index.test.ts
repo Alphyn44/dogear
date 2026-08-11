@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { HtmlTagDescriptor, Plugin, ViteDevServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { readConfig } from '../../core/src/client-config.js'
 import { dogear } from './index.js'
 import { SENTINEL } from './sentinel.js'
 
@@ -74,11 +75,11 @@ function injectedTags(plugin: Plugin): HtmlTagDescriptor[] {
   return handler()
 }
 
-/** The injected tag's body, which is where the `init(...)` call lives. */
-function injectedSource(plugin: Plugin): string {
-  const children = injectedTags(plugin)[0]?.children
-  if (typeof children !== 'string') throw new Error('expected an inline script body')
-  return children
+/** The injected tag's `src`, which is where the config now rides. */
+function injectedSrc(plugin: Plugin): string {
+  const src = injectedTags(plugin)[0]?.attrs?.['src']
+  if (typeof src !== 'string') throw new Error('expected a script src')
+  return src
 }
 
 describe('dogear()', () => {
@@ -162,37 +163,27 @@ describe('transformIndexHtml (A1)', () => {
     expect(read(tag as HtmlTagDescriptor)).toBe(expected)
   })
 
-  it('carries the sentinel in the script body as well as the attribute', () => {
-    // Two carriers, because which one a hypothetical leak would preserve is exactly the
-    // thing that cannot be predicted, and check:leak is a plain substring scan.
-    expect(injectedSource(configured())).toContain(SENTINEL)
+  it('emits no inline body at all — the criterion F4 (#34) rests on', () => {
+    // A strict `script-src 'self'` blocks inline execution outright, and dogear failed
+    // silently with a console error that read like the host app's own bug. Anything back in
+    // `children` reintroduces exactly that, on every project with a CSP.
+    expect(injectedTags(configured())[0]?.children).toBeUndefined()
   })
 
-  it('never emits a closing script tag, which would end the element early', () => {
-    expect(injectedSource(configured())).not.toContain('</script')
+  it('loads the client from the served endpoint', () => {
+    expect(injectedSrc(configured())).toContain('/__dogear/client.js?')
   })
 
-  it('imports the client from the served endpoint and starts it', () => {
-    const source = injectedSource(configured())
-
-    expect(source).toContain('import { init } from "/__dogear/client.js"')
-    expect(source).toContain('init({"modifier":"alt"})')
+  it('passes a configured modifier through on the query string', () => {
+    // Decoded with core's real reader rather than a string match, so this fails if either
+    // half of the contract drifts.
+    expect(
+      readConfig(`http://localhost${injectedSrc(configured({ modifier: 'ctrl' }))}`),
+    ).toEqual({ modifier: 'ctrl' })
   })
 
-  it('exposes the teardown as window.__dogear.stop', () => {
-    // B6's (#13) "detached, not ignored" becomes provable by hand a milestone early: type
-    // `__dogear.stop()` in a console and dogear's listeners are gone, not quietened.
-    expect(injectedSource(configured())).toContain('stop: init(')
-  })
-
-  it('passes a configured modifier through to init()', () => {
-    expect(injectedSource(configured({ modifier: 'ctrl' }))).toContain(
-      'init({"modifier":"ctrl"})',
-    )
-  })
-
-  it('follows a custom endpoint into the import specifier', () => {
-    expect(injectedSource(configured({ endpoint: '/__x' }))).toContain('"/__x/client.js"')
+  it('follows a custom endpoint into the src', () => {
+    expect(injectedSrc(configured({ endpoint: '/__x' }))).toContain('/__x/client.js?')
   })
 
   it('injects nothing before configureServer has run', () => {

@@ -3,7 +3,7 @@ import type { Plugin } from 'vite'
 import type { ClientConfig, Modifier } from './client.js'
 import {
   buildClientConfig,
-  clientTagSource,
+  clientScriptSrc,
   MODIFIERS,
   resolveCoreDist,
 } from './client.js'
@@ -161,8 +161,15 @@ export function dogear(options: DogearOptions = {}): Plugin {
           : [
               {
                 tag: 'script',
-                attrs: { type: 'module', 'data-dogear': SENTINEL },
-                children: clientTagSource(injection.endpoint, injection.config),
+                attrs: {
+                  type: 'module',
+                  'data-dogear': SENTINEL,
+                  // `src`, with no inline body at all — F4 (#34). A strict
+                  // `script-src 'self'` blocks inline execution, and dogear failed silently
+                  // with a console error that read like the host app's own bug. An external
+                  // same-origin script needs no nonce, so dogear stays out of the host's CSP.
+                  src: clientScriptSrc(injection.endpoint, injection.config),
+                },
                 injectTo: 'head-prepend',
               },
             ],

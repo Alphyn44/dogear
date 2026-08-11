@@ -82,11 +82,11 @@ export function normaliseEndpoint(endpoint: string): string {
  */
 export function createEndpoint(options: EndpointOptions): Connect.NextHandleFunction {
   const annotationsPath = `${options.endpoint}/annotations`
-  // `index.js.map` rather than `client.js.map`: it is literally what the served bundle's
-  // trailing `//# sourceMappingURL=` comment asks the browser for, and serving it under that
-  // name means the bytes go out exactly as tsup built them. See ./client-route.ts.
+  // The map's public name matches the bundle's, because the served file IS core's
+  // `dist/client.js` and its trailing `//# sourceMappingURL=client.js.map` asks for exactly
+  // this. The bytes go out as tsup built them, with nothing rewritten. See ./client-route.ts.
   const clientPath = `${options.endpoint}/client.js`
-  const sourcemapPath = `${options.endpoint}/index.js.map`
+  const sourcemapPath = `${options.endpoint}/client.js.map`
   const queuePath = queuePathFor(options.gitRoot)
 
   return function dogearEndpoint(req, res, next) {

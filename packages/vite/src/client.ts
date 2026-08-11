@@ -2,35 +2,34 @@ import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 
-import { SENTINEL } from './sentinel.js'
-
 /**
- * The plugin half of the browser contract: where @dogear/core's bundle lives on disk, and
- * the one inline `<script>` that loads it.
+ * The plugin half of the browser contract: where @dogear/core's dev client lives on disk, and
+ * the `<script>` that loads it.
  *
- * M0 inlined a three-line payload here. B1 (#8) needs the real overlay, which is far too
- * large to re-send inside every HTML response — so the plugin serves the built bundle at
- * `<endpoint>/client.js` and injects a tag that imports it. What stays inline is the call:
+ * M0 inlined a three-line payload here. B1 (#8) replaced it with an inline module that
+ * imported the served bundle and called `init` with a config literal. F4 (#34) removed the
+ * inline script entirely:
  *
  * ```html
- * <script type="module" data-dogear="__DOGEAR_DEV_ONLY__">
- *   import { init } from "/__dogear/client.js"
- *   window.__dogear = { sentinel: "…", stop: init({"modifier":"alt"}) }
- * </script>
+ * <script type="module" data-dogear="__DOGEAR_DEV_ONLY__"
+ *         src="/__dogear/client.js?config=%7B%22modifier%22%3A%22alt%22%7D"></script>
  * ```
  *
- * Config crosses as a JSON literal rather than a query string or a data attribute — a module
- * script has `document.currentScript === null`, so the attribute route does not exist, and a
- * literal is the only form that stays typed on this side.
+ * **Why there is nothing inline left.** A strict `Content-Security-Policy` —
+ * `script-src 'self' 'nonce-…' 'strict-dynamic'`, increasingly common in dev — blocks inline
+ * execution outright, and dogear failed silently with a console error that read like a fault
+ * in the host app. An external same-origin script satisfies `'self'`, so no nonce is needed
+ * and dogear stays out of the host's CSP configuration entirely.
  *
- * The sentinel is still carried BOTH here and on the tag's `data-dogear` attribute. Which of
- * the two a hypothetical leak would preserve is exactly what cannot be predicted, and
- * check:leak is a plain substring scan — a second carrier costs nothing.
+ * Config therefore rides on the URL, and core reads it from `import.meta.url` — a module
+ * script has `document.currentScript === null`, so the data-attribute route does not exist.
+ * One JSON parameter rather than one per field, so the object stays structurally identical to
+ * core's `InitOptions` and B5 adds a field without touching the transport.
  *
- * Emitted as inline `<script>` content, so this text must never contain the sequence
- * `</script>`: the HTML parser would end the element early, whatever the JavaScript meant.
- * Every interpolated value goes through {@link toScriptLiteral}, which makes that structural
- * rather than something to remember.
+ * The sentinel is still carried twice: on the tag's `data-dogear` attribute, and inside the
+ * served bundle, which imports the constant directly (see `packages/core/src/client.ts`).
+ * Which of the two a hypothetical leak would preserve is exactly what cannot be predicted,
+ * and check:leak is a plain substring scan.
  */
 
 /**
@@ -103,8 +102,11 @@ export function resolveCoreDist(): ClientDist | undefined {
   }
 
   const dist = join(dirname(manifest), 'dist')
-  const bundle = join(dist, 'index.js')
-  const sourcemap = join(dist, 'index.js.map')
+  // `client.js`, not `index.js`. The library entry has no caller now that nothing is
+  // inlined — the served file has to self-start, and that is a separate tsup entry in core.
+  // It also carries the sentinel, which `index.js` deliberately cannot.
+  const bundle = join(dist, 'client.js')
+  const sourcemap = join(dist, 'client.js.map')
 
   // The bundle is what matters; a missing sourcemap is a DevTools inconvenience, not a
   // reason to fall back to the stub and tell someone to rebuild. Both are checked here
@@ -121,37 +123,20 @@ export function buildClientConfig(options: {
   return { modifier: options.modifier ?? DEFAULT_MODIFIER }
 }
 
+/** The query parameter core reads its options from. Mirrors core's `CONFIG_PARAM`. */
+export const CONFIG_PARAM = 'config'
+
 /**
- * The inline module that loads core and starts it.
+ * The `src` for the injected tag: the served bundle, with config on the query string.
  *
- * `window.__dogear` survives from M0, so the "did it run?" console check developers already
- * know still works — and it now carries `stop`, the teardown `init()` returns. That makes
- * B6's (#13) "detached, not ignored" criterion provable by hand a milestone early: type
- * `__dogear.stop()` in a console and dogear's listeners are gone, not quietened.
+ * `encodeURIComponent` on the whole JSON blob, so `&`, `=`, `#`, and quotes in a config value
+ * cannot break out of the parameter or out of the HTML attribute Vite serialises this into.
  *
  * Module scripts execute in document order regardless of when they finish fetching, so
- * `injectTo: 'head-prepend'` still means dogear's listeners are attached before the app's.
+ * `injectTo: 'head-prepend'` still means dogear's listeners attach before the app's — an
+ * external `src` changes nothing about that.
  */
-export function clientTagSource(endpoint: string, config: ClientConfig): string {
-  return `
-import { init } from ${toScriptLiteral(`${endpoint}/client.js`)}
-
-window.__dogear = {
-  sentinel: ${toScriptLiteral(SENTINEL)},
-  stop: init(${toScriptLiteral(config)}),
-}
-`
-}
-
-/**
- * JSON, with `<` escaped so nothing can terminate the script element.
- *
- * `endpoint` is user-supplied and reaches the import specifier, so this is not theoretical:
- * `dogear({ endpoint: '/x"></script><script>' })` would otherwise close the tag early and
- * open one of the caller's choosing. Escaping `<` rather than matching on `</script` handles
- * `<!--` and `<script` too, and it stays valid JavaScript because `\\u003c` in a string
- * literal is just `<`.
- */
-function toScriptLiteral(value: unknown): string {
-  return JSON.stringify(value).replaceAll('<', '\\u003c')
+export function clientScriptSrc(endpoint: string, config: ClientConfig): string {
+  const encoded = encodeURIComponent(JSON.stringify(config))
+  return `${endpoint}/client.js?${CONFIG_PARAM}=${encoded}`
 }

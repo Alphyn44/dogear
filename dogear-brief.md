@@ -879,6 +879,27 @@ like an unstyled div. The one risk taken is the placement: DOM insertion is not 
 so the node stays a child of `<html>` and renders there, but it is off the beaten path. The
 mount target is a single line in `overlay.ts` if a browser is ever found to mishandle it.
 
+**Nothing is injected inline, because a strict CSP blocks it — F4.**
+dogear used to bootstrap from an inline `<script>` that imported the served bundle and called
+`init` with a config literal. A project serving `script-src 'self' 'nonce-…' 'strict-dynamic'`
+in dev — increasingly common — blocks inline execution outright, so dogear did nothing and the
+only symptom was a console error most developers would attribute to their own app. Found by
+hand against an unrelated frontend; `examples/react-app` has no CSP, so nothing in M1 could
+have caught it.
+
+The tag is now `<script type="module" src="<endpoint>/client.js?config=…">` with no body. An
+external same-origin script satisfies `'self'`, so no nonce is needed and dogear stays out of
+the host application's CSP configuration entirely — better than reading Vite's nonce and
+stamping it on the tag, which would couple dogear to every host framework's CSP plumbing.
+
+Three consequences. **Config moves onto the URL**, as a single JSON parameter rather than one
+per field, so the decoded object stays structurally identical to the plugin's and B5 adds
+`endpoint` without touching the transport; core reads it from `import.meta.url`, since a
+module script has `document.currentScript === null`. **Core gains a dev-client entry**, because
+with nothing inline there is no caller — `index.ts` cannot self-start without becoming a
+library that mounts an overlay when imported. **The sentinel keeps two carriers**: that entry
+imports the constant directly, which `index.ts` may not.
+
 **Client delivery → the plugin serves core's bundle; the inline tag is just the call.**
 M0 inlined its whole payload in the `<script>`. The overlay is far too large for that: it
 would be re-sent inside every HTML response, with no caching, no sourcemap, and a `</script>`
@@ -1018,9 +1039,18 @@ to mirror.
 
 Which `dist/` is therefore not one answer but three: the consumer bundle
 (`examples/react-app/dist`) and `packages/core/dist/noop.js` are scanned;
-`packages/core/dist/index.js` is not, since it legitimately carries the sentinel. The
+`packages/core/dist/client.js` is not, since it legitimately carries the sentinel. The
 manifest is checked too — dogear in `dependencies` rather than `devDependencies` is a leak
 the content grep cannot see.
+
+*(Corrected during F4. This sentence named `dist/index.js` as the file that legitimately
+carries the sentinel, and that was never true: `sentinel.ts` is not imported by `index.ts`, so
+the literal never reached the library bundle. Nothing was scanning the wrong file — the
+conclusion was right and the reason was wrong — but it mattered once F4 asked whether the
+served bundle could carry the sentinel. `index.js` **cannot**: making it do so would need an
+export, which the parity test would force `noop.ts` to mirror, which ships the literal into
+every correct production build. The dev-client entry `client.ts` can, because it is in no
+exports map and has no noop counterpart.)*
 
 **Sentinel in `@dogear/vite` → a second copy behind a drift test, not an import from core.**
 A1 makes the plugin the sentinel's first emitter, which raises the question of how the

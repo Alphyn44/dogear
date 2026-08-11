@@ -271,7 +271,7 @@ describe('routing', () => {
     expect(body.known).toEqual([
       `POST ${DEFAULT_ENDPOINT}/annotations`,
       `GET ${DEFAULT_ENDPOINT}/client.js`,
-      `GET ${DEFAULT_ENDPOINT}/index.js.map`,
+      `GET ${DEFAULT_ENDPOINT}/client.js.map`,
     ])
   })
 })
@@ -290,10 +290,10 @@ describe('serving @dogear/core to the browser (B1)', () => {
   })
 
   it('serves the sourcemap under the name the bundle asks for', async () => {
-    // `index.js.map`, not `client.js.map` — dist/index.js ends with
-    // `//# sourceMappingURL=index.js.map`, so serving it under that name means the bytes go
-    // out exactly as tsup built them, with nothing rewritten.
-    const response = await fetch(`${origin}${DEFAULT_ENDPOINT}/index.js.map`)
+    // core's `dist/client.js` ends with `//# sourceMappingURL=client.js.map`, and the route
+    // is named to match, so the bytes go out exactly as tsup built them with nothing
+    // rewritten on the way.
+    const response = await fetch(`${origin}${DEFAULT_ENDPOINT}/client.js.map`)
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
@@ -313,10 +313,12 @@ describe('serving @dogear/core to the browser (B1)', () => {
     expect(response.headers.get('allow')).toBe('GET')
   })
 
-  it('serves a working stub module when core has not been built', async () => {
+  it('serves a valid stub module when core has not been built', async () => {
     // A 200 with a valid module, deliberately, not a 5xx. A non-200 on a module import
     // surfaces in DevTools as an opaque MIME or network error naming a URL the developer has
-    // never seen; a stub imports cleanly and prints the command to run.
+    // never seen; a stub loads cleanly and prints the command to run. Since F4 (#34) the
+    // served file is a side-effecting entry rather than something anyone imports from, so
+    // the stub needs no exports.
     const unbuilt = createEndpoint({
       gitRoot: root,
       endpoint: DEFAULT_ENDPOINT,
@@ -337,8 +339,9 @@ describe('serving @dogear/core to the browser (B1)', () => {
       const body = await response.text()
 
       expect(response.status).toBe(200)
-      expect(body).toContain('export function init')
       expect(body).toContain('npm run build -w @dogear/core')
+      // Parses as a module rather than merely being 200 with plausible text.
+      expect(() => new Function(body)).not.toThrow()
     } finally {
       await new Promise<void>((resolve) => stubServer.close(() => resolve()))
     }
@@ -361,7 +364,7 @@ describe('serving @dogear/core to the browser (B1)', () => {
     const maplessOrigin = `http://127.0.0.1:${(maplessServer.address() as AddressInfo).port}`
 
     try {
-      const map = await fetch(`${maplessOrigin}${DEFAULT_ENDPOINT}/index.js.map`)
+      const map = await fetch(`${maplessOrigin}${DEFAULT_ENDPOINT}/client.js.map`)
       const bundle = await fetch(`${maplessOrigin}${DEFAULT_ENDPOINT}/client.js`)
 
       // A missing map is a DevTools inconvenience, not a reason to stop serving the overlay.
