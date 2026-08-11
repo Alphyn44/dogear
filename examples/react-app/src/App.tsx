@@ -11,8 +11,9 @@ export function App() {
     <main className="app">
       <h1>dogear example</h1>
       <p>
-        The plugin is loaded but inert — script injection lands in A1. If you view source
-        now, there should be no dogear script here at all.
+        The plugin injects a dev-only script — A1. View source and there is a{' '}
+        <code>&lt;script data-dogear&gt;</code> in the head that no file in this app
+        imports. Run <code>npm run build</code> and it is gone.
       </p>
       <nav className="tab-bar">
         {items.map((item) => (
