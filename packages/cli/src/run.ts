@@ -1,0 +1,83 @@
+import { hook } from './hook.js'
+
+/**
+ * Argument handling for the `dogear` CLI, kept separate from the executable so it can
+ * be tested without a subprocess. ./cli.ts is the thin bin wrapper that calls this and
+ * exits; everything with a decision in it lives here.
+ *
+ * ./hook.ts imports `Result` back from here, which is a cycle only on paper — it is an
+ * `import type`, so it erases at compile time and no module-loading order exists to get
+ * wrong.
+ */
+
+/**
+ * TODO(dogear): only `hook` is implemented. `mcp` is D1, `prune` is D6, `init` is E1 and
+ * `status` is E5. Listing them now is deliberate — an unknown command and an unimplemented
+ * one are different failures, and the CLI should be able to say which.
+ */
+export const COMMANDS = ['init', 'hook', 'mcp', 'prune', 'status'] as const
+
+export type Command = (typeof COMMANDS)[number]
+
+export interface Result {
+  /**
+   * stdout. The empty string means *write nothing at all* — not a blank line. `dogear hook`
+   * runs as a `UserPromptSubmit` hook, and Claude Code injects that hook's stdout verbatim
+   * as context, so a stray newline is a stray turn of context on every prompt the user types.
+   */
+  readonly output: string
+  readonly exitCode: number
+  /**
+   * stderr, written regardless of exit code.
+   *
+   * This exists because `dogear hook` has a case the other commands do not: something went
+   * wrong, the developer should hear about it, and the exit code must still be 0 while
+   * stdout stays empty — `UserPromptSubmit` reads a non-zero exit as a failure to surface
+   * and exit code 2 as "erase what the user typed". stderr is the only channel that reaches
+   * the developer without also reaching the model.
+   */
+  readonly diagnostic?: string
+}
+
+export function usage(): string {
+  return [
+    'dogear — point at an element, comment on it, hand it to your agent',
+    '',
+    'Usage: dogear <command>',
+    '',
+    'Commands:',
+    '  init     Scaffold this repo: config, gitignore, agent wiring',
+    '  hook     Emit UserPromptSubmit JSON (your agent runs this, not you)',
+    '  mcp      Run the MCP server over stdio',
+    '  prune    Drop resolved items from the queue',
+    '  status   What is running and what is pending, across all repos',
+    '',
+    'Only `hook` is implemented. See https://github.com/Alphyn44/dogear/milestones',
+  ].join('\n')
+}
+
+export function run(argv: readonly string[]): Result {
+  const [command] = argv
+
+  if (command === undefined || command === '--help' || command === '-h') {
+    return { output: usage(), exitCode: 0 }
+  }
+
+  if (!isCommand(command)) {
+    return { output: `dogear: unknown command '${command}'\n\n${usage()}`, exitCode: 1 }
+  }
+
+  // Dispatched before the unimplemented fallthrough, and given the environment here rather
+  // than reading it inside hook() so that the only code touching process globals is this
+  // file and ./cli.ts.
+  if (command === 'hook') return hook(process.env, process.cwd())
+
+  return {
+    output: `dogear: '${command}' is recognised but not implemented yet`,
+    exitCode: 1,
+  }
+}
+
+function isCommand(value: string): value is Command {
+  return (COMMANDS as readonly string[]).includes(value)
+}

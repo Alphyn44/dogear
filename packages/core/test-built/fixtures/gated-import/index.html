@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>dogear — F1 layer 2 fixture</title>
+  </head>
+  <body>
+    <!--
+      Not an example app. This exists only to be built in production mode so the leak gate
+      can prove that a gated dynamic import of dogear's core package is eliminated.
+      See ./main.js.
+
+      Deliberately no package specifier in this comment: Vite preserves HTML comments into
+      output, and the leak gate's `package-specifier` rule scans dist/index.html too. It
+      caught exactly that when this file was written, which is the rule doing its job.
+    -->
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // core is the browser half — it must never reach for a Node API at runtime.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // ...but the colocated vitest tests DO run in Node (index.test.ts reads
+    // package.json off disk). Including node types here is a pragmatic single-project
+    // setup; the discipline that keeps runtime code browser-only is review, not tsc.
+    "types": ["node"]
+  },
+  // test-built/ holds the suites that import through dist/ and shell out to Node, matching
+  // packages/cli/tsconfig.json. The gated-import fixture under it is plain .js and .html on
+  // purpose — it is built by Vite, not compiled by us, and has no business in this program.
+  "include": ["src/**/*.ts", "test-built/**/*.ts", "tsup.config.ts"]
+}

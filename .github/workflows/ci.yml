@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Don't cancel the other versions when one fails — knowing whether a break is
+      # version-specific is most of the diagnosis.
+      fail-fast: false
+      matrix:
+        # The intersection of Vite's engines (^20.19.0 || >=22.12.0) and vitest's
+        # (^20.0.0 || ^22.0.0 || >=24.0.0). The two floors are the lowest versions we
+        # claim to support in package.json `engines`; 24 is what development happens on.
+        # Node 21 and 23 are correctly excluded — vitest does not support them.
+        node: ['20.19.0', '22.12.0', '24']
+
+    name: verify (node ${{ matrix.node }})
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run format:check
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      # A4: spawns the built dist/cli.js the way Claude Code spawns it, asserting an empty
+      # queue puts zero bytes on stdout and that the whole invocation stays well inside the
+      # hook's 10s timeout. Needs the build above; runs before the two slower example steps
+      # so a regression here fails fast.
+      - run: npm run test:built
+
+      # The example typechecks only after the build, because it resolves @dogear/vite
+      # through its exports map to dist/ rather than to source.
+      - run: npm run typecheck:example
+
+      # Builds the consumer app — this is what the leak check below scans.
+      - run: npm run build:example
+
+      # F1 layer 2: production-builds a fixture that gates a dynamic import of core behind
+      # `import.meta.env.DEV`. The leak check below asserts the branch was eliminated.
+      - run: npm run build:fixtures
+
+      # F2: fails the build if dogear's sentinel, source attribute, or package specifier
+      # reached production output, naming every offending file. Must run after both
+      # builds: it scans the example's dist AND packages/core/dist/noop.js.
+      - run: npm run check:leak

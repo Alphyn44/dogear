@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  // test-built/ holds the suite that spawns dist/cli.js. It is not a tsup entry and is not
+  // published, but it must still be typechecked — an untypechecked test is exactly the
+  // silent gap A4 exists to close. scripts/tsconfig.json covers scripts/gate/ the same way.
+  "include": ["src/**/*.ts", "test-built/**/*.ts", "tsup.config.ts"]
+}

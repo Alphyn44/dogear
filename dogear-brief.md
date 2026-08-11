@@ -21,11 +21,11 @@ obligations to anyone. That's a design constraint, not a disclaimer: it means th
 ceremony stays low, the scope stays honest, and features exist because they get used
 rather than because they demo well.
 
-The npm scope is a **personal account** named `dogear`, not an organization — same
-zero setup as any handle, without the doubled name of `@handle/dogear-core`. If that
-handle is taken, the fallback is `@<handle>/dogear-{cli,core,vite}` and nothing else
-here changes. (The unscoped `dogear` package name belongs to an unrelated hapi/statsd
-plugin last published in 2020.)
+The npm scope is a free **organization** named `dogear`, owned by the personal account
+that publishes it — that gets the clean scope without the doubled name of
+`@handle/dogear-core`. If the org name is taken, the fallback is
+`@<handle>/dogear-{cli,core,vite}` and nothing else here changes. (The unscoped `dogear`
+package name belongs to an unrelated hapi/statsd plugin last published in 2022.)
 
 ---
 
@@ -391,7 +391,7 @@ Every resolved site carries a `via` field so the agent knows how much to trust i
 
 ```json
 {
-  "id": "01J8ZQK4V7X2M9NB3TFR5HAECD",
+  "id": "0199c8f4-3a21-7c5e-b3d9-1f2a4c6e8b07",
   "status": "pending",
   "comment": "shade this darker, it's competing with the primary CTA",
   "createdAt": "2026-08-06T21:14:03.221Z",
@@ -418,7 +418,8 @@ Every resolved site carries a `via` field so the agent knows how much to trust i
 ```
 
 - **`id`** — UUIDv7 (time-sortable, so the file reads chronologically without a sort).
-- **`status`** — `"pending"` | `"resolved"` | `"stale"`. Only `pending` reaches the agent.
+- **`status`** — `"pending"` | `"resolved"`. Only `pending` reaches the agent. Staleness is
+  *derived* at read time, not stored; see the Decisions log.
 - **`origin` / `app`** — which dev server and which workspace package. Disambiguates a
   monorepo; see [Multiple dev servers](#multiple-dev-servers-and-multiple-repos).
 - **`sites`** — nearest-first, **capped at 5**. May be empty; `element` never is.
@@ -517,13 +518,26 @@ instruction, since a pasting user has no MCP server.
   "endpoint": "/__dogear",
   "transform": true,
   "include": ["**/*.tsx", "**/*.jsx"],
-  "hosts": ["localhost", "127.0.0.1", "[::1]", "*.local"],
+  "hosts": [
+    "localhost",
+    "*.localhost",
+    "127.0.0.0/8",
+    "::1",
+    "*.local",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16"
+  ],
   "agent": "claude-code"
 }
 ```
 
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
 in `~/.dogear/config.json` and lose to both.
+
+`hosts` entries come in three shapes — an exact hostname, a `*.suffix` wildcard, or an
+IPv4 CIDR range — and the list *replaces* the defaults rather than extending them. See
+the Decisions log.
 
 ---
 
@@ -571,8 +585,9 @@ Layered, structural first:
    to a noop module. Unknown conditions fail safe.
 4. **`devDependencies` + CI grep** for a sentinel string in `dist/`. Fails the build
    loudly if anything leaked.
-5. **Runtime hostname check** — bail unless localhost, `127.0.0.1`, `[::1]`, `*.local`,
-   or a private IP. Last line only.
+5. **Runtime hostname check** — bail unless the page's hostname matches `hosts`, which
+   defaults to loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`), `*.local`, and
+   the private IPv4 ranges. Last line only, and silent when it bails.
 
 React strips fiber debug info in production builds so source resolution would fail
 anyway, but the overlay and its key handlers would still be live. Don't rely on it.
@@ -771,7 +786,7 @@ Increasing order of how much can go wrong.
 
 | | Milestone | Contains | Why here |
 |---|---|---|---|
-| **M0** | Prove the pipe | A1–A4 | Path resolution, hook registration, and JSON shape are where the interesting failures live. Debug them with a **hardcoded** payload and an `alert('loaded')` script — no UI, no source resolution. |
+| **M0** | Prove the pipe | scaffold, A1–A4 | Path resolution, hook registration, and JSON shape are where the interesting failures live. Debug them with a **hardcoded** payload and an `alert('loaded')` script — no UI, no source resolution. M0 opens with the workspace scaffold — the npm workspaces root, the three package skeletons, and CI — because every story below it presumes a monorepo that no story creates. |
 | **M1** | Overlay | B1–B7 | Modifier-click, hover outline, comment box, in-memory queue, POST on submit. Ships with selector + text only, and is **already useful** — an agent can often find a component from a distinctive class or text. |
 | **M2** | Localization | C1–C5 | The attribute transform. Deterministic, synchronous, unit-testable against fixture files. |
 | **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
@@ -818,6 +833,18 @@ text snippet, component name — so a wrong line number is recoverable rather th
 The reader flags an item stale when its snippet no longer appears in its file. It never
 deletes.
 
+**Staleness is derived at read time, never stored.**
+An earlier draft listed `stale` as a third `status` value, which collided with two other
+rules in this document: `status` decides what reaches the agent and only `pending` does,
+while D5 requires stale items to be *shown*, flagged. Both cannot hold if `stale` is a
+status. Deriving it resolves the collision in the direction the rest of the design already
+points — staleness is a fact about the filesystem *right now*, recomputed by whoever reads
+the queue, and a stored flag would go out of date the moment someone re-added the snippet.
+So `status` is `pending | resolved`, and `⚠ stale` is a decoration the formatter computes
+for an item that is still, in every other sense, pending. Settled during A3, when the
+formatter that will eventually render the marker was written; free then because nothing
+produced `stale`, and expensive once D5 has code assuming a stored value.
+
 **Kill switch → detach, don't ignore.**
 An in-overlay toggle with a keyboard shortcut, persisted to `localStorage`, plus
 `dogear({ enabled: false })`. Listeners are removed rather than early-returning — an
@@ -857,18 +884,102 @@ Each dev server serves its own endpoint and knows its own root, so port collisio
 repos cannot cause confusion. Worth stating because it's a real advantage over the
 extension approach, which only sees a URL.
 
-**Package naming → `@dogear/*` under a personal scope.**
-The unscoped `dogear` is taken by an unrelated 2020 hapi plugin. A personal account named
-`dogear` gets the clean scope with no organization to create and no doubled name. GitHub
-repo names are per-owner, so other `dogear` repos are irrelevant — the only cost is
-search-result noise.
+**Package naming → `@dogear/*` via a free npm organization.**
+The unscoped `dogear` is taken by an unrelated hapi plugin (v5.0.0, last published
+2022-06-15). An npm scope exists only if you own a user or an org of that name, and on npm
+an "organization" carries no team semantics — it is simply the mechanism for owning a scope
+that isn't already your username. It is free for unlimited public packages and keeps
+publishing under one identity. An earlier draft called for a second *personal account*
+named `dogear` on the theory that it was less setup; it isn't — an org is one form, while a
+second account is a second login and 2FA to maintain forever, and it turns any future
+handoff into a password-sharing problem. OIDC trusted publishing is configured per package
+and behaves identically either way. GitHub repo names are per-owner, so other `dogear`
+repos are irrelevant — the only cost is search-result noise.
 
 **Framework scope → React first-class; others unsupported for now.**
 The attribute transform is JSX-only. With the fiber walk cut, Vue and Svelte get nothing
 but the selector floor until someone writes their transforms.
 
-**Tooling → npm workspaces, TypeScript, tsup, vitest.**
-npm workspaces because pnpm isn't installed and this doesn't need it. Nothing exotic.
+**Leak sentinel → a distinct token, internal to core, and the noop is scanned too.**
+Layer 4 says "CI grep for a sentinel string in `dist/`", which understates two traps.
+
+First, the marker cannot be the product name. `examples/react-app` ships a `<title>` and an
+`<h1>` reading "dogear example", so grepping for `dogear` fails on a perfectly healthy
+build. Hence a distinct `__DOGEAR_DEV_ONLY__`.
+
+Second, and less obvious: the sentinel must **not** be part of core's public API. `noop.ts`
+mirrors `index.ts`'s exports, and the noop is precisely what the `production` and `default`
+conditions resolve to — so a publicly exported sentinel would ship the literal string in
+every correct production build and make the check fire on a working repo. It lives in an
+internal `sentinel.ts` that `index.ts` does not re-export, so there is nothing for the noop
+to mirror.
+
+Which `dist/` is therefore not one answer but three: the consumer bundle
+(`examples/react-app/dist`) and `packages/core/dist/noop.js` are scanned;
+`packages/core/dist/index.js` is not, since it legitimately carries the sentinel. The
+manifest is checked too — dogear in `dependencies` rather than `devDependencies` is a leak
+the content grep cannot see.
+
+**Sentinel in `@dogear/vite` → a second copy behind a drift test, not an import from core.**
+A1 makes the plugin the sentinel's first emitter, which raises the question of how the
+plugin reaches a constant that lives in core. The obvious answer — a `./sentinel` subpath on
+core's exports map — was rejected. Importing `@dogear/core` by name resolves through the
+exports map to `dist/`, so `npm run typecheck` would need a prior `npm run build`; typecheck
+runs on every turn that touches a `.ts` file, so that is a permanent cost for a frozen
+twenty-character string. A relative import of core's source is unavailable too:
+`packages/vite/tsconfig.build.json` sets `rootDir: "src"` and declaration emit rejects
+anything above it. And architecturally the plugin never imports dogear's browser half — it
+emits a `<script>` tag — so keeping `@dogear/core` unresolvable from the Node-side plugin
+keeps that boundary honest. The duplicated literal is safe because a test in
+`packages/vite/src` imports both and fails on divergence; test files sit outside
+`tsconfig.build.json` and the tsup entry, so the `rootDir` rule does not reach them.
+
+**Host allow-list → one list, three pattern kinds — private ranges inside it, not beside it.**
+This document contradicted itself, and F3 is where it got settled. The Config block listed
+`hosts` as four name patterns with no private ranges, while layer 5 said "bail unless
+localhost, `127.0.0.1`, `[::1]`, `*.local`, **or a private IP**" — which reads as a
+hard-coded allowance sitting next to the configurable list. Both are now the single list,
+and `hosts` understands exact hostnames, `*.suffix` wildcards, and IPv4 CIDR ranges.
+
+The deciding argument is what E4 inherits. Someone who narrows `hosts` to `["localhost"]`
+is saying "stop running on my LAN address", and a separate always-on private-IP rule would
+silently ignore them. One list means "what is allowed" has exactly one answer, and a
+caller-supplied list *replaces* the defaults rather than extending them.
+
+Three consequences worth recording. **`*.localhost` is in the defaults** because RFC 6761
+reserves the whole TLD to loopback, which makes `app.localhost` provably local rather than
+a guess — and suffix matching anchored at a label boundary cannot reach `localhost.evil.com`.
+**The loopback entry is `127.0.0.0/8`, not `127.0.0.1`**, since 127.0.0.2+ are equally
+loopback and get used to separate concurrent dev servers. **IPv6 ULA (`fc00::/7`) and
+link-local (`fe80::/10`) are deliberately absent**: they need `::` expansion, zone-ID
+stripping, and 128-bit prefix arithmetic for a case nobody has hit, and adding them later
+is a fourth matcher arm plus two list entries, not a redesign. IPv6 addresses are therefore
+matched exactly, so `::1` is recognised and its expanded `0:0:0:0:0:0:0:1` form is not —
+reachable only from a hand-written config entry, since browsers normalise to the short form.
+
+**The bail is silent, and the noop denies rather than re-exports.**
+Two smaller F3 forks, both of which follow from *when* layer 5 actually runs. It fires only
+in the scenario where every structural layer already failed and core is live in a real
+user's browser — so a `[dogear] refusing to initialize` console warning would announce a
+dev tool on the one page it must be invisible on. Diagnostics belong on the dev-side path,
+where B1 can add them.
+
+For the same reason `noop.ts` hand-writes its own always-denying counterparts instead of
+`export … from './host.js'`. Re-exporting would ship the matcher — CIDR arithmetic, suffix
+rules, the default list — into every correct production build, which is precisely what
+layer 3 exists to prevent, and would leave the inert module reporting `localhost` as
+allowed while being incapable of acting on it.
+
+**Tooling → npm workspaces, TypeScript 7, tsup, vitest, Prettier. No ESLint.**
+npm workspaces because pnpm isn't installed and this doesn't need it. TypeScript 7 is the
+native compiler and current `latest`; typechecking runs on every turn that touches a `.ts`
+file, so its speed is felt constantly. The only place the native port is exposed is `.d.ts`
+emit, which goes through the compiler API — transpilation is esbuild and never touches
+`tsc`. The fallback if that path misbehaves is `tsc --emitDeclarationOnly`.
+
+No ESLint: with `strict` on and Prettier owning formatting, a linter's remaining yield on a
+project this size didn't justify the config surface. `lint` is defined as
+`format:check && typecheck` so the name still means something.
 
 ---
 
