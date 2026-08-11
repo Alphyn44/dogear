@@ -129,9 +129,10 @@ resolves all four workspaces.
 
 | Command | What it does |
 |---|---|
-| `npm run verify` | The full gate: `format:check → typecheck → test → build → typecheck:example → build:example → check:leak` |
+| `npm run verify` | The full gate: `format:check → typecheck → test → build → test:built → typecheck:example → build:example → check:leak` |
 | `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
+| `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards. Needs a build first |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
@@ -154,10 +155,15 @@ Two things that will bite otherwise:
 The example consumes the **built** plugin, never its source. Rebuild before it picks up a
 change: `npm run build -w @dogear/vite`.
 
-**Two vitest configs, selected by directory.** `scripts/*.test.ts` is hermetic and runs in
-`npm test`; `scripts/gate/*.test.ts` reads real build output and runs only under
-`npm run check:leak`. Splitting on directory rather than filename means neither config
-needs an `exclude` to stay out of the other's way.
+**Three vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
+plus the hermetic `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`
+runs it on every turn that touches TypeScript. The other two need a build first:
+`scripts/gate/*.test.ts` reads real build output under `npm run check:leak`, and
+`packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`. Splitting
+on directory rather than filename means no config needs an `exclude` to stay out of another's
+way. They are kept separate rather than merged because `check:leak` is a *gate* answering one
+question (did the sentinel leak into production?) — folding a behavioural suite into it would
+make the name lie.
 
 **The leak sentinel is internal to `@dogear/core` on purpose.** `packages/core/src/sentinel.ts`
 is not re-exported from `index.ts`, because `noop.ts` mirrors index's public surface and

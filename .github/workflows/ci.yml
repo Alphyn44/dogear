@@ -43,6 +43,12 @@ jobs:
 
       - run: npm run build
 
+      # A4: spawns the built dist/cli.js the way Claude Code spawns it, asserting an empty
+      # queue puts zero bytes on stdout and that the whole invocation stays well inside the
+      # hook's 10s timeout. Needs the build above; runs before the two slower example steps
+      # so a regression here fails fast.
+      - run: npm run test:built
+
       # The example typechecks only after the build, because it resolves @dogear/vite
       # through its exports map to dist/ rather than to source.
       - run: npm run typecheck:example
