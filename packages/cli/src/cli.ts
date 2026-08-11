@@ -8,13 +8,20 @@
 
 import { run } from './run.js'
 
-const { output, exitCode } = run(process.argv.slice(2))
+const { output, exitCode, diagnostic } = run(process.argv.slice(2))
 
-// stdout for success, stderr for anything the shell should treat as a failure.
-if (exitCode === 0) {
-  process.stdout.write(`${output}\n`)
-} else {
-  process.stderr.write(`${output}\n`)
+// Diagnostics are independent of the exit code — `dogear hook` reports a broken queue on
+// stderr while still exiting 0, because a non-zero exit from a UserPromptSubmit hook is a
+// failure Claude Code surfaces to the user, and exit code 2 erases the prompt they typed.
+if (diagnostic !== undefined) process.stderr.write(`${diagnostic}\n`)
+
+// An empty `output` writes NOTHING, not a blank line. Claude Code injects a hook's stdout
+// verbatim as context, so a lone newline from an empty queue is a lone newline prepended to
+// every prompt the user types.
+if (output !== '') {
+  // stdout for success, stderr for anything the shell should treat as a failure.
+  const stream = exitCode === 0 ? process.stdout : process.stderr
+  stream.write(`${output}\n`)
 }
 
 process.exitCode = exitCode

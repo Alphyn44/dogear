@@ -418,7 +418,8 @@ Every resolved site carries a `via` field so the agent knows how much to trust i
 ```
 
 - **`id`** — UUIDv7 (time-sortable, so the file reads chronologically without a sort).
-- **`status`** — `"pending"` | `"resolved"` | `"stale"`. Only `pending` reaches the agent.
+- **`status`** — `"pending"` | `"resolved"`. Only `pending` reaches the agent. Staleness is
+  *derived* at read time, not stored; see the Decisions log.
 - **`origin` / `app`** — which dev server and which workspace package. Disambiguates a
   monorepo; see [Multiple dev servers](#multiple-dev-servers-and-multiple-repos).
 - **`sites`** — nearest-first, **capped at 5**. May be empty; `element` never is.
@@ -817,6 +818,18 @@ scale. Instead every item carries four independent anchors — file:line, CSS se
 text snippet, component name — so a wrong line number is recoverable rather than fatal.
 The reader flags an item stale when its snippet no longer appears in its file. It never
 deletes.
+
+**Staleness is derived at read time, never stored.**
+An earlier draft listed `stale` as a third `status` value, which collided with two other
+rules in this document: `status` decides what reaches the agent and only `pending` does,
+while D5 requires stale items to be *shown*, flagged. Both cannot hold if `stale` is a
+status. Deriving it resolves the collision in the direction the rest of the design already
+points — staleness is a fact about the filesystem *right now*, recomputed by whoever reads
+the queue, and a stored flag would go out of date the moment someone re-added the snippet.
+So `status` is `pending | resolved`, and `⚠ stale` is a decoration the formatter computes
+for an item that is still, in every other sense, pending. Settled during A3, when the
+formatter that will eventually render the marker was written; free then because nothing
+produced `stale`, and expensive once D5 has code assuming a stored value.
 
 **Kill switch → detach, don't ignore.**
 An in-overlay toggle with a keyboard shortcut, persisted to `localStorage`, plus

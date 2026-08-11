@@ -90,7 +90,7 @@ Don't over-explain basics.
 |---|---|
 | `@dogear/core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
 | `@dogear/vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
-| `@dogear/cli` | `dogear` on PATH: `init`, `mcp`, `prune`, `status`. |
+| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. Only `hook` is implemented. |
 
 The flow: **browser → HTTP POST → `<git-root>/.dogear/queue.json` → MCP server →
 agent.** The bridge is a file, never a socket. Both halves are independently testable

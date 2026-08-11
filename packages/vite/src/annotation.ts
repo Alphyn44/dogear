@@ -14,7 +14,13 @@ import { randomBytes } from 'node:crypto'
 /** Everything the client sends, plus the four fields the server owns. */
 export interface Annotation {
   readonly id: string
-  readonly status: 'pending' | 'resolved' | 'stale'
+  /**
+   * `stale` is deliberately absent. Staleness is derived at read time — an item whose text
+   * snippet no longer appears in its file is still `pending`, just flagged — because a
+   * stored flag goes out of date the moment someone re-adds the snippet. See the brief's
+   * Decisions log.
+   */
+  readonly status: 'pending' | 'resolved'
   readonly comment: string
   readonly createdAt: string
   readonly resolvedAt: string | null
