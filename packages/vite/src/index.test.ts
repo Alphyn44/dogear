@@ -3,11 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { HtmlTagDescriptor, Plugin, ViteDevServer } from 'vite'
+import { normalizePath } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { readConfig } from '../../core/src/client-config.js'
 import { dogear } from './index.js'
 import { SENTINEL } from './sentinel.js'
+import { SOURCE_ATTRIBUTE } from './stamp.js'
 
 /**
  * B1 (#8) turned `transformIndexHtml` into a *conditional* hook: it injects only after
@@ -283,6 +285,124 @@ describe('enabled: false', () => {
 
   it('does not throw on a bad modifier it will never use', () => {
     expect(() => run({ enabled: false, modifier: 'ctr1' as never })).not.toThrow()
+  })
+})
+
+/**
+ * C1 (#15) — the wiring only. Everything the transform *decides* lives in `stampSource` and
+ * is tested against fixture strings in ./stamp.test.ts; what is left here is the question
+ * this hook actually answers, which is whether to call it at all.
+ */
+describe('transform (C1)', () => {
+  const JSX = 'const a = <div />\n'
+
+  /** An id under the fixture's git root, in the forward-slash form Vite hands plugins. */
+  function id(relative: string): string {
+    return normalizePath(join(root, relative))
+  }
+
+  function transformed(plugin: Plugin, moduleId: string, code = JSX): string | null {
+    const hook = plugin.transform
+    if (typeof hook !== 'function') {
+      throw new Error('expected transform in function form')
+    }
+
+    // Same narrowing as `injectedTags` above, and for the same reason: Vite declares a
+    // plugin-context `this` and a third options parameter that dogear does not read.
+    const call = hook as unknown as (
+      code: string,
+      moduleId: string,
+    ) => { code: string } | null
+
+    return call.call(plugin as never, code, moduleId)?.code ?? null
+  }
+
+  it('stamps a .tsx file under the git root', () => {
+    expect(transformed(configured(), id('src/App.tsx'))).toContain(
+      `${SOURCE_ATTRIBUTE}="src/App.tsx:1:11"`,
+    )
+  })
+
+  it('stamps .jsx too', () => {
+    expect(transformed(configured(), id('src/App.jsx'))).toContain(SOURCE_ATTRIBUTE)
+  })
+
+  it.each([
+    { what: 'a .ts file', file: 'src/thing.ts' },
+    { what: 'a .js file', file: 'src/thing.js' },
+    { what: 'a dependency', file: 'node_modules/lib/index.tsx' },
+  ])('leaves $what alone', ({ file }) => {
+    // The default include is JSX-only and the default exclude covers node_modules. A `.js`
+    // holding JSX gets the selector floor (C3) instead, exactly as the brief says.
+    expect(transformed(configured(), id(file))).toBeNull()
+  })
+
+  it('skips virtual modules', () => {
+    // A leading NUL means the id is a plugin's private namespace rather than a path on
+    // disk, so there is nothing an agent could open even when the contents are JSX.
+    expect(transformed(configured(), `\0${id('src/App.tsx')}`)).toBeNull()
+  })
+
+  it('honours a custom include', () => {
+    // Narrowed to .jsx, so .tsx now falls outside it. Both are extensions Oxc parses as
+    // JSX — an invented extension would pass whether or not the filter was ever consulted,
+    // since the parse would fail on its own.
+    const plugin = configured({ include: ['**/*.jsx'] })
+
+    expect(transformed(plugin, id('src/App.jsx'))).toContain(SOURCE_ATTRIBUTE)
+    expect(transformed(plugin, id('src/App.tsx'))).toBeNull()
+  })
+
+  it('honours a custom exclude', () => {
+    const plugin = configured({ exclude: ['**/generated/**'] })
+
+    expect(transformed(plugin, id('src/generated/A.tsx'))).toBeNull()
+    // The positive control, so the assertion above cannot pass by excluding everything.
+    expect(transformed(plugin, id('src/A.tsx'))).toContain(SOURCE_ATTRIBUTE)
+  })
+
+  it('resolves relative include patterns against the git root, not cwd', () => {
+    // Left to itself `createFilter` resolves against `process.cwd()`, which is wherever npm
+    // started the dev server — in a workspace that is the package directory, not the repo.
+    // A pattern written relative to the repo has to mean the repo, or a monorepo's shared
+    // packages silently stop being stamped.
+    const plugin = configured({ include: ['src/**/*.tsx'] })
+
+    expect(transformed(plugin, id('src/App.tsx'))).toContain(SOURCE_ATTRIBUTE)
+    expect(transformed(plugin, id('other/App.tsx'))).toBeNull()
+  })
+
+  it('stamps nothing when transform: false — the source-resolution axis', () => {
+    // Separate from `enabled`: the overlay still injects and still submits, annotations
+    // just fall back to the selector floor, as they do in a Vue or Svelte app.
+    const plugin = configured({ transform: false })
+
+    expect(transformed(plugin, id('src/App.tsx'))).toBeNull()
+    expect(injectedTags(plugin)).toHaveLength(1)
+  })
+
+  it('stamps nothing when dogear is disabled', () => {
+    expect(transformed(configured({ enabled: false }), id('src/App.tsx'))).toBeNull()
+  })
+
+  it('stamps nothing before configureServer has run', () => {
+    // The state every plugin object starts in, and why `stamping` is undefined rather than
+    // built in the factory — the git root is not known until a server exists.
+    expect(transformed(dogear(), id('src/App.tsx'))).toBeNull()
+  })
+
+  it('stamps nothing when there is no git root', () => {
+    // The same coupling the injection branch states. An attribute naming a path relative to
+    // a repository dogear could not find is worse than no attribute.
+    const outside = mkdtempSync(join(tmpdir(), 'dogear-nogit-'))
+
+    try {
+      expect(
+        transformed(configured({}, outside), normalizePath(join(outside, 'src/App.tsx'))),
+      ).toBeNull()
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
   })
 })
 

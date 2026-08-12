@@ -30,12 +30,14 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@dogear/core": "*"
+    "@dogear/core": "*",
+    "magic-string": "^0.30.21"
   },
   "peerDependencies": {
     "vite": "^8.0.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.5",
     "vite": "^8.2.1"
   }
 }

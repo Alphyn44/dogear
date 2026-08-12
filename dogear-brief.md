@@ -423,6 +423,9 @@ Every resolved site carries a `via` field so the agent knows how much to trust i
 - **`origin` / `app`** — which dev server and which workspace package. Disambiguates a
   monorepo; see [Multiple dev servers](#multiple-dev-servers-and-multiple-repos).
 - **`sites`** — nearest-first, **capped at 5**. May be empty; `element` never is.
+- **`sites[].file`** — relative to the **git root**, forward slashes on every platform. The
+  same root the queue resolves from, so an agent started anywhere in the repo can open the
+  path unchanged. See the Decisions log.
 - **`via`** — `"attribute"` | `"runtime"`.
 - **`element.text`** — first 80 chars of `innerText`, trimmed. The re-anchoring lifeline.
 
@@ -1155,6 +1158,37 @@ your own code. The runtime walk would only cover third-party components and port
 the cost of an async path built on React internals its own author warns against.
 Declining it keeps dogear free of React-internals risk entirely. Revisit only if real
 usage produces the annoyance.
+
+**Source paths are git-root-relative, and the transform's `include` globs resolve there too — C1.**
+Everything on the receiving end already resolves from the git root: the queue lives at
+`<git-root>/.dogear/queue.json`, and D1's MCP server finds its repo by walking up from `cwd`
+for `.git`. A Vite-root-relative path would also make three dev servers in one monorepo emit
+`src/App.tsx` for three different files into a single queue — the ambiguity C4 exists to
+kill, reintroduced one layer down.
+
+The same root governs `include`/`exclude`. Left alone, Vite's `createFilter` resolves
+relative globs against `process.cwd()`, which in a workspace is whatever package directory
+npm started the dev server in rather than the repo. Anchoring both to the git root means a
+pattern a user writes and a path the attribute carries mean the same thing — and it is what
+lets one dev server stamp a shared `packages/ui` component imported from outside its own
+Vite root.
+
+**The attribute value is exactly three fields, and C5's component name goes in a second attribute — C1.**
+`data-dogear-src="file:line:col"` stays a fixed three-way split. C5 (#19) adds the display
+name as its own attribute rather than a fourth positional field, because "where available"
+is doing real work in that story — anonymous components legitimately have no name, so the
+field would be optional and trailing, which is the shape that rots.
+
+Two consequences worth stating. Positions are **1-based on both axes**, anchored at the `<`
+of the opening element, so the value reads the way an editor, a terminal file link and a
+stack trace read. And `scripts/check-leak.ts`'s `source-attribute` rule matches the literal
+`data-dogear-src`, so **C5 must add a second rule naming its own attribute**, or it will
+ship an attribute the production-leak gate does not watch.
+
+It must be a *second literal rule*, not a widening of the needle to `data-dogear`. The
+example app's own copy renders the text `<script data-dogear>` to explain A1, so that string
+is legitimately present in a healthy production build — the same trap the leak-sentinel
+entry below describes for the product name, one attribute further along.
 
 **Payload location → ancestor chain, not a single site.**
 The `Button.tsx:12` vs `TabBar.tsx:42` ambiguity is unresolvable at click time, because

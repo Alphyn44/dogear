@@ -1,4 +1,5 @@
-import type { Plugin } from 'vite'
+import type { FilterPattern, Plugin } from 'vite'
+import { createFilter } from 'vite'
 
 import type { ClientConfig, Modifier } from './client.js'
 import {
@@ -10,6 +11,25 @@ import {
 import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
 import { findGitRoot } from './git-root.js'
 import { SENTINEL } from './sentinel.js'
+import { stampSource } from './stamp.js'
+
+/**
+ * Which files the JSX transform touches by default — C1 (#15), and the same pair the
+ * brief's `.dogear/config.json` names.
+ *
+ * JSX-only by design. A `.js` holding JSX is not parsed as JSX by Oxc, and forcing it would
+ * mean dogear deciding a file's language against the project's own toolchain. The brief
+ * lists `.js` files among the places the attribute legitimately does not reach; they get
+ * the selector floor (C3) instead.
+ */
+const DEFAULT_INCLUDE = ['**/*.jsx', '**/*.tsx']
+
+/**
+ * Never transform dependencies. Stamping them would point the agent at code inside
+ * `node_modules` that it has no business editing, and a linked workspace dependency is
+ * already covered by its own dev server.
+ */
+const DEFAULT_EXCLUDE = ['**/node_modules/**']
 
 export interface DogearOptions {
   /**
@@ -46,6 +66,33 @@ export interface DogearOptions {
    * it is a poor choice there.
    */
   readonly modifier?: Modifier
+  /**
+   * Stamp `data-dogear-src` onto host JSX elements in dev. Default `true` — C1 (#15).
+   *
+   * `false` keeps the whole overlay: you still point, comment and submit, but annotations
+   * carry no exact source location and fall back to the selector floor (C3), exactly as they
+   * do in a Vue or Svelte app. That is the axis this option exists on — it is about source
+   * *resolution*, not about whether dogear runs. {@link DogearOptions.enabled} is the latter.
+   *
+   * Same precedence as the options above: E4 (#29) layers `.dogear/config.json` underneath,
+   * where the brief already names this field.
+   */
+  readonly transform?: boolean
+  /**
+   * Which files the transform touches. Default `['**\/*.jsx', '**\/*.tsx']`.
+   *
+   * **Relative patterns resolve against the git root**, not the Vite root and not `cwd` —
+   * the same root the stamped paths themselves are relative to. In a monorepo that is what
+   * lets one dev server stamp a shared `packages/ui` component it imports from outside its
+   * own Vite root, which anchoring to the Vite root would silently skip.
+   */
+  readonly include?: FilterPattern
+  /**
+   * Files the transform skips even when {@link DogearOptions.include} matches. Default
+   * `['**\/node_modules/**']`; setting this replaces that rather than extending it, so
+   * keep the `node_modules` entry unless you mean to lose it.
+   */
+  readonly exclude?: FilterPattern
 }
 
 /** What `configureServer` learned, and `transformIndexHtml` needs. */
@@ -54,11 +101,17 @@ interface Injection {
   readonly config: ClientConfig
 }
 
+/** What `configureServer` learned, and the `transform` hook needs — C1 (#15). */
+interface Stamping {
+  readonly gitRoot: string
+  readonly matches: (id: string) => boolean
+}
+
 /**
  * dogear's Vite plugin.
  *
- * It injects the dev script (A1) and serves the annotations endpoint (A2). The JSX
- * attribute transform is C1.
+ * It injects the dev script (A1), serves the annotations endpoint (A2), and stamps
+ * `data-dogear-src` onto host JSX elements (C1).
  *
  * **`apply: 'serve'`** is the primary production defense, not a convenience. The plugin
  * does not exist during `vite build` at all, which covers the script injection and the
@@ -66,10 +119,10 @@ interface Injection {
  * production" is a backstop behind this one — including the sentinel below, which exists
  * so that `npm run check:leak` has something to catch if this line is ever wrong.
  *
- * **`enforce: 'pre'`** is load-bearing for C1. Vite runs `pre` plugins before the
- * React plugin compiles JSX, so the eventual transform sees real JSX syntax rather
- * than already-compiled `jsx()` calls. Establishing it now means the ordering is a
- * decision rather than an accident of whoever writes the transform.
+ * **`enforce: 'pre'`** is load-bearing for the C1 transform below. Vite runs `pre` plugins
+ * before the React plugin compiles JSX, so `stampSource` sees real JSX syntax rather than
+ * already-compiled `jsx()` calls. `stamp.integration.test.ts` is what holds that ordering
+ * in place — it asserts the attribute survives into the compiled output.
  *
  * Note there is no production/noop `exports` split here, unlike @dogear/core. This
  * package is a devDependency that is only ever imported by a Vite config, so it has
@@ -86,6 +139,21 @@ export function dogear(options: DogearOptions = {}): Plugin {
    * by a test in ./index.test.ts), so two Vite roots in one process get two closures.
    */
   let injection: Injection | undefined
+
+  /**
+   * Set by `configureServer`, read by `transform`. `undefined` means "do not stamp".
+   *
+   * Separate from `injection` because the two answer different questions — `transform:
+   * false` disables stamping while leaving the overlay fully injected — but assigned under
+   * the same preconditions, and that part is not optional. No git root means no endpoint
+   * and no tag; it must also mean no stamp, because an attribute naming a path relative to
+   * a repository dogear could not find is worse than no attribute at all.
+   *
+   * Safe as closure state for the same two reasons `injection` is: Vite awaits every
+   * `configureServer` hook before it serves anything, and `dogear()` returns a fresh object
+   * per call.
+   */
+  let stamping: Stamping | undefined
 
   return {
     name: 'dogear',
@@ -178,10 +246,49 @@ export function dogear(options: DogearOptions = {}): Plugin {
           'Ctrl+Alt+D to turn dogear off.',
       )
 
+      // C1 (#15). Resolved here rather than per-request because neither the git root nor
+      // the option patterns can change while this process lives, and `createFilter`
+      // compiles its globs once.
+      //
+      // `resolve: gitRoot` is the load-bearing argument. Left to itself `createFilter`
+      // resolves relative patterns against `process.cwd()`, which is wherever npm happened
+      // to start the dev server — in a workspace that is the package directory, not the
+      // repo. Anchoring to the git root instead makes one root govern the whole feature:
+      // the globs a user writes and the paths the attribute carries mean the same thing.
+      if (options.transform !== false) {
+        stamping = {
+          gitRoot,
+          matches: createFilter(
+            options.include ?? DEFAULT_INCLUDE,
+            options.exclude ?? DEFAULT_EXCLUDE,
+            { resolve: gitRoot },
+          ),
+        }
+      }
+
       // Assigned last, after the endpoint that may throw and after the middleware is
       // registered — so there is no window in which the tag is injected but the route that
       // serves its import is not.
       injection = { endpoint, config }
+    },
+
+    /**
+     * The JSX attribute transform — C1 (#15).
+     *
+     * Thin by design: every decision that could be wrong lives in `stampSource`, which is a
+     * pure function over strings and is tested as one. This hook only decides *whether* to
+     * call it.
+     *
+     * Virtual modules are skipped by their leading NUL — the id is a plugin's private
+     * namespace rather than a path on disk, so there is nothing for an agent to open even
+     * when the contents happen to be JSX.
+     */
+    transform(code, id) {
+      if (stamping === undefined) return null
+      if (id.startsWith('\0')) return null
+      if (!stamping.matches(id)) return null
+
+      return stampSource(code, id, stamping.gitRoot)
     },
 
     /**
