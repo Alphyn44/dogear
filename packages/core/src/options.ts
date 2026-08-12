@@ -38,11 +38,20 @@ export interface InitOptions {
    * file *underneath* @dogear/vite's `modifier` option, and neither reaches past this.
    */
   readonly modifier?: Modifier
+  /**
+   * Base path B5's (#12) submit POSTs to — `<endpoint>/annotations`. Default `/__dogear`.
+   *
+   * The plugin always sends this, and it is already normalised by the time it does (see
+   * `normaliseEndpoint`). The default exists for a bare `init()` from the library entry,
+   * where there is no plugin to supply one.
+   */
+  readonly endpoint?: string
 }
 
 /** {@link InitOptions} with every default applied. What core actually reads. */
 export interface ResolvedOptions {
   readonly modifier: Modifier
+  readonly endpoint: string
 }
 
 /**
@@ -61,6 +70,13 @@ export const MODIFIERS: readonly Modifier[] = Object.freeze([
 export const DEFAULT_MODIFIER: Modifier = 'alt'
 
 /**
+ * dogear's copy of @dogear/vite's `DEFAULT_ENDPOINT`, and the same duplication `MODIFIERS`
+ * already carries — the two halves cannot import each other (exports map, `rootDir`), so
+ * `packages/vite/src/client.test.ts` guards the pair against drift.
+ */
+export const DEFAULT_ENDPOINT = '/__dogear'
+
+/**
  * Apply defaults, and fall back rather than throw on a value that is not a {@link Modifier}.
  *
  * The split is deliberate and mirrors `normaliseEndpoint`, which @dogear/vite validates in
@@ -68,13 +84,22 @@ export const DEFAULT_MODIFIER: Modifier = 'alt'
  * on a bad `modifier`, at config time, in a terminal, where a developer is looking. Core is
  * the browser half: a dev tool that throws during page load has broken the app it was
  * supposed to help you inspect. Same value, two audiences, two failure modes.
+ *
+ * `endpoint` gets the same treatment for the same reason, with one extra wrinkle: it arrives
+ * from a query parameter, so the type says `string` but the value is whatever survived the
+ * URL. A non-string or an empty one falls back rather than producing a POST to `undefined`.
+ * It is **not** re-normalised here — the plugin ran `normaliseEndpoint` before serialising
+ * it, and re-deriving the rule in core would be a second implementation to keep in step.
  */
 export function resolveOptions(options: InitOptions | undefined): ResolvedOptions {
   const modifier = options?.modifier
+  const endpoint = options?.endpoint
   return {
     modifier:
       modifier !== undefined && MODIFIERS.includes(modifier)
         ? modifier
         : DEFAULT_MODIFIER,
+    endpoint:
+      typeof endpoint === 'string' && endpoint !== '' ? endpoint : DEFAULT_ENDPOINT,
   }
 }

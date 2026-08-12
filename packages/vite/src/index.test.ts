@@ -179,11 +179,21 @@ describe('transformIndexHtml (A1)', () => {
     // half of the contract drifts.
     expect(
       readConfig(`http://localhost${injectedSrc(configured({ modifier: 'ctrl' }))}`),
-    ).toEqual({ modifier: 'ctrl' })
+    ).toEqual({ modifier: 'ctrl', endpoint: '/__dogear' })
   })
 
   it('follows a custom endpoint into the src', () => {
     expect(injectedSrc(configured({ endpoint: '/__x' }))).toContain('/__x/client.js?')
+  })
+
+  it('tells core where to POST — B5 (#12)', () => {
+    // Both halves of the same value: the tag's path, and the config core reads its submit
+    // target from. They come from one `normaliseEndpoint` call, and they have to agree or a
+    // submit 404s into Vite's SPA fallback, which answers 200 with index.html.
+    const src = injectedSrc(configured({ endpoint: '/__x/' }))
+
+    expect(src).toContain('/__x/client.js?')
+    expect(readConfig(`http://localhost${src}`).endpoint).toBe('/__x')
   })
 
   it('injects nothing before configureServer has run', () => {

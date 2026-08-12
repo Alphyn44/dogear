@@ -153,6 +153,59 @@ describe('POST /__dogear/annotations', () => {
     await expect(response.json()).resolves.toMatchObject({ written: 0, pending: 0 })
     expect(existsSync(queuePathFor(root))).toBe(false)
   })
+
+  // B5 (#12) — the batch note, end to end over real HTTP into a real file.
+  it('writes the batch note onto every item', async () => {
+    await post(
+      JSON.stringify({
+        version: 1,
+        note: 'all on the settings page',
+        batch: [{ comment: 'shade this darker' }, { comment: 'move this 4px right' }],
+      }),
+    )
+
+    const { items } = readQueue(queuePathFor(root))
+
+    expect(items).toHaveLength(2)
+    // Per item, not once per batch: the queue file has no batch grouping, and D2/D5/D6 all
+    // act one annotation at a time. See the brief's Decisions log.
+    for (const item of items) expect(item['note']).toBe('all on the settings page')
+  })
+
+  it('leaves note off entirely when the batch carried none', async () => {
+    await post(ONE_COMMENT)
+
+    const [item] = readQueue(queuePathFor(root)).items
+
+    expect(item !== undefined && 'note' in item).toBe(false)
+  })
+
+  it('does not let a note reach across submissions', async () => {
+    // Read-modify-write means the second submit rewrites the whole file. An item written
+    // without a note must not acquire one from a later batch.
+    await post(ONE_COMMENT)
+    await post(
+      JSON.stringify({
+        version: 1,
+        note: 'second batch',
+        batch: [{ comment: 'and this' }],
+      }),
+    )
+
+    const { items } = readQueue(queuePathFor(root))
+
+    expect(items[0] !== undefined && 'note' in items[0]).toBe(false)
+    expect(items[1]?.['note']).toBe('second batch')
+  })
+
+  it('rejects a non-string note with 400 and writes nothing', async () => {
+    const response = await post(
+      JSON.stringify({ version: 1, note: { text: 'nope' }, batch: [{ comment: 'x' }] }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(existsSync(queuePathFor(root))).toBe(false)
+  })
 })
 
 describe('rejections leave the queue untouched', () => {

@@ -78,6 +78,16 @@ function formatItem(item: Annotation, position: number): string {
   const text = element && asString(element.text)
   if (text !== undefined) lines.push(`    text: ${JSON.stringify(truncate(text))}`)
 
+  // B5's (#12) batch note, above the comment because it is context rather than payload —
+  // the instruction that applied to the whole batch this item arrived in.
+  //
+  // Rendered per item, and deliberately not deduped across consecutive items that share
+  // one. "Consecutive" stops being a batch boundary the moment resolve and prune interleave
+  // the file, so grouping on it would eventually attribute one batch's note to another's
+  // items — a wrong instruction is worse than a repeated one.
+  const note = asString(item.note)
+  if (note !== undefined) lines.push(`    note: ${note}`)
+
   // Last, and unconditional. The comment is the only field an annotation cannot exist
   // without — everything above it is context for finding what the comment is about.
   lines.push(`    comment: ${item.comment}`)

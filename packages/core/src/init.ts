@@ -18,7 +18,7 @@ import { createSession } from './session.js'
  *
  * ```js
  * import { init } from '/__dogear/client.js'
- * const stop = init({ modifier: 'alt' })
+ * const stop = init({ modifier: 'alt', endpoint: '/__dogear' })
  * ```
  *
  * **The returned teardown is the whole of B6's (#13) architecture.** It removes every
@@ -41,7 +41,7 @@ export function init(options?: InitOptions): Teardown {
   const registry = createListenerRegistry()
   const overlay = createOverlay()
 
-  createSession({ registry, overlay, options: resolveOptions(options) })
+  const session = createSession({ registry, overlay, options: resolveOptions(options) })
 
   let disposed = false
 
@@ -49,7 +49,12 @@ export function init(options?: InitOptions): Teardown {
     if (disposed) return
     disposed = true
 
-    // Listeners first. Detaching before removing nodes means no in-flight handler can
+    // Async work first, for the same reason listeners come before nodes: B5's (#12) submit
+    // can be mid-flight, and its continuation would re-mount the host to show `3 sent`. A
+    // `setTimeout` or a settling `fetch` is a handler the registry cannot reach.
+    session.dispose()
+
+    // Listeners next. Detaching before removing nodes means no in-flight handler can
     // re-mount the host after it has gone — the reverse order leaves a one-frame window
     // where a scroll event remounts an overlay that is supposed to be dead.
     registry.detachAll()

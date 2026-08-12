@@ -1,6 +1,6 @@
 /**
  * B2 (#9) and B1 (#8) — the modifier state machine, the suppression set, and capture — plus
- * B3's (#10) queueing on Enter and B4's (#11) review panel.
+ * B3's (#10) queueing on Enter, B4's (#11) review panel, and B5's (#12) submit.
  *
  * Everything here attaches through the registry `init()` owns, so B6's (#13) "detach, don't
  * ignore" holds by construction rather than by discipline. See ./listeners.ts.
@@ -27,6 +27,7 @@ import type { Panel } from './panel.js'
 import { createPanel } from './panel.js'
 import type { Queue } from './queue.js'
 import { acceptableComment, createQueue } from './queue.js'
+import { buildBatch, submitBatch, SUBMIT_TIMEOUT_MS } from './submit.js'
 
 /** The `MouseEvent`/`KeyboardEvent` flag each modifier is carried on. */
 const MODIFIER_FLAG = {
@@ -110,6 +111,13 @@ export interface Session {
    * neither this type nor `createSession`.
    */
   readonly queue: Queue
+  /**
+   * Abort anything in flight and cancel pending timers. Called by `init()`'s teardown
+   * **before** the listeners come off, so a late response cannot touch a dead overlay.
+   *
+   * Idempotent, like the teardown that calls it.
+   */
+  dispose(): void
 }
 
 export interface SessionDeps {
@@ -118,8 +126,19 @@ export interface SessionDeps {
   readonly options: ResolvedOptions
 }
 
+/**
+ * How long B5's (#12) `N sent` confirmation stays up before the badge reverts and the host
+ * unmounts itself.
+ *
+ * Long enough to read, short enough that it is gone before you have done anything else —
+ * which is what keeps B7's (#14) "zero nodes while idle and the queue is empty" true without
+ * a second amendment. See the brief for why a *pending count* may not work this way and a
+ * one-shot confirmation may.
+ */
+export const SENT_NOTICE_MS = 2_500
+
 export function createSession({ registry, overlay, options }: SessionDeps): Session {
-  const { modifier } = options
+  const { modifier, endpoint } = options
 
   const hover: Outline = createOutline()
   const captured: Outline = createOutline('captured')
@@ -155,6 +174,7 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
 
         queue.update(key, comment)
       },
+      onSubmit: () => void send(),
     },
   })
   overlay.root.append(
@@ -179,6 +199,10 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
    */
   let capturedDescription: ElementDescription | null = null
   let frameScheduled = false
+  /** Non-null while a POST is in flight. Aborted by {@link Session.dispose}. */
+  let inFlight: AbortController | null = null
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null
+  let disposed = false
 
   function viewport() {
     return { width: window.innerWidth, height: window.innerHeight }
@@ -365,6 +389,86 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     return true
   }
 
+  /**
+   * B5 (#12) — drain the batch to disk. Named apart from `submit()` above, which queues one
+   * annotation from the comment box; this is the one that leaves the tab.
+   *
+   * **The clear is keyed to what was sent, not to the queue.** Capturing an element closes
+   * the panel (see `capture`), so a modifier-click during the flight adds an item that was
+   * never in the batch — and `queue.items = []` on success would delete it. Keys exist for
+   * exactly this: addressing by key rather than by position is what stops a concurrent
+   * mutation re-pointing the operation at the wrong item. See ./queue.ts.
+   *
+   * **Nothing is cleared on anything but a confirmed 200.** The in-memory queue is the only
+   * copy of the user's work, and it is the one thing in dogear that cannot be recovered.
+   */
+  async function send(): Promise<void> {
+    if (inFlight !== null) return
+
+    const items = queue.items
+    if (items.length === 0) return
+
+    // Cancel a pending revert before starting: two submits in quick succession would
+    // otherwise leave the first one's timer to overwrite the second one's notice.
+    clearNotice()
+    panel.clearStatus()
+    panel.setBusy(true)
+
+    const keys = items.map((item) => item.key)
+    const controller = new AbortController()
+    inFlight = controller
+    const timeout = setTimeout(() => {
+      controller.abort()
+    }, SUBMIT_TIMEOUT_MS)
+
+    let result
+    try {
+      result = await submitBatch({
+        endpoint,
+        body: buildBatch(items, panel.note),
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timeout)
+      inFlight = null
+    }
+
+    // Torn down while we were waiting. Touching the overlay now would re-mount a host that
+    // `destroy()` has already removed — the same one-frame window `init()`'s
+    // detach-before-destroy ordering exists to close.
+    if (disposed) return
+
+    panel.setBusy(false)
+
+    if (!result.ok) {
+      panel.showError(result.reason)
+      // The footer gets one line; the developer gets the rest. A 500 is a server-side
+      // problem and the reason alone will not diagnose it.
+      console.error('[dogear] submit failed:', result.reason, result.detail)
+      return
+    }
+
+    for (const key of keys) queue.remove(key)
+    panel.clearNote()
+    closePanel()
+
+    // Announced rather than set, then reverted on a timer — the panel has just closed, so
+    // this is the only thing left saying the write happened.
+    badge.announce(`${result.written} sent`)
+    overlay.mount()
+    noticeTimer = setTimeout(() => {
+      noticeTimer = null
+      badge.set(queue.count)
+      sync()
+    }, SENT_NOTICE_MS)
+  }
+
+  function clearNotice(): void {
+    if (noticeTimer === null) return
+    clearTimeout(noticeTimer)
+    noticeTimer = null
+  }
+
   // ---------------------------------------------------------------------------------
   // Listeners. Every one goes through the registry — see ./listeners.ts.
   // ---------------------------------------------------------------------------------
@@ -418,12 +522,39 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
       // has focus. B3's (#10) third criterion is the middle arm; it landed early during B1 so
       // the box was dismissable for the manual pass.
       if (event.key === 'Escape') {
-        if (panel.editing) panel.cancelEdit()
+        // B5's (#12) note is the new most-specific arm, ahead of a row edit. It has to be:
+        // `panel.editing` is false while the note has focus (the note is in the footer, not
+        // in a `.item`, so `keyOf` finds no row), which would otherwise send Escape straight
+        // to `closePanel` and take a typed sentence with it.
+        if (panel.noteEditing) panel.cancelNoteEdit()
+        else if (panel.editing) panel.cancelEdit()
         else if (box.open) release()
         else if (panel.open) closePanel()
         else return
 
         sync()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      // B5's (#12) keyboard path to submit. Before the two plain-Enter arms below, because
+      // ⌘/Ctrl+Enter inside a row or the note would otherwise commit the edit and stop.
+      //
+      // Not bound to the box's Enter: submitting is a panel action, and requiring the panel
+      // to be open is what keeps B4's (#11) review step unavoidable. `Ctrl+Alt+P` is
+      // reserved for D4's (#23) clipboard export, so the two do not collide.
+      if (
+        event.key === 'Enter' &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.isComposing &&
+        panel.open &&
+        event.target === overlay.host
+      ) {
+        // Commit whatever row is being edited first, so ⌘+Enter from inside a row sends the
+        // text on screen rather than the last committed value.
+        if (panel.editing) panel.commitEdit()
+        void send()
         event.preventDefault()
         event.stopImmediatePropagation()
         return
@@ -586,5 +717,20 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     )
   }
 
-  return { refresh, queue }
+  return {
+    refresh,
+    queue,
+
+    dispose() {
+      if (disposed) return
+      disposed = true
+
+      clearNotice()
+      // The `finally` in `send` clears `inFlight`, and the awaiting continuation then bails
+      // on `disposed` — so aborting here is about not leaving a request open on a page that
+      // is done with dogear, not about controlling what happens next.
+      inFlight?.abort()
+      inFlight = null
+    },
+  }
 }

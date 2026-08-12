@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { InitOptions } from '../../core/src/options.js'
 import {
+  DEFAULT_ENDPOINT as CORE_DEFAULT_ENDPOINT,
   DEFAULT_MODIFIER as CORE_DEFAULT_MODIFIER,
   MODIFIERS as CORE_MODIFIERS,
 } from '../../core/src/options.js'
@@ -19,6 +20,7 @@ import {
   MODIFIERS,
   resolveCoreDist,
 } from './client.js'
+import { DEFAULT_ENDPOINT } from './endpoint.js'
 
 /**
  * The guard on the plugin↔core contract.
@@ -49,21 +51,41 @@ describe('the modifier contract with @dogear/core', () => {
     // `modifier`, this line stops compiling and `npm run typecheck` fails — while costing
     // nothing at build time, because the import is confined to a file neither tsup nor
     // tsconfig.build.json can see.
-    const config: InitOptions = buildClientConfig({ modifier: 'ctrl' })
+    const config: InitOptions = buildClientConfig({
+      modifier: 'ctrl',
+      endpoint: '/__dogear',
+    })
 
     expect(config.modifier).toBe('ctrl')
   })
 
   it('defaults the modifier when none is given', () => {
-    expect(buildClientConfig({}).modifier).toBe('alt')
+    expect(buildClientConfig({ endpoint: '/__dogear' }).modifier).toBe('alt')
+  })
+})
+
+/**
+ * B5's (#12) half of the same contract. Core POSTs to `<endpoint>/annotations`, so the two
+ * copies of the base path have to agree or a submit 404s against the app's SPA fallback —
+ * which answers 200 with `index.html`, so it would not even look like a failure.
+ */
+describe('the endpoint contract with @dogear/core', () => {
+  it('agrees on the default', () => {
+    expect(DEFAULT_ENDPOINT).toBe(CORE_DEFAULT_ENDPOINT)
+  })
+
+  it('passes the endpoint through rather than defaulting it', () => {
+    // Required, not optional: `configureServer` has already normalised it, and defaulting
+    // here could hand core a path the middleware is not mounted at.
+    expect(buildClientConfig({ endpoint: '/custom' }).endpoint).toBe('/custom')
   })
 })
 
 describe('clientScriptSrc', () => {
   it('points at the served bundle under the configured endpoint', () => {
-    expect(clientScriptSrc('/__dogear', { modifier: 'alt' })).toContain(
-      '/__dogear/client.js?',
-    )
+    expect(
+      clientScriptSrc('/__dogear', { modifier: 'alt', endpoint: '/__dogear' }),
+    ).toContain('/__dogear/client.js?')
   })
 
   it('agrees with core on the parameter name', () => {
@@ -75,9 +97,21 @@ describe('clientScriptSrc', () => {
   it('round-trips the config through the URL into core', () => {
     // The whole contract in one assertion: what the plugin encodes is what core decodes,
     // driven through core's real `readConfig` rather than a reimplementation of it.
-    const src = clientScriptSrc('/__dogear', { modifier: 'ctrl' })
+    const src = clientScriptSrc('/__dogear', { modifier: 'ctrl', endpoint: '/__dogear' })
 
-    expect(readConfig(`http://localhost:5173${src}`)).toEqual({ modifier: 'ctrl' })
+    expect(readConfig(`http://localhost:5173${src}`)).toEqual({
+      modifier: 'ctrl',
+      endpoint: '/__dogear',
+    })
+  })
+
+  it('round-trips a non-default endpoint, which is the whole of B5 reaching core', () => {
+    const src = clientScriptSrc('/deep/nested', {
+      modifier: 'alt',
+      endpoint: '/deep/nested',
+    })
+
+    expect(readConfig(`http://localhost:5173${src}`).endpoint).toBe('/deep/nested')
   })
 
   it.each([
@@ -91,10 +125,13 @@ describe('clientScriptSrc', () => {
     // `endpoint` is user-supplied and lands in an HTML attribute. There is no inline body to
     // terminate any more, but the config still has to survive it, and `&`/`=`/`#` in a value
     // must not split the parameter — which is what encoding the whole JSON blob buys.
-    const src = clientScriptSrc(endpoint, { modifier: 'meta' })
+    const src = clientScriptSrc(endpoint, { modifier: 'meta', endpoint })
     const query = src.slice(src.indexOf('?'))
 
-    expect(readConfig(`http://localhost:5173/x${query}`)).toEqual({ modifier: 'meta' })
+    expect(readConfig(`http://localhost:5173/x${query}`)).toEqual({
+      modifier: 'meta',
+      endpoint,
+    })
   })
 })
 

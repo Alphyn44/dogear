@@ -8,7 +8,7 @@ import { createListenerRegistry, type ListenerRegistry } from './listeners.js'
 import type { Modifier } from './options.js'
 import { createOverlay, type Overlay } from './overlay.js'
 import type { QueueItem } from './queue.js'
-import { createSession, isHeld, type Session } from './session.js'
+import { createSession, isHeld, SENT_NOTICE_MS, type Session } from './session.js'
 
 /**
  * B2 (#9) and B1 (#8)'s behaviour, minus everything that needs a layout engine.
@@ -22,6 +22,7 @@ import { createSession, isHeld, type Session } from './session.js'
  */
 
 const RECT = { x: 10, y: 20, width: 100, height: 40 }
+const ENDPOINT = '/__dogear'
 
 let registry: ListenerRegistry
 let overlay: Overlay
@@ -51,7 +52,11 @@ function pointAt(element: Element | null): void {
 function start(modifier: Modifier = 'alt'): void {
   registry = createListenerRegistry()
   overlay = createOverlay()
-  session = createSession({ registry, overlay, options: { modifier } })
+  session = createSession({
+    registry,
+    overlay,
+    options: { modifier, endpoint: ENDPOINT },
+  })
 }
 
 function key(type: 'keydown' | 'keyup', init: KeyboardEventInit): void {
@@ -101,6 +106,53 @@ function rowInput(index: number): HTMLTextAreaElement {
   const input = panelRows()[index]?.querySelector('.item-comment')
   if (!(input instanceof HTMLTextAreaElement)) throw new Error(`no row ${String(index)}`)
   return input
+}
+
+// ---------------------------------------------------------------------------------
+// B5 (#12). The footer, and a stubbed dev server.
+// ---------------------------------------------------------------------------------
+
+function noteInput(): HTMLTextAreaElement {
+  return overlay.root.querySelector('.note') as HTMLTextAreaElement
+}
+
+function submitButton(): HTMLButtonElement {
+  return overlay.root.querySelector('.submit') as HTMLButtonElement
+}
+
+function statusText(): string {
+  return overlay.root.querySelector('.status')?.textContent ?? ''
+}
+
+function ok(counts: { written: number; pending: number }): Response {
+  return new Response(
+    JSON.stringify({ ok: true, ...counts, queuePath: '.dogear/queue.json' }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )
+}
+
+function failure(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+function stubFetch(response: Response | Error): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() =>
+      response instanceof Error ? Promise.reject(response) : Promise.resolve(response),
+    ),
+  )
+}
+
+/** What actually went over the wire on the most recent POST. */
+function sentBody(): { note?: string; batch: { comment: string }[] } {
+  const calls = vi.mocked(fetch).mock.calls
+  const init = calls[calls.length - 1]?.[1] as RequestInit | undefined
+  if (init === undefined) throw new Error('nothing was POSTed')
+  return JSON.parse(String(init.body)) as { note?: string; batch: { comment: string }[] }
 }
 
 /** Capture the target, type, and queue — the state B4 assumes you arrive in. */
@@ -153,6 +205,9 @@ afterEach(() => {
   overlay.destroy()
   target.remove()
   vi.restoreAllMocks()
+  // B5 (#12) stubs `fetch`. Left in place it would leak a resolved dev server into every
+  // later file in the run.
+  vi.unstubAllGlobals()
 })
 
 describe('isHeld', () => {
@@ -767,6 +822,359 @@ describe('B4 — review before submit', () => {
     key('keyup', { key: 'Alt', altKey: false })
 
     expect(overlay.mounted).toBe(true)
+  })
+})
+
+/**
+ * B5 (#12) — submit.
+ *
+ * ./submit.test.ts owns the wire: what the body looks like and how each server answer maps
+ * to a result. What is left here is the **ordering**, which is where the losable mistakes
+ * are — which items get cleared, when the note goes, and what happens to work that arrived
+ * while the request was in the air.
+ */
+describe('B5 — batch submit', () => {
+  /** Resolve every pending submit and let the session act on it. */
+  async function settle(): Promise<void> {
+    await vi.waitFor(() => {
+      expect(submitButton().disabled).toBe(false)
+    })
+  }
+
+  beforeEach(() => {
+    // Silenced, not asserted away: the failure path deliberately logs, and a passing suite
+    // should not print stack traces. The tests that care assert on the spy.
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubFetch(ok({ written: 2, pending: 2 }))
+  })
+
+  it('POSTs the whole batch to the configured endpoint', async () => {
+    queueComment('too dark')
+    queueComment('wrong copy')
+    badge().click()
+
+    submitButton().click()
+    await settle()
+
+    expect(fetch).toHaveBeenCalledOnce()
+    const [url, init] = vi.mocked(fetch).mock.calls[0] ?? []
+    expect(url).toBe('/__dogear/annotations')
+    const body = JSON.parse(String((init as RequestInit).body)) as {
+      version: number
+      batch: { comment: string }[]
+    }
+    expect(body.version).toBe(1)
+    expect(body.batch.map((item) => item.comment)).toEqual(['too dark', 'wrong copy'])
+  })
+
+  it('clears the local queue and closes the panel on a confirmed write', async () => {
+    queueComment('too dark')
+    queueComment('wrong copy')
+    badge().click()
+
+    submitButton().click()
+    await settle()
+
+    expect(session.queue.count).toBe(0)
+    expect(panelOpen()).toBe(false)
+  })
+
+  it('confirms with a badge that then takes itself away', async () => {
+    // The whole reason B7's (#14) third guarantee did not need amending a second time: the
+    // confirmation is one-shot and unmounts on its own, with no interaction.
+    const before = document.documentElement.outerHTML
+
+    // Faked from the start, so the revert timer the session schedules is one this test can
+    // wind forward. Only the timer functions — `requestAnimationFrame` drives the session's
+    // frame coalescing and is left alone.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      queueComment('too dark')
+      queueComment('wrong copy')
+      badge().click()
+
+      submitButton().click()
+      await vi.waitFor(() => {
+        expect(badge().textContent).toBe('2 sent')
+      })
+      expect(overlay.mounted).toBe(true)
+
+      vi.advanceTimersByTime(SENT_NOTICE_MS)
+
+      expect(overlay.mounted).toBe(false)
+      expect(document.documentElement.outerHTML).toBe(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends the note and clears it once written', async () => {
+    queueComment('too dark')
+    badge().click()
+    noteInput().value = '  all on the settings page  '
+
+    submitButton().click()
+    await settle()
+
+    expect(sentBody().note).toBe('all on the settings page')
+    expect(noteInput().value).toBe('')
+  })
+
+  it('omits the note entirely when none was typed', async () => {
+    queueComment('too dark')
+    badge().click()
+
+    submitButton().click()
+    await settle()
+
+    expect('note' in sentBody()).toBe(false)
+  })
+
+  it('keeps every item and the note when the POST fails', async () => {
+    // The criterion the ticket says matters more than the success path: the in-memory queue
+    // is the only copy, so it is cleared on a confirmed 200 and on nothing else.
+    stubFetch(failure(500, { ok: false, error: 'queue.json is not valid JSON' }))
+    queueComment('too dark')
+    queueComment('wrong copy')
+    badge().click()
+    noteInput().value = 'keep me'
+
+    submitButton().click()
+    await settle()
+
+    expect(session.queue.count).toBe(2)
+    expect(panelOpen()).toBe(true)
+    expect(noteInput().value).toBe('keep me')
+  })
+
+  it('surfaces the reason in the panel and the detail on the console', async () => {
+    stubFetch(
+      failure(400, {
+        ok: false,
+        errors: ['batch[0].comment must be a non-empty string'],
+      }),
+    )
+    queueComment('too dark')
+    badge().click()
+
+    submitButton().click()
+    await settle()
+
+    expect(statusText()).toContain('batch[0].comment must be a non-empty string')
+    expect(console.error).toHaveBeenCalled()
+  })
+
+  it('says the dev server is unreachable rather than blaming the batch', async () => {
+    stubFetch(new TypeError('Failed to fetch'))
+    queueComment('too dark')
+    badge().click()
+
+    submitButton().click()
+    await settle()
+
+    expect(statusText()).toContain('Could not reach the dev server')
+  })
+
+  it('lets a retry succeed after a failure, with nothing lost', async () => {
+    stubFetch(new TypeError('Failed to fetch'))
+    queueComment('too dark')
+    badge().click()
+    submitButton().click()
+    await settle()
+
+    stubFetch(ok({ written: 1, pending: 1 }))
+    submitButton().click()
+    await settle()
+
+    expect(session.queue.count).toBe(0)
+  })
+
+  it('clears a stale failure when the next submit starts', async () => {
+    stubFetch(new TypeError('Failed to fetch'))
+    queueComment('too dark')
+    badge().click()
+    submitButton().click()
+    await settle()
+    expect(statusText()).not.toBe('')
+
+    stubFetch(ok({ written: 1, pending: 1 }))
+    submitButton().click()
+    await settle()
+
+    expect(statusText()).toBe('')
+  })
+
+  it('keeps an item captured while the request was in flight', async () => {
+    // The reason the clear is keyed to what was *sent*. Capturing closes the panel, so a
+    // modifier-click mid-flight adds an item that was never in the batch — and clearing the
+    // queue wholesale on success would delete it.
+    let release: (value: Response) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (release = resolve))),
+    )
+
+    queueComment('too dark')
+    badge().click()
+    submitButton().click()
+
+    queueComment('spotted one more')
+    expect(session.queue.count).toBe(2)
+
+    release(ok({ written: 1, pending: 1 }))
+    await vi.waitFor(() => {
+      expect(session.queue.count).toBe(1)
+    })
+
+    expect(session.queue.items[0]?.comment).toBe('spotted one more')
+  })
+
+  it('will not send the same batch twice from a double click', async () => {
+    let release: (value: Response) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (release = resolve))),
+    )
+
+    queueComment('too dark')
+    badge().click()
+    submitButton().click()
+    submitButton().click()
+
+    release(ok({ written: 1, pending: 1 }))
+    await vi.waitFor(() => {
+      expect(session.queue.count).toBe(0)
+    })
+
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('does nothing on an empty queue', async () => {
+    badge().click()
+
+    submitButton().click()
+    await Promise.resolve()
+
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('submits on Ctrl+Enter while the panel is open', async () => {
+    queueComment('too dark')
+    badge().click()
+
+    keyInBox({ key: 'Enter', ctrlKey: true })
+    await settle()
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(session.queue.count).toBe(0)
+  })
+
+  it('submits on Meta+Enter too — the same key on the other platform', async () => {
+    queueComment('too dark')
+    badge().click()
+
+    keyInBox({ key: 'Enter', metaKey: true })
+    await settle()
+
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('commits the row being edited before sending it', async () => {
+    // Otherwise ⌘+Enter from inside a row sends the last committed value and silently drops
+    // the text on screen.
+    queueComment('too dark')
+    badge().click()
+    rowInput(0).focus()
+    rowInput(0).value = 'actually, too light'
+
+    keyInBox({ key: 'Enter', ctrlKey: true })
+    await settle()
+
+    expect(sentBody().batch[0]?.comment).toBe('actually, too light')
+  })
+
+  it('ignores Ctrl+Enter when the panel is shut — review is not skippable', async () => {
+    queueComment('too dark')
+
+    keyInBox({ key: 'Enter', ctrlKey: true })
+    await Promise.resolve()
+
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('stops the submit keystroke reaching the app', async () => {
+    queueComment('too dark')
+    badge().click()
+
+    const event = keyInBox({ key: 'Enter', ctrlKey: true })
+    await settle()
+
+    expect(event.defaultPrevented).toBe(true)
+  })
+})
+
+describe('B5 — the note in the Escape chain', () => {
+  beforeEach(() => {
+    queueComment('too dark')
+    badge().click()
+  })
+
+  it('reverts the note and keeps the panel open', () => {
+    // `panel.editing` is false while the note has focus — it is in the footer, not a row — so
+    // without its own arm this Escape would close the panel and take the sentence with it.
+    noteInput().value = 'committed'
+    noteInput().focus()
+    noteInput().value = 'half-typed'
+
+    keyInBox({ key: 'Escape' })
+
+    expect(noteInput().value).toBe('committed')
+    expect(panelOpen()).toBe(true)
+  })
+
+  it('closes the panel on a second Escape, once the note has let go', () => {
+    noteInput().focus()
+    keyInBox({ key: 'Escape' })
+
+    keyInBox({ key: 'Escape' })
+
+    expect(panelOpen()).toBe(false)
+  })
+
+  it('leaves a row edit to the row, not to the note', () => {
+    rowInput(0).focus()
+    rowInput(0).value = 'changed'
+
+    keyInBox({ key: 'Escape' })
+
+    expect(rowInput(0).value).toBe('too dark')
+    expect(panelOpen()).toBe(true)
+  })
+})
+
+describe('B5 — teardown during a submit', () => {
+  it('leaves the document untouched when stop() lands mid-flight', async () => {
+    // The continuation would otherwise re-mount the host to show `N sent`, on a page that is
+    // done with dogear — which is exactly what init()'s dispose-before-detach ordering closes.
+    const before = document.documentElement.outerHTML
+    let release: (value: Response) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (release = resolve))),
+    )
+
+    queueComment('too dark')
+    badge().click()
+    submitButton().click()
+
+    session.dispose()
+    registry.detachAll()
+    overlay.destroy()
+
+    release(ok({ written: 1, pending: 1 }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(document.documentElement.outerHTML).toBe(before)
   })
 })
 

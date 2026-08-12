@@ -22,6 +22,7 @@ let registry: ListenerRegistry
 let panel: Panel
 let onDelete: Mock<(key: number) => void>
 let onEdit: Mock<(key: number, comment: string) => void>
+let onSubmit: Mock<() => void>
 
 function draft(
   comment: string,
@@ -54,12 +55,21 @@ function commentInput(index: number): HTMLTextAreaElement {
   return input
 }
 
+function noteInput(): HTMLTextAreaElement {
+  return panel.element.querySelector('.note') as HTMLTextAreaElement
+}
+
+function submitButton(): HTMLButtonElement {
+  return panel.element.querySelector('.submit') as HTMLButtonElement
+}
+
 beforeEach(() => {
   document.body.innerHTML = ''
   registry = createListenerRegistry()
   onDelete = vi.fn<(key: number) => void>()
   onEdit = vi.fn<(key: number, comment: string) => void>()
-  panel = createPanel({ registry, handlers: { onDelete, onEdit } })
+  onSubmit = vi.fn<() => void>()
+  panel = createPanel({ registry, handlers: { onDelete, onEdit, onSubmit } })
   document.body.append(panel.element)
 })
 
@@ -114,6 +124,139 @@ describe('rendering', () => {
 
     expect(panel.open).toBe(false)
     expect(rows()).toHaveLength(0)
+  })
+})
+
+/** B5 (#12) — the footer: the batch note, submit, and where a failure lands. */
+describe('the footer', () => {
+  it('exists before the panel has ever been shown', () => {
+    // Built once in `createPanel`, not per render — which is what lets the note survive a
+    // close and reopen.
+    expect(noteInput()).toBeInstanceOf(HTMLTextAreaElement)
+    expect(submitButton()).toBeInstanceOf(HTMLButtonElement)
+  })
+
+  it('reports a submit when the button is clicked', () => {
+    panel.show(items(draft('a')))
+
+    submitButton().click()
+
+    expect(onSubmit).toHaveBeenCalledOnce()
+  })
+
+  it('does not report a submit while busy, even if a click gets through', () => {
+    // Guarded in the handler as well as by the `disabled` attribute, because the keyboard
+    // path in ./session.ts reaches the same handler and only one of the two can be authority.
+    panel.show(items(draft('a')))
+    panel.setBusy(true)
+
+    submitButton().click()
+
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('disables and relabels the button while a POST is in flight', () => {
+    panel.setBusy(true)
+    expect(submitButton().disabled).toBe(true)
+    expect(submitButton().textContent).toBe('Submitting…')
+
+    panel.setBusy(false)
+    expect(submitButton().disabled).toBe(false)
+    expect(submitButton().textContent).toBe('Submit')
+  })
+
+  it('keeps the note across a close and reopen', () => {
+    // The reason the footer is not rebuilt by `hide()`. Rows come from the queue and can be
+    // regenerated; a typed sentence cannot, and clicking the badge twice must not destroy it.
+    panel.show(items(draft('a')))
+    noteInput().value = 'all on the settings page'
+
+    panel.hide()
+    panel.show(items(draft('a')))
+
+    expect(panel.note).toBe('all on the settings page')
+  })
+
+  it('clears the note only when told to — a confirmed write', () => {
+    noteInput().value = 'gone now'
+
+    panel.clearNote()
+
+    expect(panel.note).toBe('')
+  })
+
+  it('shows a failure and clears it again', () => {
+    const status = () => panel.element.querySelector('.status')
+
+    panel.showError('Could not reach the dev server. Is it still running?')
+    expect(status()?.textContent).toContain('Could not reach the dev server')
+    expect((status() as HTMLElement).hidden).toBe(false)
+
+    panel.clearStatus()
+    expect((status() as HTMLElement).hidden).toBe(true)
+    expect(status()?.textContent).toBe('')
+  })
+
+  it('announces the failure to assistive tech — the badge is elsewhere', () => {
+    expect(panel.element.querySelector('.status')?.getAttribute('role')).toBe('alert')
+  })
+
+  it('keeps a failure visible across a close and reopen', () => {
+    // Same argument as the note: you closed the panel on a failure, the queue is still full,
+    // and the reason you have to act on should still be there.
+    panel.show(items(draft('a')))
+    panel.showError('boom')
+
+    panel.hide()
+    panel.show(items(draft('a')))
+
+    expect((panel.element.querySelector('.status') as HTMLElement).hidden).toBe(false)
+  })
+})
+
+describe('the note and the Escape chain', () => {
+  it('is not mistaken for a row edit when focused', () => {
+    // `keyOf` finds no `.item` above the note, so `editing` must stay false — otherwise the
+    // session's Escape chain would revert some row's comment instead of the note.
+    panel.show(items(draft('a')))
+
+    noteInput().focus()
+
+    expect(panel.noteEditing).toBe(true)
+    expect(panel.editing).toBe(false)
+  })
+
+  it('never reports an edit for the note, so no row is overwritten by it', () => {
+    panel.show(items(draft('a')))
+    noteInput().focus()
+    noteInput().value = 'typed'
+
+    noteInput().blur()
+
+    expect(onEdit).not.toHaveBeenCalled()
+  })
+
+  it('reverts to the text it held when focus arrived', () => {
+    panel.show(items(draft('a')))
+    noteInput().value = 'committed'
+    noteInput().focus()
+    noteInput().value = 'half-typed and regretted'
+
+    panel.cancelNoteEdit()
+
+    expect(panel.note).toBe('committed')
+    expect(panel.noteEditing).toBe(false)
+  })
+
+  it('is a no-op when the note is not focused', () => {
+    // The session calls this from a chain arm guarded on `noteEditing`, but a stray call must
+    // not wipe a note nobody was editing.
+    panel.show(items(draft('a')))
+    noteInput().value = 'untouched'
+
+    panel.cancelNoteEdit()
+
+    expect(panel.note).toBe('untouched')
   })
 })
 

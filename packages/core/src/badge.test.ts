@@ -73,4 +73,36 @@ describe('createBadge', () => {
   it('starts collapsed', () => {
     expect(createBadge().element.getAttribute('aria-expanded')).toBe('false')
   })
+
+  // B5 (#12) — the submit confirmation.
+  it('announces arbitrary text and makes itself visible for it', () => {
+    const badge = createBadge()
+
+    badge.announce('3 sent')
+
+    expect(badge.element.textContent).toBe('3 sent')
+    expect(badge.visible).toBe(true)
+  })
+
+  it('shows a confirmation even though the queue it counts is now empty', () => {
+    // The count is zero by the time this runs — the items were just written to disk — so
+    // `set(0)` would hide the badge and there would be nothing to say the write happened.
+    const badge = createBadge()
+    badge.set(2)
+
+    badge.announce('2 sent')
+
+    expect(badge.visible).toBe(true)
+  })
+
+  it('goes back to being a count, so nothing has to remember it was announcing', () => {
+    // The revert is a plain `set` from ./session.ts, which owns the timer because reverting
+    // has to `sync()` and the badge knows nothing about mounting.
+    const badge = createBadge()
+    badge.announce('2 sent')
+
+    badge.set(0)
+
+    expect(badge.visible).toBe(false)
+  })
 })

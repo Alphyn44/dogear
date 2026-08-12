@@ -197,7 +197,9 @@ async function handleSubmit(
           { written: 0, pending: countPending(queuePath) }
         : appendToQueue(
             queuePath,
-            validation.batch.map((input) => stampAnnotation(input)),
+            validation.batch.map((input) =>
+              stampAnnotation(input, { note: validation.note }),
+            ),
           )
   } catch (error) {
     // A corrupt or future-versioned queue lands here. 500 rather than 400: the request was

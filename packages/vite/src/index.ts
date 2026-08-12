@@ -92,7 +92,13 @@ export function dogear(options: DogearOptions = {}): Plugin {
      */
     configureServer(server) {
       const endpoint = normaliseEndpoint(options.endpoint ?? DEFAULT_ENDPOINT)
-      const config = buildClientConfig({ modifier: validateModifier(options.modifier) })
+      // The *normalised* endpoint, not `options.endpoint` — core POSTs to
+      // `<endpoint>/annotations`, and it has to be the path the middleware below is
+      // actually mounted at. B5 (#12).
+      const config = buildClientConfig({
+        modifier: validateModifier(options.modifier),
+        endpoint,
+      })
 
       // Resolved once: the repository root cannot move while this process lives. The
       // brief's "never cache" rule is about queue *contents*, which are re-read on every

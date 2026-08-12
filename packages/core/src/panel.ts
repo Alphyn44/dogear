@@ -27,6 +27,10 @@
  * way to arise, rather than being worked around with a focus-restoring dance.
  *
  * Keys, not indices, throughout — see ./queue.ts.
+ *
+ * B5 (#12) added the footer — the batch note, the submit button, and the status row a failed
+ * POST lands in. It follows the same rule as everything above: the panel reports, and
+ * ./session.ts applies. Nothing here reads the queue or touches the network.
  */
 
 import { labelFor } from './describe.js'
@@ -38,6 +42,8 @@ export interface PanelHandlers {
   onDelete(key: number): void
   /** The raw textarea value. The caller applies `acceptableComment` and may refuse. */
   onEdit(key: number, comment: string): void
+  /** B5 (#12). The panel does not read the queue or touch the network — see ./session.ts. */
+  onSubmit(): void
 }
 
 export interface Panel {
@@ -50,6 +56,15 @@ export interface Panel {
    * row (revert) rather than to the panel (close).
    */
   readonly editing: boolean
+  /**
+   * Is the batch note focused? The Escape chain's most-specific arm — see ./session.ts.
+   *
+   * Separate from {@link Panel.editing} rather than folded into it: they revert different
+   * text, and a single flag would make Escape in the note restore some row's comment.
+   */
+  readonly noteEditing: boolean
+  /** B5's (#12) batch-wide instruction, untrimmed. `buildBatch` decides what to send. */
+  readonly note: string
   show(items: readonly QueueItem[]): void
   hide(): void
   /** Rebuild the list. */
@@ -59,6 +74,15 @@ export interface Panel {
   commitEdit(): void
   /** Restore the focused row's text to what it was when focus arrived, and stop editing. */
   cancelEdit(): void
+  /** Restore the note to what it was when focus arrived, and blur. Panel stays open. */
+  cancelNoteEdit(): void
+  /** Emptied only on a confirmed write — a note outlives a failed submit. */
+  clearNote(): void
+  /** Disable submit while a POST is in flight, so one batch cannot be sent twice. */
+  setBusy(busy: boolean): void
+  /** Show a failure in the footer. The queue is intact; submit is re-enabled. */
+  showError(reason: string): void
+  clearStatus(): void
 }
 
 export interface PanelDeps {
@@ -75,11 +99,46 @@ export function createPanel({ registry, handlers }: PanelDeps): Panel {
 
   const list = document.createElement('ul')
   list.className = 'items'
-  element.append(list)
+
+  /**
+   * B5's (#12) footer, built once and **never touched by `hide()`**.
+   *
+   * `hide()` empties the list, because rows are rebuilt from the queue on every `show`. The
+   * note is not: it is typed by the user and belongs to no item, so wiping it would mean
+   * clicking the badge twice destroyed a sentence. It is cleared on a confirmed write and
+   * on nothing else.
+   */
+  const footer = document.createElement('div')
+  footer.className = 'footer'
+
+  const note = document.createElement('textarea')
+  note.className = 'note'
+  note.rows = 2
+  note.placeholder = 'Anything that applies to all of these? (optional)'
+  note.setAttribute('aria-label', 'Note for the whole batch')
+
+  const status = document.createElement('div')
+  status.className = 'status'
+  // A failed submit has to be *announced*, not merely drawn: the user pressed a button and
+  // is watching the badge, which is somewhere else. `assertive` rather than `polite`
+  // because it interrupts — the alternative is learning about it after the next action.
+  status.setAttribute('role', 'alert')
+  status.hidden = true
+
+  const submit = document.createElement('button')
+  submit.className = 'submit'
+  submit.type = 'button'
+  submit.textContent = 'Submit'
+
+  footer.append(note, status, submit)
+  element.append(list, footer)
 
   /** The row being edited, and the text it held when focus arrived — what Escape restores. */
   let editingKey: number | null = null
   let textOnFocus = ''
+  /** The note's own pair. See {@link Panel.noteEditing} for why it is not the same one. */
+  let noteFocused = false
+  let noteOnFocus = ''
 
   function rowInput(key: number): HTMLTextAreaElement | null {
     return list.querySelector(`[data-key="${String(key)}"] .item-comment`)
@@ -107,6 +166,15 @@ export function createPanel({ registry, handlers }: PanelDeps): Panel {
 
   registry.on(element, 'click', (event) => {
     if (!(event.target instanceof Element)) return
+
+    if (event.target === submit) {
+      // Guarded here as well as by the `disabled` attribute: a click dispatched at a
+      // disabled button is a no-op in a browser, but the button is also reachable from the
+      // keyboard path in ./session.ts, and only one of the two can be the authority.
+      if (!submit.disabled) handlers.onSubmit()
+      return
+    }
+
     if (!event.target.classList.contains('item-drop')) return
 
     const key = keyOf(event.target)
@@ -116,12 +184,26 @@ export function createPanel({ registry, handlers }: PanelDeps): Panel {
   registry.on(element, 'focusin', (event) => {
     if (!(event.target instanceof HTMLTextAreaElement)) return
 
+    if (event.target === note) {
+      noteFocused = true
+      noteOnFocus = note.value
+      return
+    }
+
     editingKey = keyOf(event.target)
     textOnFocus = event.target.value
   })
 
   registry.on(element, 'focusout', (event) => {
     if (!(event.target instanceof HTMLTextAreaElement)) return
+
+    // The note needs no commit: unlike a row, it is not stored anywhere else, so the
+    // textarea's own value *is* the state. Only the revert bookkeeping is cleared.
+    if (event.target === note) {
+      noteFocused = false
+      noteOnFocus = ''
+      return
+    }
 
     // Blur commits, so clicking away from a row does not silently discard what was typed.
     // Escape gets its chance first — `cancelEdit` restores the text *and* clears `editingKey`,
@@ -144,6 +226,14 @@ export function createPanel({ registry, handlers }: PanelDeps): Panel {
       return editingKey !== null
     },
 
+    get noteEditing() {
+      return noteFocused
+    },
+
+    get note() {
+      return note.value
+    },
+
     render(items) {
       list.replaceChildren(...items.map(row))
     },
@@ -160,7 +250,11 @@ export function createPanel({ registry, handlers }: PanelDeps): Panel {
       // touched.
       editingKey = null
       textOnFocus = ''
+      noteFocused = false
+      noteOnFocus = ''
       list.replaceChildren()
+      // The note deliberately survives — see the `footer` docblock above. So does the status
+      // row, so a failure you closed the panel on is still there when you come back to it.
     },
 
     focusFirst() {
@@ -184,6 +278,37 @@ export function createPanel({ registry, handlers }: PanelDeps): Panel {
       editingKey = null
       textOnFocus = ''
       input.blur()
+    },
+
+    cancelNoteEdit() {
+      if (!noteFocused) return
+
+      note.value = noteOnFocus
+      noteFocused = false
+      noteOnFocus = ''
+      note.blur()
+    },
+
+    clearNote() {
+      note.value = ''
+      noteOnFocus = ''
+    },
+
+    setBusy(busy) {
+      submit.disabled = busy
+      submit.textContent = busy ? 'Submitting…' : 'Submit'
+    },
+
+    showError(reason) {
+      status.textContent = reason
+      status.classList.add('status-error')
+      status.hidden = false
+    },
+
+    clearStatus() {
+      status.textContent = ''
+      status.classList.remove('status-error')
+      status.hidden = true
     },
   }
 }

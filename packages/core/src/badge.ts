@@ -28,6 +28,14 @@ export interface Badge {
   readonly visible: boolean
   /** Show `count`, or hide entirely at zero. */
   set(count: number): void
+  /**
+   * Show arbitrary text — B5's (#12) `3 sent` confirmation.
+   *
+   * **The revert timer lives in ./session.ts, not here.** Reverting has to call `sync()` to
+   * unmount the host, and the badge deliberately knows nothing about mounting: same split as
+   * the panel, which reports and lets the session apply.
+   */
+  announce(text: string): void
   /** Reflect whether the panel this opens is showing. */
   setExpanded(expanded: boolean): void
 }
@@ -54,6 +62,11 @@ export function createBadge(): Badge {
       // cryptic, and the word is what makes it dogear's rather than the app's.
       element.textContent = `${count} pending`
       element.hidden = count <= 0
+    },
+
+    announce(text) {
+      element.textContent = text
+      element.hidden = false
     },
 
     setExpanded(expanded) {

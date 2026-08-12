@@ -96,6 +96,55 @@ describe('formatQueue', () => {
     expect(output).not.toContain('undefined')
   })
 
+  // B5's (#12) batch note. Rendered here rather than deferred to D1, because a field that
+  // lands in queue.json and reaches no agent is "everything works through MCP" failing
+  // quietly — and this is the one formatter the hook, the MCP server and D4's clipboard all
+  // share.
+  describe('the batch note', () => {
+    const noted: Annotation = { ...MINIMAL, note: 'all on the settings page' }
+
+    it('renders above the comment, as context rather than payload', () => {
+      // The comment stays last and unconditional — everything above it is context for
+      // finding what the comment is about, and a batch instruction is exactly that.
+      expect(formatQueue([noted])).toContain(
+        '    note: all on the settings page\n    comment: make this darker',
+      )
+    })
+
+    it('renders nothing when the item has no note', () => {
+      expect(formatQueue([MINIMAL])).not.toContain('note:')
+    })
+
+    it.each([
+      { why: 'an empty string', note: '' },
+      { why: 'a number that survived a hand-edit', note: 7 },
+      { why: 'null', note: null },
+    ])('renders nothing for $why', ({ note }) => {
+      const output = formatQueue([{ ...MINIMAL, note }])
+
+      expect(output).not.toContain('note:')
+      expect(output).not.toContain('undefined')
+    })
+
+    it('repeats the note per item rather than grouping consecutive ones', () => {
+      // Deliberate. "Consecutive" stops being a batch boundary once resolve and prune
+      // interleave the file, and a note attributed to the wrong batch's items is worse than
+      // a repeated one.
+      const output = formatQueue([noted, noted])
+
+      expect(output.match(/note: all on the settings page/g)).toHaveLength(2)
+    })
+
+    it('sits below the location lines, so the source hint still leads', () => {
+      const output = formatQueue([{ ...FULL, note: 'batch-wide' }])
+      const lines = output.split('\n')
+
+      expect(lines.indexOf('    note: batch-wide')).toBeGreaterThan(
+        lines.indexOf('    text: "Save changes"'),
+      )
+    })
+  })
+
   it('numbers items from 1 and counts them in the opening tag', () => {
     const output = formatQueue([MINIMAL, FULL, MINIMAL])
 

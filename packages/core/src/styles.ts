@@ -211,6 +211,76 @@ export const SHADOW_CSS = `
   outline-offset: -1px;
 }
 
+/*
+ * B5's (#12) footer: the batch note, a failure line, and Submit.
+ *
+ * It scrolls with the list rather than sticking to the bottom of the panel. Sticky was the
+ * first instinct and it is wrong here: the panel is capped at eight-ish items before it
+ * scrolls, and a pinned footer would cover the last row at exactly the moment you are
+ * reading it to decide whether to send. The button being one flick away is enough.
+ */
+.footer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #3a3f4b;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Styled like a row's comment rather than like the box's input: it is optional, and a field
+   that reads as prose invites a sentence where an empty form field invites skipping. */
+.note {
+  display: block;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid #3a3f4b;
+  border-radius: 4px;
+  padding: 3px 4px;
+  resize: vertical;
+}
+
+.note::placeholder {
+  color: #6b7280;
+}
+
+.status {
+  font-size: 11px;
+  /* Wrapping, not truncating: this is the only place a server's reason is readable, and an
+     ellipsis on "batch[2].comment must be a non-empty string" hides the part that names
+     what to fix. */
+  overflow-wrap: anywhere;
+}
+
+.status-error {
+  color: #ff9a9a;
+}
+
+.submit {
+  align-self: flex-end;
+  font: inherit;
+  font-size: 12px;
+  color: #f6f7f9;
+  background: #2f6fd0;
+  border: 1px solid #4c8dff;
+  border-radius: 4px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.submit:hover:not(:disabled) {
+  background: #3a82ea;
+}
+
+.submit:disabled {
+  color: #9aa3b2;
+  background: #242730;
+  border-color: #3a3f4b;
+  cursor: default;
+}
+
 .label {
   font-size: 11px;
   color: #9aa3b2;
@@ -245,8 +315,10 @@ export const SHADOW_CSS = `
 }
 
 .input:focus,
+.note:focus,
 .badge:focus-visible,
-.item-drop:focus-visible {
+.item-drop:focus-visible,
+.submit:focus-visible {
   outline: 2px solid #4c8dff;
   outline-offset: -1px;
 }

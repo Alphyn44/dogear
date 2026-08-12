@@ -455,6 +455,14 @@ Every resolved site carries a `via` field so the agent knows how much to trust i
 }
 ```
 
+`note` is optional — one instruction applying to the whole batch, typed in the review
+panel. **The server stamps it onto every item in the batch** rather than storing it once
+against the batch: the queue file has no batch grouping, and every operation downstream
+of it is per-item (D2 resolves, D5 flags, D6 prunes), so a batch-scoped record would be
+orphaned by the first resolve. It is stamped after the client's own fields and before the
+four server-owned ones, so a batch note wins over a stray per-item `note` and still
+cannot forge `id`/`status`/`createdAt`/`resolvedAt`.
+
 Response: `{ "ok": true, "written": 3, "pending": 5, "queuePath": ".dogear/queue.json" }`
 
 ### HTTP endpoints
@@ -466,8 +474,8 @@ matching Vite's own `/__vite_ping` convention):
 |---|---|---|
 | `POST` | `/__dogear/annotations` | Submit a batch |
 | `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
-| `GET` | `/__dogear/index.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
-| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) |
+| `GET` | `/__dogear/client.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
+| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. Left here as a known loose end rather than deleted, in case D5 or E5 wants it |
 | `POST` | `/__dogear/prune` | Drop resolved items |
 
 ### MCP tools
@@ -658,6 +666,9 @@ agent's context.
 **B5 — Batch submit**
 - Submitting POSTs all queued items and clears the local queue on success.
 - A failed POST keeps the local queue intact and surfaces the error.
+- The review panel carries an optional **note** — one instruction that applies to the
+  whole batch — which is stamped onto every annotation in it and rendered by the shared
+  formatter.
 
 **B6 — Kill switch**
 - A toggle and a keyboard shortcut disable dogear entirely; the preference persists
@@ -989,6 +1000,51 @@ reproduced**. Synthetic input over CDP goes straight to the renderer and bypasse
 chrome, so no automated harness available here can raise it, and manual testing across Edge,
 Chrome, and Firefox showed the outline appearing and staying. The listener is gone on the
 argument, not on an observed defect.
+
+**The batch note is stamped onto every item, not stored once against the batch — B5.**
+The note was in the POST body from the first draft and in no story's acceptance criteria,
+and `validateBatch` was quietly dropping it. Folded into B5, because the review panel it
+has to live in is the one B5 builds.
+
+Per-item duplication is the deliberate choice. The queue file is `{version, updatedAt,
+items}` with no batch grouping, and adding one would be a schema change that every reader
+— the hook, D1's MCP server, the CLI's parity test — has to learn. The stronger argument
+is lifecycle: D2 resolves, D5 flags and D6 prunes **per item**, so a batch-scoped note is
+orphaned the moment its last item is pruned, and an item that outlives its siblings loses
+the instruction that explained it. Self-contained items are what append-with-status is
+built on; the note has to be one of their fields or it is not durable.
+
+The formatter renders it in the same ticket. A field that lands in `queue.json` and is
+never rendered reaches no agent, which is the "everything works through MCP" rule failing
+in its quietest form — and `format.ts` is shared by the hook, the MCP server and the
+clipboard export, so teaching it once covers all three.
+
+**A submit is confirmed by a badge that dismisses itself, so B7's guarantee stands
+unamended.**
+Clearing the queue on success leaves the panel with nothing to show, and something has to
+say the write happened — `queue.json` is not on screen. Keeping the panel open with a
+receipt was the informative option and it would have cost B7 its third criterion a second
+time: nodes mounted, queue empty, no interaction in progress. So the panel closes and the
+badge shows `3 sent` for a beat before reverting to the count and unmounting itself.
+
+This is close enough to the timed flash rejected under "zero nodes while idle" to be worth
+separating. That rejection was about the **pending count** — a number knowable at some
+moments and not others is worse than either honest option, because you cannot check what
+you are carrying. A submit confirmation is one-shot and answers a question that was asked
+a moment ago by pressing a button; there is nothing to come back and re-read.
+
+**A failed submit surfaces in the overlay and keeps every item.**
+The local queue is the only copy, so it is cleared on a confirmed 200 and on nothing else.
+Failure puts a normalised one-line reason in the panel footer with the queue intact and
+Submit re-enabled, and the detail on `console.error` — the overlay row because "surfaces
+the error" is otherwise only true with DevTools open, the console line because a 500 is a
+server-side problem that needs more than one line. Pressing Submit again is the retry; a
+backoff would be machinery for a localhost round trip.
+
+The clear is keyed to the **item keys that were sent**, not to the queue as a whole.
+Capturing an element closes the panel, so a modifier-click during an in-flight POST adds
+an item that was never submitted — and clearing wholesale would delete it on success.
+Keys already exist to stop exactly this class of mistake (see `QueueItem.key`).
 
 **Kill switch → detach, don't ignore.**
 An in-overlay toggle with a keyboard shortcut, persisted to `localStorage`, plus

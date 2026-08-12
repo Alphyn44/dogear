@@ -70,7 +70,7 @@ describe('stampAnnotation', () => {
   const now = new Date('2026-08-10T12:00:00.000Z')
 
   it('stamps the four server-owned fields', () => {
-    const stamped = stampAnnotation({ comment: 'make this darker' }, now)
+    const stamped = stampAnnotation({ comment: 'make this darker' }, { now })
 
     expect(stamped).toMatchObject({
       comment: 'make this darker',
@@ -86,7 +86,7 @@ describe('stampAnnotation', () => {
     // bottleneck those have to be threaded through.
     const stamped = stampAnnotation(
       { comment: 'x', element: { tag: 'button' }, viewport: { w: 1512 } },
-      now,
+      { now },
     )
 
     expect(stamped['element']).toEqual({ tag: 'button' })
@@ -99,17 +99,51 @@ describe('stampAnnotation', () => {
   ])('overwrites a client-supplied $field — the server owns lifecycle', (testCase) => {
     const stamped = stampAnnotation(
       { comment: 'x', [testCase.field]: testCase.sent },
-      now,
+      { now },
     )
 
     expect(stamped[testCase.field]).toBe(testCase.expected)
   })
 
   it('overwrites a client-supplied id, so ids cannot be forged or collided', () => {
-    const stamped = stampAnnotation({ comment: 'x', id: 'not-a-uuid' }, now)
+    const stamped = stampAnnotation({ comment: 'x', id: 'not-a-uuid' }, { now })
 
     expect(stamped.id).not.toBe('not-a-uuid')
     expect(stamped.id).toMatch(UUID_SHAPE)
+  })
+
+  // B5 (#12). The note is batch-wide but stored per item, because everything downstream of
+  // the queue file is per-item — see the brief's Decisions log.
+  it('stamps the batch note onto the annotation', () => {
+    const stamped = stampAnnotation(
+      { comment: 'x' },
+      { note: 'all on the settings page', now },
+    )
+
+    expect(stamped['note']).toBe('all on the settings page')
+  })
+
+  it('omits note entirely when there is none, rather than writing an empty string', () => {
+    // One representation of "no instruction" in a file people read with `cat`.
+    expect('note' in stampAnnotation({ comment: 'x' }, { now })).toBe(false)
+  })
+
+  it('lets the batch note win over a per-item note the client had no business sending', () => {
+    const stamped = stampAnnotation(
+      { comment: 'x', note: 'smuggled' },
+      { note: 'real', now },
+    )
+
+    expect(stamped['note']).toBe('real')
+  })
+
+  it('still cannot forge lifecycle through the note slot', () => {
+    // The spread order is client → note → server-owned. This pins the second boundary: the
+    // note goes in ahead of `status`, so it can never displace it.
+    const stamped = stampAnnotation({ comment: 'x' }, { note: 'n', now })
+
+    expect(stamped.status).toBe('pending')
+    expect(stamped.resolvedAt).toBeNull()
   })
 })
 
@@ -124,6 +158,35 @@ describe('validateBatch', () => {
 
   it('accepts an empty batch — not malformed, just nothing to do', () => {
     expect(validateBatch({ version: 1, batch: [] }).ok).toBe(true)
+  })
+
+  // B5 (#12) — the batch note.
+  it.each([
+    { why: 'absent', body: valid, expected: undefined },
+    {
+      why: 'a real instruction',
+      body: { ...valid, note: 'all on the settings page' },
+      expected: 'all on the settings page',
+    },
+    {
+      why: 'trimmed',
+      body: { ...valid, note: '  spaced out \n' },
+      expected: 'spaced out',
+    },
+    {
+      // Whitespace reads as absent. The overlay already omits an empty note, so this is the
+      // hand-written `curl` path — and one representation of "no instruction" is worth more
+      // in the queue file than recording that someone typed three spaces.
+      why: 'only whitespace, which reads as absent',
+      body: { ...valid, note: '   ' },
+      expected: undefined,
+    },
+    { why: 'an empty string', body: { ...valid, note: '' }, expected: undefined },
+  ])('carries the note when it is $why', ({ body, expected }) => {
+    const result = validateBatch(body)
+
+    expect(result.ok).toBe(true)
+    expect(result.ok === true && result.note).toBe(expected)
   })
 
   it.each([
@@ -170,6 +233,18 @@ describe('validateBatch', () => {
       why: 'a comment is a number',
       body: { version: 1, batch: [{ comment: 42 }] },
       error: 'batch[0].comment must be a non-empty string',
+    },
+    {
+      // B5 (#12). Rejected rather than coerced: the note is copied onto every item, so
+      // `String(value)` would write "[object Object]" across the whole batch silently.
+      why: 'the note is not a string',
+      body: { version: 1, batch: [{ comment: 'x' }], note: { text: 'nope' } },
+      error: 'note must be a string when present',
+    },
+    {
+      why: 'the note is a number',
+      body: { version: 1, batch: [{ comment: 'x' }], note: 7 },
+      error: 'note must be a string when present',
     },
   ])('rejects when $why', ({ body, error }) => {
     const result = validateBatch(body)

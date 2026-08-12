@@ -59,9 +59,17 @@ export const MODIFIERS: readonly Modifier[] = Object.freeze([
 
 export const DEFAULT_MODIFIER: Modifier = 'alt'
 
-/** Exactly what is serialised into the `init(...)` call. Must satisfy core's `InitOptions`. */
+/**
+ * Exactly what is serialised into the config parameter. Must satisfy core's `InitOptions`.
+ *
+ * `endpoint` is B5's (#12) addition, and it is the case F4's transport was chosen for: one
+ * JSON parameter rather than one per field means a new field costs a line here and nothing
+ * anywhere else. Core needs it because it POSTs to `<endpoint>/annotations`, and the base
+ * path is configurable.
+ */
 export interface ClientConfig {
   readonly modifier: Modifier
+  readonly endpoint: string
 }
 
 /** Absolute paths to core's dev build, resolved once per dev server. */
@@ -117,10 +125,24 @@ export function resolveCoreDist(): ClientDist | undefined {
   return { bundle, sourcemap: existsSync(sourcemap) ? sourcemap : undefined }
 }
 
+/**
+ * `endpoint` is required rather than defaulted, unlike `modifier`.
+ *
+ * `configureServer` has already run it through `normaliseEndpoint` by the time it gets here,
+ * and defaulting it a second time would mean this function could hand core a *raw* path the
+ * middleware is not actually mounted at — a submit 404ing against dogear's own SPA fallback,
+ * with nothing in either half to say why. Core carries `DEFAULT_ENDPOINT` for the bare
+ * `init()` case; the plugin's copy of the default lives in ./endpoint.ts, where the
+ * middleware reads it.
+ */
 export function buildClientConfig(options: {
   readonly modifier?: Modifier
+  readonly endpoint: string
 }): ClientConfig {
-  return { modifier: options.modifier ?? DEFAULT_MODIFIER }
+  return {
+    modifier: options.modifier ?? DEFAULT_MODIFIER,
+    endpoint: options.endpoint,
+  }
 }
 
 /** The query parameter core reads its options from. Mirrors core's `CONFIG_PARAM`. */
