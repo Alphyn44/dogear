@@ -1,9 +1,15 @@
 /**
  * B2 (#9) and B1 (#8) — the modifier state machine, the suppression set, and capture — plus
- * B3's (#10) queueing on Enter.
+ * B3's (#10) queueing on Enter and B4's (#11) review panel.
  *
  * Everything here attaches through the registry `init()` owns, so B6's (#13) "detach, don't
  * ignore" holds by construction rather than by discipline. See ./listeners.ts.
+ *
+ * **One surface at a time**, enforced in both directions: opening the panel releases a
+ * captured element, and capturing one closes the panel. The comment box anchors to its target
+ * and the panel sits bottom-right, so allowing both would mean two floating panes that can
+ * land on top of each other — and the box's anchoring already has the viewport edges to dodge
+ * without adding the panel to the list.
  */
 
 import type { Badge } from './badge.js'
@@ -17,8 +23,10 @@ import type { Modifier, ResolvedOptions } from './options.js'
 import type { Outline } from './outline.js'
 import { createOutline, isPaintable } from './outline.js'
 import type { Overlay } from './overlay.js'
+import type { Panel } from './panel.js'
+import { createPanel } from './panel.js'
 import type { Queue } from './queue.js'
-import { createQueue } from './queue.js'
+import { acceptableComment, createQueue } from './queue.js'
 
 /** The `MouseEvent`/`KeyboardEvent` flag each modifier is carried on. */
 const MODIFIER_FLAG = {
@@ -118,7 +126,44 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
   const box: CommentBox = createCommentBox()
   const badge: Badge = createBadge()
   const queue: Queue = createQueue()
-  overlay.root.append(hover.element, captured.element, box.element, badge.element)
+  // The panel mutates nothing itself — it reports, and this file applies. Same shape as
+  // `capture()` below: one place owns the order of queue, badge, render and mount.
+  const panel: Panel = createPanel({
+    registry,
+    handlers: {
+      onDelete: (key) => {
+        if (!queue.remove(key)) return
+
+        badge.set(queue.count)
+        // An empty queue means nothing left to review, so the review UI leaves with it and
+        // the document returns to zero nodes. This is B7's (#14) narrowed guarantee being
+        // visibly reversible, which is the property most worth being able to show by hand.
+        if (queue.count === 0) closePanel()
+        else panel.render(queue.items)
+
+        sync()
+      },
+      onEdit: (key, raw) => {
+        const comment = acceptableComment(raw)
+        // Refused, not stored — same rule as Enter on an empty box, and for the same reason:
+        // `validateBatch` rejects the whole batch on one empty comment. `cancelEdit` puts the
+        // previous text back, so the row reverts rather than sitting there invalid.
+        if (comment === null) {
+          panel.cancelEdit()
+          return
+        }
+
+        queue.update(key, comment)
+      },
+    },
+  })
+  overlay.root.append(
+    hover.element,
+    captured.element,
+    box.element,
+    badge.element,
+    panel.element,
+  )
 
   let armed = false
   let pointerX = 0
@@ -170,8 +215,40 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
    * held, which cannot tell you that you are carrying eight comments. See the brief.
    */
   function sync(): void {
-    if (hover.visible || captured.visible || box.open || badge.visible) overlay.mount()
+    if (hover.visible || captured.visible || box.open || badge.visible || panel.open)
+      overlay.mount()
     else overlay.unmount()
+  }
+
+  /**
+   * Neither of these calls `sync()` — every caller does, and there are four of them. Same
+   * split as `capture()` and `release()`: the thing that changes visibility does not also
+   * decide whether the host stays in the document.
+   */
+  function openPanel(): void {
+    // One surface at a time — see the module docblock. Releasing first also means `box.open`
+    // and `panel.open` are mutually exclusive, which is what lets the Escape chain below stay
+    // a chain rather than a matrix.
+    release()
+    panel.show(queue.items)
+    badge.setExpanded(true)
+
+    // Mounted before focusing, and explicitly rather than through `sync()`: focus does not
+    // move to a detached element.
+    overlay.mount()
+    panel.focusFirst()
+  }
+
+  function closePanel(): void {
+    panel.hide()
+    badge.setExpanded(false)
+  }
+
+  function togglePanel(): void {
+    if (panel.open) closePanel()
+    else openPanel()
+
+    sync()
   }
 
   function refresh(): void {
@@ -228,6 +305,10 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     // box anchored to a point.
     if (!isPaintable(rect)) return
 
+    // The other direction of one-surface-at-a-time. "I spotted one more thing" mid-review is
+    // a reasonable thought, so the gesture is not blocked — it just leaves review behind.
+    closePanel()
+
     capturedElement = element
     capturedDescription = describeElement(element)
     captured.show(rect)
@@ -252,11 +333,8 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
    * B3's (#10) first criterion — turn what is captured plus what was typed into a queued
    * annotation. Returns whether anything was queued.
    *
-   * **An empty comment is refused rather than queued.** @dogear/vite's `validateBatch`
-   * rejects the *entire* batch if any item's comment is not a non-empty trimmed string, so an
-   * empty item here is not a harmless placeholder — it is a landmine that fails B5's (#12)
-   * submit and takes seven good annotations down with it. Refusing costs the user one
-   * keystroke; queueing costs them the batch.
+   * **An empty comment is refused rather than queued** — see `acceptableComment`, which B4's
+   * (#11) edit path shares so the two cannot drift.
    *
    * **No `id`, `status`, `createdAt` or `resolvedAt`.** The server owns all four — see
    * ./queue.ts.
@@ -267,8 +345,8 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
    * invariants.
    */
   function submit(): boolean {
-    const comment = box.value.trim()
-    if (comment === '' || capturedDescription === null) return false
+    const comment = acceptableComment(box.value)
+    if (comment === null || capturedDescription === null) return false
 
     queue.add({
       comment,
@@ -290,6 +368,16 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
   // ---------------------------------------------------------------------------------
   // Listeners. Every one goes through the registry — see ./listeners.ts.
   // ---------------------------------------------------------------------------------
+
+  /**
+   * The badge is B4's (#11) handle for the panel.
+   *
+   * This listener is reachable because the suppression loop below returns early on
+   * `event.target === overlay.host` — a click anywhere in the shadow root retargets to the
+   * host on its way to window, so dogear's own UI is exempt from its own suppression and the
+   * event proceeds to the target phase here.
+   */
+  registry.on(badge.element, 'click', togglePanel)
 
   /**
    * Always on, even while disarmed, and `passive` because it never cancels anything.
@@ -324,12 +412,34 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     window,
     'keydown',
     (event) => {
-      if (event.key === 'Escape' && box.open) {
-        // B3's (#10) third criterion, landed early during B1 so the box was dismissable for
-        // the manual pass. Stopped hard, because an app that also closes a modal on Escape
-        // should not do it while dogear has focus.
-        release()
+      // Escape is a chain, most-specific first, and the order is the whole of it: a row being
+      // edited owns Escape before the panel containing it does. Every arm stops the event
+      // hard, because an app that also closes a modal on Escape should not do it while dogear
+      // has focus. B3's (#10) third criterion is the middle arm; it landed early during B1 so
+      // the box was dismissable for the manual pass.
+      if (event.key === 'Escape') {
+        if (panel.editing) panel.cancelEdit()
+        else if (box.open) release()
+        else if (panel.open) closePanel()
+        else return
+
         sync()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      // B4's (#11) in-place edit, committed on the same key and under the same guards as
+      // B3's below — an app's global Enter handler has no more business seeing the key that
+      // edited an annotation than the one that filed it.
+      if (
+        event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.isComposing &&
+        panel.editing &&
+        event.target === overlay.host
+      ) {
+        panel.commitEdit()
         event.preventDefault()
         event.stopImmediatePropagation()
         return

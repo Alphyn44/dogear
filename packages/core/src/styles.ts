@@ -57,9 +57,13 @@ export const SHADOW_CSS = `
 /*
  * Restated rather than inherited: "all: initial" on the host means the shadow tree starts
  * from the browser default, which is a serif face at whatever size the UA picks. Shared by
- * both surfaces for the same reason — neither inherits anything across the boundary.
+ * all three surfaces for the same reason — none inherits anything across the boundary.
+ *
+ * Note this also restyles two <button> elements. Shadow encapsulation blocks the *page's*
+ * rules, not the user agent's, so a button inside the root still arrives with a system font,
+ * a beveled border and a grey background unless something says otherwise.
  */
-.box, .badge {
+.box, .badge, .panel {
   position: fixed;
   font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: #f6f7f9;
@@ -72,9 +76,6 @@ export const SHADOW_CSS = `
   border-radius: 6px;
   padding: 8px;
   width: 280px;
-  /* The one place pointer-events is turned back on. The host is "none" so the page keeps
-     working underneath; the box has to be typable. B4 (#11) adds the second, when the badge
-     becomes the handle for the review panel. */
   pointer-events: auto;
 }
 
@@ -85,9 +86,6 @@ export const SHADOW_CSS = `
  * Bottom-right because apps put nav, logos and primary CTAs top-left and top-right far more
  * often, so it collides with the least; it is also furthest from where the comment box lands,
  * which anchors below its target by preference and so clusters upward.
- *
- * No "pointer-events" here on purpose. Inheriting the host's "none" is what lets a click in
- * this corner reach the app underneath.
  */
 .badge {
   right: 12px;
@@ -95,6 +93,122 @@ export const SHADOW_CSS = `
   border-radius: 999px;
   padding: 5px 11px;
   font-size: 12px;
+  cursor: pointer;
+  /* B4 (#11): it opens the panel now, so it takes clicks. It was inert through B3 on the
+     argument that a control which looks clickable and does nothing swallows app clicks in
+     this corner — that objection is spent, not forgotten. */
+  pointer-events: auto;
+}
+
+.badge:hover {
+  background: #242730;
+}
+
+/*
+ * B4's (#11) review panel. Rises from the badge, which is its handle.
+ *
+ * The 50px clears the badge: 12px of inset, plus its own box — 12px text at line-height
+ * 1.45, 5px of padding each side, 1px of border — with a few pixels of gap. Stated here
+ * rather than derived, because the alternative is wrapping both in a positioned container
+ * and that trades one magic number for a whole extra element.
+ *
+ * Capped and scrolling rather than growing without limit: eight annotations is the workflow
+ * this exists for, and a panel tall enough for eight is already covering half the app.
+ */
+.panel {
+  right: 12px;
+  bottom: 50px;
+  width: 320px;
+  max-height: min(60vh, 420px);
+  border-radius: 8px;
+  padding: 6px;
+  overflow-y: auto;
+  pointer-events: auto;
+}
+
+.items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.item {
+  border: 1px solid #3a3f4b;
+  border-radius: 6px;
+  padding: 6px;
+  background: #15171d;
+}
+
+.item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.item-label {
+  font-size: 11px;
+  color: #9aa3b2;
+  /* The label is the part that may be forty Tailwind classes long, so it is the part that
+     gives way — the page and the × keep their width. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-page {
+  font-size: 11px;
+  color: #6b7280;
+  flex: 0 0 auto;
+}
+
+.item-drop {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: #9aa3b2;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+
+.item-drop:hover {
+  color: #f6f7f9;
+  background: #3a3f4b;
+}
+
+/*
+ * Always a live textarea, never a click-to-edit affordance — see ./panel.ts. It is styled to
+ * read as text until you interact with it, so a list of five is a list rather than a form.
+ */
+.item-comment {
+  display: block;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 4px;
+  resize: vertical;
+}
+
+.item-comment:hover {
+  border-color: #3a3f4b;
+}
+
+.item-comment:focus {
+  background: #11131a;
+  outline: 2px solid #4c8dff;
+  outline-offset: -1px;
 }
 
 .label {
@@ -130,7 +244,9 @@ export const SHADOW_CSS = `
   resize: vertical;
 }
 
-.input:focus {
+.input:focus,
+.badge:focus-visible,
+.item-drop:focus-visible {
   outline: 2px solid #4c8dff;
   outline-offset: -1px;
 }

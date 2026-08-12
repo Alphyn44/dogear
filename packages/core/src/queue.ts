@@ -82,6 +82,32 @@ export interface Queue {
   readonly items: readonly QueueItem[]
   /** Append a draft. Returns the stored item, so the caller has its key without a re-read. */
   add(draft: AnnotationDraft): QueueItem
+  /** Drop an item. Returns whether the key matched anything. */
+  remove(key: number): boolean
+  /**
+   * Replace an item's comment. Returns whether the key matched anything.
+   *
+   * The comment is stored as given — see {@link acceptableComment} for the rule callers
+   * apply first, and why it is not enforced here.
+   */
+  update(key: number, comment: string): boolean
+}
+
+/**
+ * A comment the server will accept, or `null`.
+ *
+ * The rule is @dogear/vite's `validateBatch`: a non-empty, trimmed string, or the **entire
+ * batch** is rejected. Both paths that put a comment into the queue go through this — B3's
+ * (#10) Enter and B4's (#11) in-place edit — so the two cannot drift into disagreeing about
+ * what an empty comment means.
+ *
+ * A free function rather than a guard inside `add`/`update`, because the callers do not want
+ * the same thing from a refusal: Enter leaves the box open and focused, an edit reverts the
+ * row. A queue that silently dropped either would give both callers the same useless answer.
+ */
+export function acceptableComment(raw: string): string | null {
+  const trimmed = raw.trim()
+  return trimmed === '' ? null : trimmed
 }
 
 export function createQueue(): Queue {
@@ -104,6 +130,26 @@ export function createQueue(): Queue {
       const item: QueueItem = { ...draft, key: nextKey++ }
       items.push(item)
       return item
+    },
+
+    remove(key) {
+      const index = items.findIndex((item) => item.key === key)
+      if (index === -1) return false
+
+      items.splice(index, 1)
+      return true
+    },
+
+    update(key, comment) {
+      const index = items.findIndex((item) => item.key === key)
+      const item = items[index]
+      if (item === undefined) return false
+
+      // Replaced rather than mutated: `QueueItem`'s fields are readonly, and a fresh object
+      // means anything holding the old one — a render in flight, a half-built batch — sees a
+      // consistent snapshot rather than a field changing underneath it.
+      items[index] = { ...item, comment }
+      return true
     },
   }
 }

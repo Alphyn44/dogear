@@ -35,16 +35,42 @@ describe('createBadge', () => {
     expect(badge.visible).toBe(false)
   })
 
-  it('is inert — nothing here turns pointer events back on', () => {
-    // The host is pointer-events: none. Only .box opts back in (styles.ts). A badge that
-    // looked clickable but had no handler would swallow app clicks in that corner.
+  it('carries no inline style — the shadow sheet owns its appearance', () => {
     const badge = createBadge()
 
     expect(badge.element.getAttribute('style')).toBe(null)
     expect(badge.element.className).toBe('badge')
   })
 
-  it('announces the count', () => {
-    expect(createBadge().element.getAttribute('role')).toBe('status')
+  it('announces the count without giving up its control role', () => {
+    // aria-live rather than role="status": role would override the button role and the
+    // thing would stop being announced as operable.
+    const badge = createBadge()
+
+    expect(badge.element.getAttribute('aria-live')).toBe('polite')
+    expect(badge.element.getAttribute('role')).toBe(null)
+  })
+
+  it('is a real button, so B4 (#11) gets focus and keyboard activation for free', () => {
+    const badge = createBadge()
+
+    expect(badge.element.tagName).toBe('BUTTON')
+    // Not "submit" — inside a form, a default-type button submits it.
+    expect(badge.element.type).toBe('button')
+  })
+
+  it.each([
+    { expanded: true, attribute: 'true' },
+    { expanded: false, attribute: 'false' },
+  ])('reflects aria-expanded=$attribute', ({ expanded, attribute }) => {
+    const badge = createBadge()
+
+    badge.setExpanded(expanded)
+
+    expect(badge.element.getAttribute('aria-expanded')).toBe(attribute)
+  })
+
+  it('starts collapsed', () => {
+    expect(createBadge().element.getAttribute('aria-expanded')).toBe('false')
   })
 })

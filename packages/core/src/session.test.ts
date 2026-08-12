@@ -85,6 +85,30 @@ function captureAndType(text: string): void {
   input().value = text
 }
 
+function badge(): HTMLButtonElement {
+  return overlay.root.querySelector('.badge') as HTMLButtonElement
+}
+
+function panelRows(): HTMLLIElement[] {
+  return [...overlay.root.querySelectorAll<HTMLLIElement>('.panel li.item')]
+}
+
+function panelOpen(): boolean {
+  return (overlay.root.querySelector('.panel') as HTMLElement).hidden === false
+}
+
+function rowInput(index: number): HTMLTextAreaElement {
+  const input = panelRows()[index]?.querySelector('.item-comment')
+  if (!(input instanceof HTMLTextAreaElement)) throw new Error(`no row ${String(index)}`)
+  return input
+}
+
+/** Capture the target, type, and queue — the state B4 assumes you arrive in. */
+function queueComment(text: string): void {
+  captureAndType(text)
+  keyInBox({ key: 'Enter' })
+}
+
 /**
  * The first queued item.
  *
@@ -583,6 +607,166 @@ describe('B3 — comment and queue', () => {
     mouse('click', { altKey: true })
 
     expect(overlay.root.querySelector('.hint')?.textContent).toBe(HINT)
+  })
+})
+
+describe('B4 — review before submit', () => {
+  it('opens from the badge, lists the queue, and focuses the first row', () => {
+    queueComment('too dark')
+    queueComment('wrong copy')
+
+    badge().click()
+
+    expect(panelOpen()).toBe(true)
+    expect(panelRows()).toHaveLength(2)
+    expect(rowInput(0).value).toBe('too dark')
+    expect(badge().getAttribute('aria-expanded')).toBe('true')
+    // The host is what document.activeElement reports across a closed shadow boundary; the
+    // assertion that means something is the one inside the root. See box.ts's focus().
+    expect(overlay.root.activeElement).toBe(rowInput(0))
+  })
+
+  it('toggles shut on a second badge click', () => {
+    queueComment('too dark')
+    badge().click()
+
+    badge().click()
+
+    expect(panelOpen()).toBe(false)
+    expect(badge().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('closes on Escape', () => {
+    queueComment('too dark')
+    badge().click()
+    rowInput(0).blur()
+
+    key('keydown', { key: 'Escape' })
+
+    expect(panelOpen()).toBe(false)
+  })
+
+  it('gives Escape to the row being edited, not the panel', () => {
+    // The ordered chain. A row owns Escape before the panel containing it does — otherwise
+    // abandoning a typo would throw away the whole review.
+    queueComment('too dark')
+    badge().click()
+    rowInput(0).value = 'typed over it'
+
+    keyInBox({ key: 'Escape' })
+
+    expect(rowInput(0).value).toBe('too dark')
+    expect(panelOpen()).toBe(true)
+  })
+
+  it('commits an edit on Enter without the app seeing the key', () => {
+    const appKeys = vi.fn()
+    window.addEventListener('keydown', appKeys)
+    queueComment('too dark')
+    badge().click()
+    rowInput(0).value = 'far too dark'
+
+    const event = keyInBox({ key: 'Enter' })
+
+    expect(firstQueued().comment).toBe('far too dark')
+    expect(event.defaultPrevented).toBe(true)
+    expect(appKeys).not.toHaveBeenCalled()
+
+    window.removeEventListener('keydown', appKeys)
+  })
+
+  it('leaves Shift+Enter to the row, so a comment can gain a second line', () => {
+    queueComment('too dark')
+    badge().click()
+    rowInput(0).value = 'first line'
+
+    const event = keyInBox({ key: 'Enter', shiftKey: true })
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(panelOpen()).toBe(true)
+  })
+
+  it('commits an edit on blur, so clicking away does not discard it', () => {
+    queueComment('too dark')
+    badge().click()
+    rowInput(0).value = 'far too dark'
+
+    rowInput(0).blur()
+
+    expect(firstQueued().comment).toBe('far too dark')
+  })
+
+  it.each([
+    { text: '', why: 'emptied' },
+    { text: '   ', why: 'whitespace' },
+  ])(
+    'reverts a row $why rather than storing a comment the server rejects',
+    ({ text }) => {
+      queueComment('too dark')
+      badge().click()
+      rowInput(0).value = text
+
+      keyInBox({ key: 'Enter' })
+
+      expect(firstQueued().comment).toBe('too dark')
+      expect(rowInput(0).value).toBe('too dark')
+    },
+  )
+
+  it('deletes a row and decrements the badge', () => {
+    queueComment('keep me')
+    queueComment('drop me')
+    badge().click()
+
+    panelRows()[1]?.querySelector<HTMLButtonElement>('.item-drop')?.click()
+
+    expect(session.queue.items.map((item) => item.comment)).toEqual(['keep me'])
+    expect(panelRows()).toHaveLength(1)
+    expect(badge().textContent).toBe('1 pending')
+  })
+
+  it('deleting the last item closes the panel and returns the document to zero nodes', () => {
+    // B7's (#14) narrowed guarantee, reversing. The queue empties, so dogear leaves.
+    const before = document.documentElement.outerHTML
+    queueComment('the only one')
+    badge().click()
+
+    panelRows()[0]?.querySelector<HTMLButtonElement>('.item-drop')?.click()
+
+    expect(panelOpen()).toBe(false)
+    expect(overlay.mounted).toBe(false)
+    expect(document.documentElement.outerHTML).toBe(before)
+  })
+
+  it('closes when a new element is captured — one surface at a time', () => {
+    // "I spotted one more thing" mid-review is reasonable, so the gesture is not blocked.
+    queueComment('too dark')
+    badge().click()
+
+    mouse('click', { altKey: true })
+
+    expect(panelOpen()).toBe(false)
+    expect((overlay.root.querySelector('.box') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('closes an open comment box when it opens — the same rule, the other way', () => {
+    queueComment('too dark')
+    captureAndType('a second one, unfinished')
+
+    badge().click()
+
+    expect(panelOpen()).toBe(true)
+    expect((overlay.root.querySelector('.box') as HTMLElement).hidden).toBe(true)
+    // Abandoned, not queued — opening the panel is not a submit.
+    expect(session.queue.count).toBe(1)
+  })
+
+  it('stays mounted while open even though nothing is being pointed at', () => {
+    queueComment('too dark')
+    badge().click()
+    key('keyup', { key: 'Alt', altKey: false })
+
+    expect(overlay.mounted).toBe(true)
   })
 })
 
