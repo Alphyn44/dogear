@@ -21,6 +21,7 @@ describe('resolveOptions', () => {
     expect(resolveOptions(undefined)).toEqual({
       modifier: DEFAULT_MODIFIER,
       endpoint: DEFAULT_ENDPOINT,
+      enabled: true,
     })
   })
 
@@ -28,6 +29,7 @@ describe('resolveOptions', () => {
     expect(resolveOptions({})).toEqual({
       modifier: DEFAULT_MODIFIER,
       endpoint: DEFAULT_ENDPOINT,
+      enabled: true,
     })
   })
 
@@ -69,10 +71,34 @@ describe('resolveOptions', () => {
     expect(resolveOptions(options).endpoint).toBe(DEFAULT_ENDPOINT)
   })
 
-  it('resolves the two fields independently', () => {
-    expect(resolveOptions({ modifier: 'meta', endpoint: '/x' })).toEqual({
+  it('resolves the fields independently', () => {
+    expect(resolveOptions({ modifier: 'meta', endpoint: '/x', enabled: false })).toEqual({
       modifier: 'meta',
       endpoint: '/x',
+      enabled: false,
     })
+  })
+
+  // B6 (#13) — the hard off.
+  it('defaults to enabled', () => {
+    expect(resolveOptions({}).enabled).toBe(true)
+  })
+
+  it('turns off for a literal false', () => {
+    expect(resolveOptions({ enabled: false }).enabled).toBe(false)
+  })
+
+  it.each([
+    { why: 'the string false, which is truthy', value: 'false' },
+    { why: 'zero', value: 0 },
+    { why: 'null', value: null },
+    { why: 'an empty string', value: '' },
+  ])('stays enabled for $why — only a real false counts', ({ value }) => {
+    // Same safe direction as ./preference.ts: a dev tool that is unexpectedly on can be
+    // switched off, while one that is unexpectedly absent reads as broken. `enabled: 0` from
+    // a hand-edited config should not silently uninstall dogear.
+    const options = { enabled: value } as unknown as InitOptions
+
+    expect(resolveOptions(options).enabled).toBe(true)
   })
 })

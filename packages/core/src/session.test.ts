@@ -7,7 +7,8 @@ import { HINT } from './box.js'
 import { createListenerRegistry, type ListenerRegistry } from './listeners.js'
 import type { Modifier } from './options.js'
 import { createOverlay, type Overlay } from './overlay.js'
-import type { QueueItem } from './queue.js'
+import type { Queue, QueueItem } from './queue.js'
+import { createQueue } from './queue.js'
 import { createSession, isHeld, SENT_NOTICE_MS, type Session } from './session.js'
 
 /**
@@ -29,6 +30,8 @@ let overlay: Overlay
 let session: Session
 let target: HTMLElement
 let appHandler: Mock<(event: Event) => void>
+/** B6 (#13). The session reports the intent; the controller above it acts. */
+let onDisable: Mock<() => void>
 
 /** Give an element a real rect, since happy-dom has no layout. */
 function withRect(element: HTMLElement, rect = RECT): HTMLElement {
@@ -49,13 +52,22 @@ function pointAt(element: Element | null): void {
   document.elementFromPoint = () => element
 }
 
-function start(modifier: Modifier = 'alt'): void {
+/**
+ * Start a session over `queue`, defaulting to a fresh one.
+ *
+ * The queue is owned above the session since B6 (#13) — see ./controller.ts — so a test can
+ * hand in a populated one to stand in for a batch that survived a disable.
+ */
+function start(modifier: Modifier = 'alt', existing?: Queue): void {
   registry = createListenerRegistry()
   overlay = createOverlay()
+  onDisable = vi.fn<() => void>()
   session = createSession({
     registry,
     overlay,
-    options: { modifier, endpoint: ENDPOINT },
+    options: { modifier, endpoint: ENDPOINT, enabled: true },
+    queue: existing ?? createQueue(),
+    onDisable,
   })
 }
 
@@ -1175,6 +1187,206 @@ describe('B5 — teardown during a submit', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(document.documentElement.outerHTML).toBe(before)
+  })
+})
+
+/**
+ * B6 (#13) — the kill switch, from the session's side.
+ *
+ * The session neither tears down nor persists: it decides whether the request is *allowed*
+ * and reports it. ./controller.test.ts owns what happens next.
+ */
+describe('B6 — the kill switch', () => {
+  function chord(init: KeyboardEventInit = {}): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      code: 'KeyD',
+      key: 'd',
+      ctrlKey: true,
+      altKey: true,
+      ...init,
+    })
+    window.dispatchEvent(event)
+    return event
+  }
+
+  function disableButton(): HTMLButtonElement {
+    return overlay.root.querySelector('.disable') as HTMLButtonElement
+  }
+
+  it('reports the intent on Ctrl+Alt+D', () => {
+    chord()
+
+    expect(onDisable).toHaveBeenCalledOnce()
+  })
+
+  it('works with nothing open, which is the state it exists for', () => {
+    // Unlike Enter and Escape, this one is not guarded on our own UI having focus. Its whole
+    // purpose is "get out of my way", so it has to work from a cold page.
+    expect(overlay.mounted).toBe(false)
+
+    chord()
+
+    expect(onDisable).toHaveBeenCalledOnce()
+  })
+
+  it('works mid-comment', () => {
+    captureAndType('half a thought')
+
+    chord()
+
+    expect(onDisable).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the keystroke away from the app', () => {
+    const event = chord()
+
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('reports from the panel button too', () => {
+    queueComment('too dark')
+    badge().click()
+
+    disableButton().click()
+
+    expect(onDisable).toHaveBeenCalledOnce()
+  })
+
+  it('uses code, not key — Alt is a compose modifier on several layouts', () => {
+    // On macOS Alt+D arrives as `key: '∂'`, and on some Windows layouts as a dead key. Only
+    // `code` reports the physical KeyD regardless.
+    chord({ key: '∂' })
+
+    expect(onDisable).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { why: 'Ctrl alone', init: { altKey: false } },
+    { why: 'Alt alone', init: { ctrlKey: false } },
+    { why: 'a different letter', init: { code: 'KeyF' } },
+    { why: 'mid-IME composition', init: { isComposing: true } },
+  ])('ignores $why', ({ init }) => {
+    chord(init)
+
+    expect(onDisable).not.toHaveBeenCalled()
+  })
+
+  describe('with unsent items', () => {
+    beforeEach(() => {
+      queueComment('too dark')
+    })
+
+    it('does not refuse — the queue outlives the session now', () => {
+      // The earlier design blocked here, because tearing down destroyed the batch. The queue
+      // is owned by ./controller.ts since, so there is nothing to protect and nothing to
+      // refuse. A kill switch that can decline is not really one.
+      chord()
+
+      expect(onDisable).toHaveBeenCalledOnce()
+    })
+
+    it('leaves the batch untouched on its way out', () => {
+      // The session does not clear, submit or discard anything. ./controller.test.ts proves
+      // the other half — that the items are still there after the teardown.
+      queueComment('wrong copy')
+
+      chord()
+
+      expect(session.queue.count).toBe(2)
+      expect(session.queue.items.map((item) => item.comment)).toEqual([
+        'too dark',
+        'wrong copy',
+      ])
+    })
+
+    it('says nothing, because there is nothing to explain', () => {
+      chord()
+
+      expect(statusText()).toBe('')
+    })
+
+    it('holds off while a submit is in flight', () => {
+      // The one guard left, and it is not about losing work — `dispose()` aborts the request
+      // and the items are only cleared on a response. It is about *duplicates*: the POST may
+      // already be on disk, and re-enabling then submitting again would write it twice.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise<Response>(() => {})),
+      )
+      badge().click()
+      submitButton().click()
+
+      chord()
+
+      expect(onDisable).not.toHaveBeenCalled()
+    })
+
+    it('goes through once that submit has landed', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      stubFetch(ok({ written: 1, pending: 1 }))
+      badge().click()
+      submitButton().click()
+      await vi.waitFor(() => {
+        expect(session.queue.count).toBe(0)
+      })
+
+      chord()
+
+      expect(onDisable).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('adopting a batch that survived a disable', () => {
+    it('shows the count the moment the session comes back', () => {
+      // What a re-enable looks like from the session's side: it is handed a populated queue
+      // and has to say so, or the batch is invisible until you happen to modifier-click.
+      const carried = createQueue()
+      carried.add({
+        comment: 'from before the disable',
+        element: { tag: 'button', id: null, classes: [], text: 'Save' },
+        url: 'http://localhost:5173/',
+        viewport: { w: 1512, h: 945, dpr: 2 },
+        authoredAt: '2026-08-12T10:00:00.000Z',
+      })
+
+      registry.detachAll()
+      overlay.destroy()
+      start('alt', carried)
+
+      expect(badge().textContent).toBe('1 pending')
+      expect(overlay.mounted).toBe(true)
+    })
+
+    it('renders the carried items when the panel opens', () => {
+      const carried = createQueue()
+      carried.add({
+        comment: 'from before the disable',
+        element: { tag: 'button', id: null, classes: [], text: 'Save' },
+        url: 'http://localhost:5173/',
+        viewport: { w: 1512, h: 945, dpr: 2 },
+        authoredAt: '2026-08-12T10:00:00.000Z',
+      })
+
+      registry.detachAll()
+      overlay.destroy()
+      start('alt', carried)
+      badge().click()
+
+      expect(rowInput(0).value).toBe('from before the disable')
+    })
+
+    it('stays invisible for an empty one — B7 (#14) is untouched', () => {
+      const before = document.documentElement.outerHTML
+      registry.detachAll()
+      overlay.destroy()
+
+      start('alt', createQueue())
+
+      expect(overlay.mounted).toBe(false)
+      expect(document.documentElement.outerHTML).toBe(before)
+    })
   })
 })
 

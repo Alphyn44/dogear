@@ -12,6 +12,7 @@
  * production bundle, which is the worst possible place for a dev tool to fail.
  */
 
+import type { InitContext } from './init.js'
 import type { InitOptions, Teardown } from './options.js'
 
 /** Counterpart to the `IS_NOOP` in ./index.ts, which is `false`. */
@@ -64,7 +65,13 @@ export function isCurrentHostAllowed(): boolean {
  * overlay into `dist/noop.js`, which is precisely what layer 3 exists to prevent.
  * `index.test.ts` enforces that mechanically, because the leak gate cannot see it: a
  * bundled overlay carries no sentinel and would pass every content scan.
+ *
+ * **The second parameter is mirrored even though nothing here reads it.** TypeScript would
+ * accept the shorter signature — a function of one parameter is assignable to one of two —
+ * but then `init(options, context)` would compile against the dev build and fail against the
+ * production one, which is exactly the dev/prod divergence F1 exists to stop. B6 (#13) added
+ * it; see ./init.ts.
  */
-export function init(_options?: InitOptions): Teardown {
+export function init(_options?: InitOptions, _context?: InitContext): Teardown {
   return () => {}
 }

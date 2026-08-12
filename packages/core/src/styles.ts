@@ -258,8 +258,19 @@ export const SHADOW_CSS = `
   color: #ff9a9a;
 }
 
+/*
+ * B6's (#13) toggle sits beside Submit rather than under it, pushed to opposite ends. The
+ * destructive-ish action is furthest from the one you press every time, which is the whole
+ * reason they share a row instead of stacking.
+ */
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .submit {
-  align-self: flex-end;
   font: inherit;
   font-size: 12px;
   color: #f6f7f9;
@@ -279,6 +290,40 @@ export const SHADOW_CSS = `
   background: #242730;
   border-color: #3a3f4b;
   cursor: default;
+}
+
+/*
+ * Deliberately quiet — a bare link, not a button shape. It is a one-way door (nothing in the
+ * page can undo it) and it is used approximately never, so it should not compete with Submit
+ * for the eye. Underlined on hover rather than tinted, so it reads as an action and not as a
+ * disabled control.
+ */
+.disable {
+  font: inherit;
+  font-size: 11px;
+  color: #9aa3b2;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+.disable:hover {
+  color: #f6f7f9;
+  text-decoration: underline;
+}
+
+/*
+ * The panel's key hints — the counterpart to the comment box's .hint, and dimmer, because the
+ * panel has visible controls for both of the things it names and the box has none.
+ *
+ * No backticks anywhere in this file: it is one template literal, and a stray one silently
+ * ends the stylesheet rather than failing loudly.
+ */
+.footer-hint {
+  font-size: 11px;
+  color: #6b7280;
 }
 
 .label {
@@ -318,7 +363,8 @@ export const SHADOW_CSS = `
 .note:focus,
 .badge:focus-visible,
 .item-drop:focus-visible,
-.submit:focus-visible {
+.submit:focus-visible,
+.disable:focus-visible {
   outline: 2px solid #4c8dff;
   outline-offset: -1px;
 }

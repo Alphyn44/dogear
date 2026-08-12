@@ -46,12 +46,26 @@ export interface InitOptions {
    * where there is no plugin to supply one.
    */
   readonly endpoint?: string
+  /**
+   * B6's (#13) hard off. Default `true`.
+   *
+   * `false` makes {@link import('./init.js').init} bail before a listener or a node exists,
+   * beside F3's host guard. **@dogear/vite never sends this** — a disabled plugin injects no
+   * script at all, so there is nothing in the browser to configure. It is here for the
+   * library entry, and so that "enabled: false has the same effect from config" is true at
+   * both levels rather than only at the one that happens to be wired.
+   *
+   * Distinct from the `localStorage` preference in ./preference.ts, which is the developer's
+   * per-origin choice. This one is the project's, and it wins — see the brief.
+   */
+  readonly enabled?: boolean
 }
 
 /** {@link InitOptions} with every default applied. What core actually reads. */
 export interface ResolvedOptions {
   readonly modifier: Modifier
   readonly endpoint: string
+  readonly enabled: boolean
 }
 
 /**
@@ -94,6 +108,7 @@ export const DEFAULT_ENDPOINT = '/__dogear'
 export function resolveOptions(options: InitOptions | undefined): ResolvedOptions {
   const modifier = options?.modifier
   const endpoint = options?.endpoint
+  const enabled = options?.enabled
   return {
     modifier:
       modifier !== undefined && MODIFIERS.includes(modifier)
@@ -101,5 +116,10 @@ export function resolveOptions(options: InitOptions | undefined): ResolvedOption
         : DEFAULT_MODIFIER,
     endpoint:
       typeof endpoint === 'string' && endpoint !== '' ? endpoint : DEFAULT_ENDPOINT,
+    // Only a literal `false` turns dogear off. A non-boolean that survived the query string
+    // reads as enabled — the same safe direction ./preference.ts takes, and for the same
+    // reason: a dev tool that is unexpectedly on can be switched off, while one that is
+    // unexpectedly absent looks like it is broken.
+    enabled: enabled !== false,
   }
 }

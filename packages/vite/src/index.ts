@@ -13,6 +13,22 @@ import { SENTINEL } from './sentinel.js'
 
 export interface DogearOptions {
   /**
+   * Turn dogear off for this project entirely. Default `true` — B6 (#13).
+   *
+   * `false` means **nothing is injected and no endpoint is served**: not an inert overlay, no
+   * script tag, no bundle sent to a page that asked for none. The same call the missing-git-
+   * root branch below already makes.
+   *
+   * It also settles precedence without any code: B6's in-browser toggle lives in
+   * `localStorage` and is per-origin, and it cannot contradict this, because a disabled plugin
+   * never puts dogear in the browser to be toggled. A committed `enabled: false` is off for
+   * everyone who clones the repo.
+   *
+   * Not a production-safety layer. `apply: 'serve'` is that, and this changes nothing about
+   * what a build contains — see the brief.
+   */
+  readonly enabled?: boolean
+  /**
    * Base path for dogear's HTTP endpoints. Default `/__dogear`, matching Vite's own
    * `/__vite_ping` convention.
    *
@@ -91,6 +107,21 @@ export function dogear(options: DogearOptions = {}): Plugin {
      * build would invert the entire point of that line.
      */
     configureServer(server) {
+      // B6 (#13). Before `normaliseEndpoint`, so a project that has turned dogear off cannot
+      // be stopped by a dogear misconfiguration — `enabled: false` and a bad `endpoint` in
+      // the same config should start the dev server, not throw at it.
+      //
+      // `injection` is left undefined, so `transformIndexHtml` emits nothing. Coupling the
+      // two is the same rule the git-root branch below states: no endpoint means no tag,
+      // because a tag whose import 404s is a worse failure than absence.
+      if (options.enabled === false) {
+        server.config.logger.info(
+          '[dogear] disabled by config (`enabled: false`). No script is injected and no ' +
+            'endpoint is served.',
+        )
+        return
+      }
+
       const endpoint = normaliseEndpoint(options.endpoint ?? DEFAULT_ENDPOINT)
       // The *normalised* endpoint, not `options.endpoint` — core POSTs to
       // `<endpoint>/annotations`, and it has to be the path the middleware below is
@@ -136,6 +167,16 @@ export function dogear(options: DogearOptions = {}): Plugin {
       }
 
       server.middlewares.use(createEndpoint({ gitRoot, endpoint, clientDist }))
+
+      // One line, once, naming both bindings — B6's (#13) other discovery vector.
+      //
+      // The panel's hint line only reaches someone who already has annotations queued, and
+      // the developer most likely to want the kill switch is the one who has never
+      // deliberately opened dogear at all. The terminal is where they are looking.
+      server.config.logger.info(
+        `[dogear] ready — ${config.modifier}-click an element to annotate, ` +
+          'Ctrl+Alt+D to turn dogear off.',
+      )
 
       // Assigned last, after the endpoint that may throw and after the middleware is
       // registered — so there is no window in which the tag is injected but the route that

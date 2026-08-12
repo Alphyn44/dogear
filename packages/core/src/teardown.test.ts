@@ -108,3 +108,59 @@ describe('the teardown init() returns', () => {
     expect(() => teardown()).not.toThrow()
   })
 })
+
+/**
+ * B6 (#13), the behavioural half.
+ *
+ * ./controller.test.ts counts listeners across the disable cycle, which is the structural
+ * claim. This is the other one this file argues you need: a count cannot tell a live listener
+ * from an early-returning one, and an app whose clicks work again can.
+ */
+describe('disabling', () => {
+  /** An app that records its own clicks, the way the example page's Click log does. */
+  function appWithHandler(): { target: HTMLElement; handler: ReturnType<typeof vi.fn> } {
+    const target = document.createElement('button')
+    const handler = vi.fn()
+    target.addEventListener('click', handler)
+    document.body.append(target)
+    document.elementFromPoint = () => target
+    return { target, handler }
+  }
+
+  it('hands the modifier-click back to the app', async () => {
+    const { createController } = await import('./controller.js')
+    const { resetPreferenceCache } = await import('./preference.js')
+    globalThis.localStorage.clear()
+    resetPreferenceCache()
+
+    const { target, handler } = appWithHandler()
+    const controller = createController()
+    controller.start()
+
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }))
+    expect(handler).not.toHaveBeenCalled()
+
+    controller.disable()
+
+    // The criterion in one line: alt-click is an ordinary click again, because there is no
+    // handler left to eat it — not because one ran and declined to.
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }))
+    expect(handler).toHaveBeenCalledTimes(1)
+
+    globalThis.localStorage.clear()
+    resetPreferenceCache()
+  })
+
+  it('never intercepts anything when the host passed enabled: false', () => {
+    // The bail is before a listener or a node exists, beside F3's host check — so there is no
+    // window in which dogear is half-present.
+    const { target, handler } = appWithHandler()
+
+    stop = init({ enabled: false })
+
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }))
+
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(document.documentElement.outerHTML).not.toContain('dogear-overlay')
+  })
+})

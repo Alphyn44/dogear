@@ -26,7 +26,7 @@ import type { Overlay } from './overlay.js'
 import type { Panel } from './panel.js'
 import { createPanel } from './panel.js'
 import type { Queue } from './queue.js'
-import { acceptableComment, createQueue } from './queue.js'
+import { acceptableComment } from './queue.js'
 import { buildBatch, submitBatch, SUBMIT_TIMEOUT_MS } from './submit.js'
 
 /** The `MouseEvent`/`KeyboardEvent` flag each modifier is carried on. */
@@ -124,6 +124,19 @@ export interface SessionDeps {
   readonly registry: ListenerRegistry
   readonly overlay: Overlay
   readonly options: ResolvedOptions
+  /**
+   * The batch, **owned from above** — see ./controller.ts.
+   *
+   * B6 (#13) moved it out of this closure. Everything else here dies with the session, and
+   * the queue is the one thing that must not: it is the only copy of the user's work, so a
+   * kill switch that destroyed it would either lose work or have to refuse to run.
+   */
+  readonly queue: Queue
+  /**
+   * B6 (#13) — the user asked dogear to turn off. Called at most once; whoever owns the
+   * teardown acts on it. See ./init.ts.
+   */
+  readonly onDisable: () => void
 }
 
 /**
@@ -137,14 +150,19 @@ export interface SessionDeps {
  */
 export const SENT_NOTICE_MS = 2_500
 
-export function createSession({ registry, overlay, options }: SessionDeps): Session {
+export function createSession({
+  registry,
+  overlay,
+  options,
+  queue,
+  onDisable,
+}: SessionDeps): Session {
   const { modifier, endpoint } = options
 
   const hover: Outline = createOutline()
   const captured: Outline = createOutline('captured')
   const box: CommentBox = createCommentBox()
   const badge: Badge = createBadge()
-  const queue: Queue = createQueue()
   // The panel mutates nothing itself — it reports, and this file applies. Same shape as
   // `capture()` below: one place owns the order of queue, badge, render and mount.
   const panel: Panel = createPanel({
@@ -175,6 +193,7 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
         queue.update(key, comment)
       },
       onSubmit: () => void send(),
+      onDisable: requestDisable,
     },
   })
   overlay.root.append(
@@ -184,6 +203,16 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     badge.element,
     panel.element,
   )
+
+  // A batch that outlived a previous session — B6's (#13) disable/re-enable cycle, or a
+  // console `stop()` followed by `start()`. The queue is handed in rather than created here,
+  // so it can arrive non-empty, and the badge is the only thing that would say so.
+  //
+  // Unconditional: `badge.set(0)` hides it, and `sync()` on a fresh session with nothing
+  // visible unmounts a host that was never mounted, which is a no-op. Spelling out the
+  // empty case as a branch would buy nothing and add one.
+  badge.set(queue.count)
+  sync()
 
   let armed = false
   let pointerX = 0
@@ -469,6 +498,33 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
     noticeTimer = null
   }
 
+  /**
+   * B6 (#13) — the toggle and the chord both land here.
+   *
+   * **It does not consult the queue, and that is the whole design.** An earlier version
+   * refused while items were pending, because tearing the session down used to destroy the
+   * batch with it. The queue is owned by ./controller.ts now and outlives the session, so
+   * there is nothing to protect and nothing to refuse: disabling is instant, unconditional,
+   * and lossless, and re-enabling brings the batch back with the badge already counting it.
+   *
+   * A kill switch that can decline is not really one. "Get out of my way" is the entire
+   * request, and the version that answered "no, deal with your queue first" was solving a
+   * problem we had chosen to have.
+   *
+   * The one guard left is a submit already in the air — see below.
+   */
+  function requestDisable(): void {
+    // A sub-second window, and the only one that can cost anything. `dispose()` aborts the
+    // request, but an abort is client-side: the POST may already have been written to disk,
+    // and the local items are only cleared on a response we never read. Disabling here and
+    // submitting again after a re-enable would put the same annotations in `queue.json`
+    // twice. Silent rather than explained, because at localhost latency this is unhittable
+    // in practice and a message would document a state nobody reaches.
+    if (inFlight !== null) return
+
+    onDisable()
+  }
+
   // ---------------------------------------------------------------------------------
   // Listeners. Every one goes through the registry — see ./listeners.ts.
   // ---------------------------------------------------------------------------------
@@ -533,6 +589,25 @@ export function createSession({ registry, overlay, options }: SessionDeps): Sess
         else return
 
         sync()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      // B6's (#13) kill switch. First of the chord arms and unconditional on what is open:
+      // this is the one binding that has to work from anywhere, including mid-comment, since
+      // its whole purpose is "get out of my way".
+      //
+      // `Ctrl+Alt+D`, sharing D4's (#23) `Ctrl+Alt` prefix so dogear's chords read as a
+      // family. `event.code` rather than `event.key`: Alt is a compose modifier on macOS and
+      // several Windows layouts, so `key` arrives as `'∂'` or a dead key rather than `'d'`,
+      // while `code` reports the physical `KeyD` regardless of layout.
+      //
+      // Not guarded on `event.target === overlay.host` — unlike Enter and Escape, which are
+      // ours only while our own UI has focus. This one is global by design; it is stopped
+      // hard so an app binding on the same chord does not also fire.
+      if (event.code === 'KeyD' && event.ctrlKey && event.altKey && !event.isComposing) {
+        requestDisable()
         event.preventDefault()
         event.stopImmediatePropagation()
         return

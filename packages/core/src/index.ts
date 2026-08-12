@@ -11,6 +11,10 @@
 
 export { DEFAULT_HOSTS, isAllowedHost, isCurrentHostAllowed } from './host.js'
 export { init } from './init.js'
+// Type-only, so it needs no ./noop.ts counterpart in the value-surface sense — but noop's
+// `init` mirrors the parameter anyway, or the two builds would disagree about how many
+// arguments `init` takes. See ./noop.ts.
+export type { InitContext } from './init.js'
 export type { InitOptions, Modifier, Teardown } from './options.js'
 
 /**

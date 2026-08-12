@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createListenerRegistry, type ListenerRegistry } from './listeners.js'
 import type { Panel } from './panel.js'
-import { createPanel } from './panel.js'
+import { createPanel, FOOTER_HINT } from './panel.js'
 import type { AnnotationDraft, QueueItem } from './queue.js'
 import { createQueue } from './queue.js'
 
@@ -23,6 +23,7 @@ let panel: Panel
 let onDelete: Mock<(key: number) => void>
 let onEdit: Mock<(key: number, comment: string) => void>
 let onSubmit: Mock<() => void>
+let onDisable: Mock<() => void>
 
 function draft(
   comment: string,
@@ -63,13 +64,18 @@ function submitButton(): HTMLButtonElement {
   return panel.element.querySelector('.submit') as HTMLButtonElement
 }
 
+function disableButton(): HTMLButtonElement {
+  return panel.element.querySelector('.disable') as HTMLButtonElement
+}
+
 beforeEach(() => {
   document.body.innerHTML = ''
   registry = createListenerRegistry()
   onDelete = vi.fn<(key: number) => void>()
   onEdit = vi.fn<(key: number, comment: string) => void>()
   onSubmit = vi.fn<() => void>()
-  panel = createPanel({ registry, handlers: { onDelete, onEdit, onSubmit } })
+  onDisable = vi.fn<() => void>()
+  panel = createPanel({ registry, handlers: { onDelete, onEdit, onSubmit, onDisable } })
   document.body.append(panel.element)
 })
 
@@ -199,6 +205,45 @@ describe('the footer', () => {
 
   it('announces the failure to assistive tech — the badge is elsewhere', () => {
     expect(panel.element.querySelector('.status')?.getAttribute('role')).toBe('alert')
+  })
+
+  // B6 (#13) — the toggle.
+  it('reports a disable request', () => {
+    panel.show(items(draft('a')))
+
+    disableButton().click()
+
+    expect(onDisable).toHaveBeenCalledOnce()
+  })
+
+  it('does not report a disable while a POST is in flight', () => {
+    // Not about losing work — the queue outlives the session either way. It is about
+    // duplicates: the POST may already be on disk while the local items are still queued.
+    panel.show(items(draft('a')))
+    panel.setBusy(true)
+
+    disableButton().click()
+
+    expect(onDisable).not.toHaveBeenCalled()
+  })
+
+  it('names the chord in the footer, which is the only in-page place it appears', () => {
+    // Discovery: the panel is reachable only when the queue has something in it, so this is
+    // where someone learns the binding while they are here for another reason.
+    expect(panel.element.querySelector('.footer-hint')?.textContent).toBe(FOOTER_HINT)
+    expect(FOOTER_HINT).toContain('Ctrl+Alt+D')
+  })
+
+  it('carries the way back in its title, since nothing in the page will after this', () => {
+    expect(disableButton().title).toContain('__dogear.start()')
+  })
+
+  it('keeps Submit and Disable at opposite ends of one row', () => {
+    // Deliberate: the one-way action is furthest from the one pressed every time.
+    const actions = panel.element.querySelector('.actions')
+
+    expect(actions?.firstElementChild).toBe(disableButton())
+    expect(actions?.lastElementChild).toBe(submitButton())
   })
 
   it('keeps a failure visible across a close and reopen', () => {

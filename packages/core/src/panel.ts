@@ -37,6 +37,15 @@ import { labelFor } from './describe.js'
 import type { ListenerRegistry } from './listeners.js'
 import type { QueueItem } from './queue.js'
 
+/**
+ * The panel's key hints, in the shape ./box.ts's `HINT` established.
+ *
+ * `Ctrl+Alt+D` written literally rather than as ⌃⌥D, because the binding really is
+ * `ctrlKey && altKey` on every platform — it is not remapped to Command on macOS — so the
+ * symbols would be the ambiguous form here, not the friendly one.
+ */
+export const FOOTER_HINT = '⌘/Ctrl+⏎ submit · Ctrl+Alt+D disable dogear'
+
 /** What the panel asks the session to do. It mutates nothing itself. */
 export interface PanelHandlers {
   onDelete(key: number): void
@@ -44,6 +53,11 @@ export interface PanelHandlers {
   onEdit(key: number, comment: string): void
   /** B5 (#12). The panel does not read the queue or touch the network — see ./session.ts. */
   onSubmit(): void
+  /**
+   * B6 (#13). Reports the intent only — the session checks the queue and may refuse, and
+   * the controller above it owns the teardown.
+   */
+  onDisable(): void
 }
 
 export interface Panel {
@@ -130,7 +144,38 @@ export function createPanel({ registry, handlers }: PanelDeps): Panel {
   submit.type = 'button'
   submit.textContent = 'Submit'
 
-  footer.append(note, status, submit)
+  /**
+   * B6's (#13) toggle. In the panel because the panel is the only surface that exists on
+   * demand — while idle with an empty queue dogear renders nothing at all (B7, #14), so a
+   * control that were always reachable would cost exactly that guarantee.
+   *
+   * The title carries the way back, because this button is the last thing you see before
+   * dogear disappears and there is nothing left in the page to ask.
+   */
+  const disable = document.createElement('button')
+  disable.className = 'disable'
+  disable.type = 'button'
+  disable.textContent = 'Disable dogear'
+  disable.title =
+    'Turn dogear off, including after a reload. __dogear.start() brings it back.'
+
+  const actions = document.createElement('div')
+  actions.className = 'actions'
+  actions.append(disable, submit)
+
+  /**
+   * The chord, spelled out — the panel's counterpart to the comment box's key hints.
+   *
+   * It carries the discovery load for B6 (#13), and it has to, because the panel is only
+   * reachable while the queue has something in it: with an empty queue dogear renders nothing
+   * at all, so someone who wants it gone and has never read the docs has no in-page surface
+   * to find. This line is where they learn the chord while they are here for another reason.
+   */
+  const hint = document.createElement('div')
+  hint.className = 'footer-hint'
+  hint.textContent = FOOTER_HINT
+
+  footer.append(note, status, actions, hint)
   element.append(list, footer)
 
   /** The row being edited, and the text it held when focus arrived — what Escape restores. */
@@ -172,6 +217,14 @@ export function createPanel({ registry, handlers }: PanelDeps): Panel {
       // disabled button is a no-op in a browser, but the button is also reachable from the
       // keyboard path in ./session.ts, and only one of the two can be the authority.
       if (!submit.disabled) handlers.onSubmit()
+      return
+    }
+
+    if (event.target === disable) {
+      // Blocked while a POST is in flight, on the same argument as Submit: the batch is
+      // mid-air and the session is about to clear the items it sent. Tearing down underneath
+      // that is the one ordering B5's snapshot logic cannot make safe.
+      if (!submit.disabled) handlers.onDisable()
       return
     }
 

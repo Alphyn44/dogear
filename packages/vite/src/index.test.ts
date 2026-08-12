@@ -35,18 +35,36 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
+/** What a run of `configureServer` did, beyond what it returned. */
+interface ServerLog {
+  readonly warnings: string[]
+  readonly infos: string[]
+  /** How many middlewares were registered. B6 (#13) asserts this is zero when disabled. */
+  readonly middlewares: unknown[]
+}
+
 /** The smallest thing `configureServer` reads. Cast, because Vite's type is enormous. */
-function fakeServer(serverRoot: string): ViteDevServer {
+function fakeServer(serverRoot: string, log: ServerLog): ViteDevServer {
   return {
-    config: { root: serverRoot, logger: { warn: () => {} } },
-    middlewares: { use: () => {} },
+    config: {
+      root: serverRoot,
+      logger: {
+        warn: (message: string) => log.warnings.push(message),
+        info: (message: string) => log.infos.push(message),
+      },
+    },
+    middlewares: {
+      use: (handler: unknown) => log.middlewares.push(handler),
+    },
   } as unknown as ViteDevServer
 }
 
-function configured(
+/** Run `configureServer` and report what it did as well as the plugin it did it to. */
+function run(
   options: Parameters<typeof dogear>[0] = {},
   serverRoot = root,
-): Plugin {
+): { plugin: Plugin; log: ServerLog } {
+  const log: ServerLog = { warnings: [], infos: [], middlewares: [] }
   const plugin = dogear(options)
   const hook = plugin.configureServer
   if (typeof hook !== 'function') {
@@ -54,9 +72,19 @@ function configured(
   }
 
   // Vite calls it with the plugin context as `this`; dogear reads none of it.
-  ;(hook as (server: ViteDevServer) => void).call(plugin as never, fakeServer(serverRoot))
+  ;(hook as (server: ViteDevServer) => void).call(
+    plugin as never,
+    fakeServer(serverRoot, log),
+  )
 
-  return plugin
+  return { plugin, log }
+}
+
+function configured(
+  options: Parameters<typeof dogear>[0] = {},
+  serverRoot = root,
+): Plugin {
+  return run(options, serverRoot).plugin
 }
 
 function injectedTags(plugin: Plugin): HtmlTagDescriptor[] {
@@ -186,6 +214,11 @@ describe('transformIndexHtml (A1)', () => {
     expect(injectedSrc(configured({ endpoint: '/__x' }))).toContain('/__x/client.js?')
   })
 
+  it('injects nothing when the project turned dogear off — B6 (#13)', () => {
+    // Not an inert overlay: no tag, so no bundle reaches a page that asked for none.
+    expect(injectedTags(configured({ enabled: false }))).toHaveLength(0)
+  })
+
   it('tells core where to POST — B5 (#12)', () => {
     // Both halves of the same value: the tag's path, and the config core reads its submit
     // target from. They come from one `normaliseEndpoint` call, and they have to agree or a
@@ -213,6 +246,43 @@ describe('transformIndexHtml (A1)', () => {
     } finally {
       rmSync(outside, { recursive: true, force: true })
     }
+  })
+})
+
+/** B6 (#13) — the repo-wide kill switch. */
+describe('enabled: false', () => {
+  it('registers no middleware, so no endpoint is served either', () => {
+    // The coupling the git-root branch already states: no endpoint means no tag. A tag whose
+    // import 404s is a worse failure than absence.
+    const { log } = run({ enabled: false })
+
+    expect(log.middlewares).toHaveLength(0)
+  })
+
+  it('says so once, on info rather than warn', () => {
+    // Nothing is broken and nothing needs attention — this is a state the project chose.
+    const { log } = run({ enabled: false })
+
+    expect(log.infos).toHaveLength(1)
+    expect(log.infos[0]).toContain('disabled by config')
+    expect(log.warnings).toHaveLength(0)
+  })
+
+  it('registers the middleware normally when enabled', () => {
+    expect(run().log.middlewares).toHaveLength(1)
+    expect(run({ enabled: true }).log.middlewares).toHaveLength(1)
+  })
+
+  it('does not throw on a bad endpoint it will never use', () => {
+    // Checked before `normaliseEndpoint`, deliberately: a project that has turned dogear off
+    // should not be able to have its dev server taken down by a dogear misconfiguration.
+    expect(() => run({ enabled: false, endpoint: '/' })).not.toThrow()
+    // And the same endpoint still throws when dogear is on, so the guard has not been lost.
+    expect(() => run({ endpoint: '/' })).toThrow(/endpoint must be a path/)
+  })
+
+  it('does not throw on a bad modifier it will never use', () => {
+    expect(() => run({ enabled: false, modifier: 'ctr1' as never })).not.toThrow()
   })
 })
 

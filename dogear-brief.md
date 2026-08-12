@@ -524,6 +524,7 @@ instruction, since a pasting user has no MCP server.
 ```json
 {
   "version": 1,
+  "enabled": true,
   "modifier": "alt",
   "endpoint": "/__dogear",
   "transform": true,
@@ -544,6 +545,14 @@ instruction, since a pasting user has no MCP server.
 
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
 in `~/.dogear/config.json` and lose to both.
+
+`enabled` is the repo-wide form of B6's kill switch, and it sits at the top of that same
+precedence chain: `dogear({ enabled: false })` beats the file, which beats the default. It
+is a **separate axis from B6's in-browser toggle**, which is per-origin and lives in
+`localStorage` — a committed `"enabled": false` turns dogear off for everyone who clones
+the repo, and no amount of clicking in one person's browser overrides it, because a
+disabled plugin never injects the script at all. B6 ships the plugin option; E4 (#29)
+wires the file underneath it.
 
 `hosts` entries come in three shapes — an exact hostname, a `*.suffix` wildcard, or an
 IPv4 CIDR range — and the list *replaces* the defaults rather than extending them. See
@@ -676,6 +685,12 @@ agent's context.
 - When disabled, listeners are **detached, not ignored** — real interaction testing
   behaves exactly as if dogear were absent.
 - `dogear({ enabled: false })` has the same effect from config.
+
+*(The toggle and the shortcut are **disable-only**. Nothing is attached while dogear is
+off, so nothing in the page can switch it back on — re-enabling is `__dogear.start()` or
+a reload. Disabling is unconditional and loses nothing: the queue is owned above the
+session, so an unsent batch survives the cycle and comes back with it. See the Decisions
+log.)*
 
 **B7 — Overlay isolation**
 - The overlay renders in a **closed** shadow root; no style crosses in either direction.
@@ -1050,6 +1065,89 @@ Keys already exist to stop exactly this class of mistake (see `QueueItem.key`).
 An in-overlay toggle with a keyboard shortcut, persisted to `localStorage`, plus
 `dogear({ enabled: false })`. Listeners are removed rather than early-returning — an
 event handler that runs and decides to do nothing is still an event handler that ran.
+
+**The kill switch is one-way in the page, because the alternative falsifies the rule —
+B6.**
+
+Detaching everything leaves nothing to switch dogear back on with: no listener can hear a
+shortcut, and no node is on screen to click. The obvious fix is to keep one keydown
+listener alive while disabled, and it is precisely the thing "detach, don't ignore"
+forbids — a handler that runs on every keystroke and decides to do nothing, in the state
+whose entire promise is that interaction testing behaves as if dogear were absent. Keeping
+it would have made the headline claim conditional and left it untestable; the assertion
+that means anything is `registry.size === 0`, and it has to be unqualified.
+
+So disabling is terminal in the page, and re-enabling is `__dogear.start()` in the console
+or a reload once the preference is cleared. The console handle has existed since B1 and is
+already how the teardown is proved by hand, so this adds an affordance rather than
+inventing one. A single console line on disable names the way back — the affordance cost
+is real and this is what keeps it from being a dead end.
+
+Note the acceptance criteria only ever say *disable*, in both clauses. The one-way reading
+was the intended one.
+
+**`enabled: false` injects nothing, rather than injecting something inert.**
+The same call the missing-git-root case already makes, and for the stronger reason: there
+is no queue-location problem here, just no reason to ship a bundle to a page that asked
+for none. No script tag, no endpoint middleware, one line in the terminal. It also settles
+precedence for free — an in-browser `localStorage` preference cannot contradict a config
+that prevented dogear from reaching the browser at all.
+
+This is **not** a sixth production-safety layer. It is a convenience switch that happens to
+be absolute; `apply: 'serve'` is still the defense, and a developer toggling this changes
+nothing about what a build contains.
+
+**The queue outlives the session, so disabling never has to refuse.**
+
+The first cut of B6 blocked the kill switch while anything was unsent. B5 had made that
+look necessary: the queue lived in the session's closure, so a teardown destroyed it, and
+disabling became the one gesture in the overlay that could silently lose work.
+
+Implementing it exposed the refusal as a symptom. The toggle lives in the review panel —
+it has to, because while idle with an empty queue dogear renders nothing at all and a
+permanently reachable control would cost B7's guarantee. But the panel is only reachable
+*from the badge*, and the badge only exists when the queue is non-empty. So the button was
+visible in exactly one state, and refused in exactly that state: **a control that could
+never succeed.**
+
+The fix is one level down. `createQueue()` moved from the session to the controller, so
+the batch survives a teardown and the rebuilt session adopts it with the badge already
+counting. Disabling is now instant, unconditional and lossless; re-enabling brings the
+batch back. The refusal, the dead-end button, and a silent data-loss path in
+`__dogear.stop()` all disappeared together.
+
+This costs neither guarantee it looks like it should. The queue is pure data — no DOM, no
+listeners — so while disabled there is still not one handler attached and not one node in
+the document. What is kept alive is a JavaScript object holding some text, which a reload
+clears exactly as it always did.
+
+One guard survives, and it is not about losing work: a submit already in flight blocks the
+toggle for the length of a localhost round trip. Teardown aborts the request, but an abort
+is client-side — the POST may already have been written, while the local items are only
+cleared on a response nobody read. Disabling there and submitting again after a re-enable
+would write the same annotations twice.
+
+The general lesson is worth keeping: *a kill switch that can decline is not one*. "Get out
+of my way" is the whole request, and a version that answers "not until you deal with your
+queue" is solving a problem the design chose to have.
+
+**`stop()` stays ephemeral; only the toggle persists.**
+`window.__dogear.stop()` has meant "tear down now" since B1 and is what makes the teardown
+provable by hand. Now that a persisted preference exists, the two could have been merged
+under one meaning of "off" — and were not, because a console teardown during a debugging
+session would then follow the developer across every future page load in that browser,
+with the cause several reloads behind them. Two verbs for two intents: `stop()` for this
+page, the toggle for this browser. Both keep the batch, since the queue moved up to the
+controller.
+
+**Discovery is a documentation problem, and is solved with words rather than with pixels.**
+Nothing is on screen while dogear is idle, so a developer who wants it gone and has never
+read anything has no in-page surface to find. The tempting fix — keep the badge visible
+always — was rejected twice over: it spends B7's guarantee, and the badge is
+`pointer-events: auto` in the bottom-right corner, which is where floating action buttons
+and chat widgets live, so it would intercept clicks in every dev session and every browser
+test. Instead the chord is named in three places that cost nothing: the panel's footer hint,
+the Disable button's tooltip, and one line in the dev-server terminal at startup.
 
 **Source resolution → attribute transform plus selector floor. Fiber walk cut.**
 The attribute is exact wherever the transform ran, which in a Vite React app is all of

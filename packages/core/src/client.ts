@@ -28,18 +28,45 @@
  */
 
 import { readConfig } from './client-config.js'
-import { init } from './init.js'
+import { createController } from './controller.js'
 import { SENTINEL } from './sentinel.js'
 
 /**
  * `window.__dogear` survives from M0, so the "did it run?" console check developers already
- * know still works — and it carries `stop`, the teardown `init()` returns, which makes B6's
- * (#13) "detached, not ignored" criterion provable by hand a milestone early.
+ * know still works — and since B1 it has carried `stop`, which is what made B6's (#13)
+ * "detached, not ignored" provable by hand a milestone early.
+ *
+ * B6 adds `start`, and it is not a convenience: disabling detaches every listener and removes
+ * every node, so **nothing in the page can turn dogear back on**. This object is the way back,
+ * which is why the disable path logs a line naming it. See the brief's Decisions log for why
+ * a surviving re-arm listener was rejected.
+ *
+ * `stop` and `start` are deliberately asymmetric. `stop()` is the B1 teardown — this page
+ * only, back on reload. `start()` clears a stored "off", because someone typing it has
+ * overridden whatever they chose last time.
  *
  * `globalThis` rather than `window`, matching how `isCurrentHostAllowed` reads
  * `globalThis.location`: core is the browser half but never assumes a DOM global exists.
  */
+const controller = createController(readConfig(import.meta.url))
+
 ;(globalThis as { __dogear?: unknown }).__dogear = {
   sentinel: SENTINEL,
-  stop: init(readConfig(import.meta.url)),
+  stop: () => {
+    controller.stop()
+  },
+  start: () => {
+    controller.start()
+  },
+  get running() {
+    return controller.running
+  },
+}
+
+// Last, so `__dogear` exists before anything the overlay does can throw — the console handle
+// is most useful in exactly the case where startup went wrong.
+if (!controller.boot()) {
+  // The one line that keeps a one-way switch from being a dead end. `info`, not `warn`:
+  // nothing is broken, and this is a state the developer chose.
+  console.info('[dogear] disabled. Run __dogear.start() to turn it back on.')
 }
