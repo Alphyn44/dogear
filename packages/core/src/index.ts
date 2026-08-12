@@ -1,16 +1,21 @@
 /**
  * dogear's browser half.
  *
- * Almost nothing lives here yet: the overlay is M1 (B1–B7) and source resolution is M2
- * (C1–C3). What exists now is the flag the packaging depends on — a way to tell this
- * module apart from the production noop — and F3's hostname guard, which has no caller
- * until B1 writes the `init()` that must consult it first.
+ * A barrel, deliberately thin. The surface is one function — {@link init} — plus F3's
+ * hostname guard, which `init` is the first caller of. The overlay it assembles is B1/B2/B7
+ * (#8, #9, #14); the in-memory queue and submit are B3–B5, and source resolution is M2.
  *
- * Every export here needs a counterpart in ./noop.ts; `index.test.ts` compares the two
- * surfaces and fails otherwise.
+ * Every *value* export here needs a counterpart in ./noop.ts; `index.test.ts` compares the
+ * two surfaces at runtime and fails otherwise. Type-only exports are erased and need none.
  */
 
 export { DEFAULT_HOSTS, isAllowedHost, isCurrentHostAllowed } from './host.js'
+export { init } from './init.js'
+// Type-only, so it needs no ./noop.ts counterpart in the value-surface sense — but noop's
+// `init` mirrors the parameter anyway, or the two builds would disagree about how many
+// arguments `init` takes. See ./noop.ts.
+export type { InitContext } from './init.js'
+export type { InitOptions, Modifier, Teardown } from './options.js'
 
 /**
  * `false` here, `true` in the noop build.

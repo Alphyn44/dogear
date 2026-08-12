@@ -1,11 +1,33 @@
 import type { Plugin } from 'vite'
 
-import { CLIENT_SOURCE } from './client.js'
+import type { ClientConfig, Modifier } from './client.js'
+import {
+  buildClientConfig,
+  clientScriptSrc,
+  MODIFIERS,
+  resolveCoreDist,
+} from './client.js'
 import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
 import { findGitRoot } from './git-root.js'
 import { SENTINEL } from './sentinel.js'
 
 export interface DogearOptions {
+  /**
+   * Turn dogear off for this project entirely. Default `true` — B6 (#13).
+   *
+   * `false` means **nothing is injected and no endpoint is served**: not an inert overlay, no
+   * script tag, no bundle sent to a page that asked for none. The same call the missing-git-
+   * root branch below already makes.
+   *
+   * It also settles precedence without any code: B6's in-browser toggle lives in
+   * `localStorage` and is per-origin, and it cannot contradict this, because a disabled plugin
+   * never puts dogear in the browser to be toggled. A committed `enabled: false` is off for
+   * everyone who clones the repo.
+   *
+   * Not a production-safety layer. `apply: 'serve'` is that, and this changes nothing about
+   * what a build contains — see the brief.
+   */
+  readonly enabled?: boolean
   /**
    * Base path for dogear's HTTP endpoints. Default `/__dogear`, matching Vite's own
    * `/__vite_ping` convention.
@@ -14,6 +36,22 @@ export interface DogearOptions {
    * options override the file, so this is the layer that wins either way.
    */
   readonly endpoint?: string
+  /**
+   * Which key arms the overlay. Default `'alt'`.
+   *
+   * Same precedence as {@link DogearOptions.endpoint}: E4 (#29) layers `.dogear/config.json`
+   * underneath this, and neither reaches past it.
+   *
+   * `'meta'` is the Windows key on Windows, where the OS claims it on keyup — it works, but
+   * it is a poor choice there.
+   */
+  readonly modifier?: Modifier
+}
+
+/** What `configureServer` learned, and `transformIndexHtml` needs. */
+interface Injection {
+  readonly endpoint: string
+  readonly config: ClientConfig
 }
 
 /**
@@ -38,6 +76,17 @@ export interface DogearOptions {
  * no path into an application bundle to defend.
  */
 export function dogear(options: DogearOptions = {}): Plugin {
+  /**
+   * Set by `configureServer`, read by `transformIndexHtml`. `undefined` means "do not
+   * inject" — either the hooks have not run, or dogear disabled itself.
+   *
+   * Safe as closure state on two counts. Vite awaits every `configureServer` hook before it
+   * installs the middlewares that serve HTML, so there is no ordering in which
+   * `transformIndexHtml` runs first. And `dogear()` returns a fresh object per call (pinned
+   * by a test in ./index.test.ts), so two Vite roots in one process get two closures.
+   */
+  let injection: Injection | undefined
+
   return {
     name: 'dogear',
     apply: 'serve',
@@ -58,7 +107,29 @@ export function dogear(options: DogearOptions = {}): Plugin {
      * build would invert the entire point of that line.
      */
     configureServer(server) {
+      // B6 (#13). Before `normaliseEndpoint`, so a project that has turned dogear off cannot
+      // be stopped by a dogear misconfiguration — `enabled: false` and a bad `endpoint` in
+      // the same config should start the dev server, not throw at it.
+      //
+      // `injection` is left undefined, so `transformIndexHtml` emits nothing. Coupling the
+      // two is the same rule the git-root branch below states: no endpoint means no tag,
+      // because a tag whose import 404s is a worse failure than absence.
+      if (options.enabled === false) {
+        server.config.logger.info(
+          '[dogear] disabled by config (`enabled: false`). No script is injected and no ' +
+            'endpoint is served.',
+        )
+        return
+      }
+
       const endpoint = normaliseEndpoint(options.endpoint ?? DEFAULT_ENDPOINT)
+      // The *normalised* endpoint, not `options.endpoint` — core POSTs to
+      // `<endpoint>/annotations`, and it has to be the path the middleware below is
+      // actually mounted at. B5 (#12).
+      const config = buildClientConfig({
+        modifier: validateModifier(options.modifier),
+        endpoint,
+      })
 
       // Resolved once: the repository root cannot move while this process lives. The
       // brief's "never cache" rule is about queue *contents*, which are re-read on every
@@ -70,15 +141,47 @@ export function dogear(options: DogearOptions = {}): Plugin {
         // Warn and stay inert rather than throw. The queue location is undefined outside a
         // repository, but taking down someone's dev server over a dev tool is the wrong
         // trade — they came here to work on their app.
+        //
+        // `injection` is left undefined, so nothing is injected either. Coupling the two is
+        // deliberate: an overlay that can point at elements but can never submit them is
+        // half a tool, and the failure would surface as a MIME error from a client.js that
+        // Vite's SPA fallback answered with index.html — which reads like a dogear bug
+        // rather than "you are not in a git repository".
         server.config.logger.warn(
-          `[dogear] no .git found above ${server.config.root}. The annotations endpoint ` +
-            'is disabled: the queue resolves from the git root, and there is no repository ' +
-            'to resolve it from.',
+          `[dogear] no .git found above ${server.config.root}. dogear is disabled: the ` +
+            'queue resolves from the git root, and there is no repository to resolve it ' +
+            'from.',
         )
         return
       }
 
-      server.middlewares.use(createEndpoint({ gitRoot, endpoint }))
+      const clientDist = resolveCoreDist()
+      if (clientDist === undefined) {
+        // Not fatal — the route answers with a stub module that says the same thing in the
+        // browser console. Said here too, because the terminal is where someone who just
+        // cloned the repo is actually looking.
+        server.config.logger.warn(
+          '[dogear] @dogear/core has not been built, so the overlay will not load. Run ' +
+            '`npm run build -w @dogear/core`.',
+        )
+      }
+
+      server.middlewares.use(createEndpoint({ gitRoot, endpoint, clientDist }))
+
+      // One line, once, naming both bindings — B6's (#13) other discovery vector.
+      //
+      // The panel's hint line only reaches someone who already has annotations queued, and
+      // the developer most likely to want the kill switch is the one who has never
+      // deliberately opened dogear at all. The terminal is where they are looking.
+      server.config.logger.info(
+        `[dogear] ready — ${config.modifier}-click an element to annotate, ` +
+          'Ctrl+Alt+D to turn dogear off.',
+      )
+
+      // Assigned last, after the endpoint that may throw and after the middleware is
+      // registered — so there is no window in which the tag is injected but the route that
+      // serves its import is not.
+      injection = { endpoint, config }
     },
 
     /**
@@ -99,16 +202,48 @@ export function dogear(options: DogearOptions = {}): Plugin {
      */
     transformIndexHtml: {
       order: 'post',
-      handler: () => [
-        {
-          tag: 'script',
-          attrs: { type: 'module', 'data-dogear': SENTINEL },
-          children: CLIENT_SOURCE,
-          injectTo: 'head-prepend',
-        },
-      ],
+      handler: () =>
+        injection === undefined
+          ? []
+          : [
+              {
+                tag: 'script',
+                attrs: {
+                  type: 'module',
+                  'data-dogear': SENTINEL,
+                  // `src`, with no inline body at all — F4 (#34). A strict
+                  // `script-src 'self'` blocks inline execution, and dogear failed silently
+                  // with a console error that read like the host app's own bug. An external
+                  // same-origin script needs no nonce, so dogear stays out of the host's CSP.
+                  src: clientScriptSrc(injection.endpoint, injection.config),
+                },
+                injectTo: 'head-prepend',
+              },
+            ],
     },
   }
+}
+
+/**
+ * Reject a bad `modifier` loudly, at config time.
+ *
+ * The mirror image of core's `resolveOptions`, which falls back to the default instead.
+ * Same value, two audiences: here it is a developer reading a terminal while their dev
+ * server starts, where a typo should be named; there it is a page load in a browser, where a
+ * dev tool throwing has broken the app it exists to help inspect.
+ *
+ * Validated in `configureServer` rather than in the factory, for the same reason
+ * `normaliseEndpoint` is: a misconfigured dev tool must not be able to take down a
+ * production build. `apply: 'serve'` already excludes the plugin from one, and throwing from
+ * the factory would run before that had a chance to matter.
+ */
+function validateModifier(modifier: Modifier | undefined): Modifier | undefined {
+  if (modifier === undefined || MODIFIERS.includes(modifier)) return modifier
+
+  throw new Error(
+    `dogear: modifier must be one of ${MODIFIERS.join(', ')}, received ` +
+      JSON.stringify(modifier),
+  )
 }
 
 export default dogear

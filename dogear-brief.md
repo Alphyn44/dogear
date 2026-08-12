@@ -455,6 +455,14 @@ Every resolved site carries a `via` field so the agent knows how much to trust i
 }
 ```
 
+`note` is optional — one instruction applying to the whole batch, typed in the review
+panel. **The server stamps it onto every item in the batch** rather than storing it once
+against the batch: the queue file has no batch grouping, and every operation downstream
+of it is per-item (D2 resolves, D5 flags, D6 prunes), so a batch-scoped record would be
+orphaned by the first resolve. It is stamped after the client's own fields and before the
+four server-owned ones, so a batch note wins over a stray per-item `note` and still
+cannot forge `id`/`status`/`createdAt`/`resolvedAt`.
+
 Response: `{ "ok": true, "written": 3, "pending": 5, "queuePath": ".dogear/queue.json" }`
 
 ### HTTP endpoints
@@ -465,7 +473,9 @@ matching Vite's own `/__vite_ping` convention):
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/__dogear/annotations` | Submit a batch |
-| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) |
+| `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
+| `GET` | `/__dogear/client.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
+| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. Left here as a known loose end rather than deleted, in case D5 or E5 wants it |
 | `POST` | `/__dogear/prune` | Drop resolved items |
 
 ### MCP tools
@@ -514,6 +524,7 @@ instruction, since a pasting user has no MCP server.
 ```json
 {
   "version": 1,
+  "enabled": true,
   "modifier": "alt",
   "endpoint": "/__dogear",
   "transform": true,
@@ -534,6 +545,14 @@ instruction, since a pasting user has no MCP server.
 
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
 in `~/.dogear/config.json` and lose to both.
+
+`enabled` is the repo-wide form of B6's kill switch, and it sits at the top of that same
+precedence chain: `dogear({ enabled: false })` beats the file, which beats the default. It
+is a **separate axis from B6's in-browser toggle**, which is per-origin and lives in
+`localStorage` — a committed `"enabled": false` turns dogear off for everyone who clones
+the repo, and no amount of clicking in one person's browser overrides it, because a
+disabled plugin never injects the script at all. B6 ships the plugin option; E4 (#29)
+wires the file underneath it.
 
 `hosts` entries come in three shapes — an exact hostname, a `*.suffix` wildcard, or an
 IPv4 CIDR range — and the list *replaces* the defaults rather than extending them. See
@@ -656,6 +675,9 @@ agent's context.
 **B5 — Batch submit**
 - Submitting POSTs all queued items and clears the local queue on success.
 - A failed POST keeps the local queue intact and surfaces the error.
+- The review panel carries an optional **note** — one instruction that applies to the
+  whole batch — which is stamped onto every annotation in it and rendered by the shared
+  formatter.
 
 **B6 — Kill switch**
 - A toggle and a keyboard shortcut disable dogear entirely; the preference persists
@@ -664,9 +686,23 @@ agent's context.
   behaves exactly as if dogear were absent.
 - `dogear({ enabled: false })` has the same effect from config.
 
+*(The toggle and the shortcut are **disable-only**. Nothing is attached while dogear is
+off, so nothing in the page can switch it back on — re-enabling is `__dogear.start()` or
+a reload. Disabling is unconditional and loses nothing: the queue is owned above the
+session, so an unsent batch survives the cycle and comes back with it. See the Decisions
+log.)*
+
 **B7 — Overlay isolation**
-- The overlay renders in a shadow root; no global styles leak in or out.
-- It never appears in the user's own DOM queries or snapshot tests.
+- The overlay renders in a **closed** shadow root; no style crosses in either direction.
+- Nothing it renders lives inside `<body>`, and its host tag is a name no app query asks for.
+- **While idle and the queue is empty it has no nodes in the document at all** — the host is
+  inserted when something becomes visible and removed when nothing is.
+
+*(The second criterion originally read "it never appears in the user's own DOM queries or
+snapshot tests". See the Decisions log — that claim was vacuous for component tests and
+unachievable for browser tests, and it was amended during B7. The third gained its
+"and the queue is empty" clause during B3, when the pending badge became the first thing
+dogear renders that outlives a gesture — also in the Decisions log.)*
 
 ### Epic C — Localization (M2)
 
@@ -845,10 +881,273 @@ for an item that is still, in every other sense, pending. Settled during A3, whe
 formatter that will eventually render the marker was written; free then because nothing
 produced `stale`, and expensive once D5 has code assuming a stored value.
 
+**Overlay isolation → what B7 can actually promise. Settled during B7 by discovering the
+original criterion was false in both directions.**
+
+"It never appears in the user's own DOM queries or snapshot tests" covers two scenarios and
+does not survive either. A **component snapshot test** never sees dogear at all: the script
+reaches a page only through the dev server's `transformIndexHtml`, a jsdom component test
+loads no HTML document, and `@dogear/core` is in nobody's import graph — A1 already
+guaranteed this, so B7 was claiming credit for it. A **browser test driving the real dev
+server** is the case where B7 earns its keep, and there "never appears" is unachievable:
+anything rendered is a node, and `document.querySelectorAll('*')` finds it wherever it sits.
+
+So the criterion is now three narrower claims that are all true and all useful. A **closed**
+shadow root, so `host.shadowRoot` is `null` and nothing the app queries can reach in. The
+host **outside `<body>`**, appended to `documentElement`, which defeats the probe that
+actually matters — `document.body` serialization, what Testing Library and most snapshot
+helpers use. And **zero nodes while idle**, which is what does most of the work: a test run
+that never holds the modifier sees a document byte-identical to one dogear was never loaded
+into, whatever it queries.
+
+The host is `<dogear-overlay>` rather than `<div>` because `document.querySelectorAll('div')`
+is a query real apps make. It is not a registered custom element — no upgrade, no lifecycle,
+nothing in the registry to collide with, and an unknown element is `display: inline` exactly
+like an unstyled div. The one risk taken is the placement: DOM insertion is not HTML parsing,
+so the node stays a child of `<html>` and renders there, but it is off the beaten path. The
+mount target is a single line in `overlay.ts` if a browser is ever found to mishandle it.
+
+**Zero nodes while idle → narrowed to "and the queue is empty", by B3's pending badge.**
+
+B7 flagged this as the one case that could weaken its third guarantee, and B3 is where it
+came due. A badge that only appears while the modifier is held cannot tell you that you are
+carrying eight comments, which is most of what a pending count is for — and batching across
+several pages is the entire premise of B3. So the badge keeps the host mounted, and the
+guarantee reads "zero nodes while idle **and the queue is empty**".
+
+What the guarantee was written to protect is untouched. It exists so *a test run that never
+touches dogear sees a document byte-identical to one dogear was never loaded into* — and a
+non-empty queue can only exist because someone modifier-clicked and typed. The queue is
+in-memory, so a reload empties it; there is no path by which a test that ignores dogear
+inherits a mounted host. Teardown is unaffected and separately tested: `stop()` restores the
+document byte-for-byte with a non-empty queue.
+
+The rejected alternative was a timed flash — mount on queue, show the count, unmount a second
+later. It buys a narrower word for "idle" at the price of a count that is knowable at some
+moments and not others, which is worse than either honest option for someone trying to
+remember what they have queued.
+
+**Nothing is injected inline, because a strict CSP blocks it — F4.**
+dogear used to bootstrap from an inline `<script>` that imported the served bundle and called
+`init` with a config literal. A project serving `script-src 'self' 'nonce-…' 'strict-dynamic'`
+in dev — increasingly common — blocks inline execution outright, so dogear did nothing and the
+only symptom was a console error most developers would attribute to their own app. Found by
+hand against an unrelated frontend; `examples/react-app` has no CSP, so nothing in M1 could
+have caught it.
+
+The tag is now `<script type="module" src="<endpoint>/client.js?config=…">` with no body. An
+external same-origin script satisfies `'self'`, so no nonce is needed and dogear stays out of
+the host application's CSP configuration entirely — better than reading Vite's nonce and
+stamping it on the tag, which would couple dogear to every host framework's CSP plumbing.
+
+Three consequences. **Config moves onto the URL**, as a single JSON parameter rather than one
+per field, so the decoded object stays structurally identical to the plugin's and B5 adds
+`endpoint` without touching the transport; core reads it from `import.meta.url`, since a
+module script has `document.currentScript === null`. **Core gains a dev-client entry**, because
+with nothing inline there is no caller — `index.ts` cannot self-start without becoming a
+library that mounts an overlay when imported. **The sentinel keeps two carriers**: that entry
+imports the constant directly, which `index.ts` may not.
+
+**Client delivery → the plugin serves core's bundle; the inline tag is just the call.**
+M0 inlined its whole payload in the `<script>`. The overlay is far too large for that: it
+would be re-sent inside every HTML response, with no caching, no sourcemap, and a `</script>`
+in the source silently ending the tag. Instead the plugin serves the built bundle at
+`<endpoint>/client.js` and injects one inline module that imports `init` and calls it with a
+JSON config literal.
+
+The config crosses as a literal rather than a query string or a data attribute because a
+module script has `document.currentScript === null` — the attribute route does not exist —
+and a literal is the only form that stays typed on the plugin side. The sentinel is still
+carried twice, in the tag attribute and the body, for the reason A1 gave.
+
+The plugin reaches the bundle by resolving `@dogear/core/package.json` and joining
+`dist/index.js`. Resolving the package *name* from Node names no `development` condition and
+lands on `dist/noop.js`, the inert build. A dedicated `./dev` subpath was rejected: it would
+be a second live entry point any bundler could follow into a production graph, which is
+precisely what layer 3 exists to close. A manifest is not code.
+
+**No git root → no injection at all, not a disabled overlay.**
+The endpoint was already skipped outside a repository, since the queue has nowhere to
+resolve to. B1 extends that to the script tag. dogear that can point at elements and never
+submit them is half a tool, and the failure mode is worse than absence: the injected
+`client.js` import would be answered by Vite's SPA fallback with `index.html`, producing a
+MIME-type module error naming a URL the developer has never seen — which reads like a dogear
+bug rather than "you are not in a git repository". One warning in the terminal, nothing on
+the page.
+
+**`init()` returns its teardown, so B6's architecture lands with B1.**
+"Detach, don't ignore" is a claim about *every* listener, which makes it structural rather
+than a feature: one listener attached ad hoc falsifies it, and finding that one by audit is
+exactly the retrofit B6 should not have to do. So B1 ships the registry — a single object
+every listener goes through, with a source test failing any module outside it that calls
+`addEventListener` — and `init()` returns the function that empties it. B6 adds a toggle, a
+shortcut, and `localStorage` on top; it touches nothing below. @dogear/vite exposes the
+result as `window.__dogear.stop`, which makes the criterion provable by hand in a console a
+milestone early.
+
+**`modifier` is a plugin option now, with E4 layering the config file underneath.**
+The plugin already has to serialise config into the injected `init(...)` call, so the
+plumbing exists either way; adding the field costs one line and gives the config-passing path
+a tested consumer instead of shipping it unexercised. The validation is deliberately
+asymmetric: the *plugin* throws on an unknown modifier, at config time, in a terminal, where
+a typo should be named — while *core* falls back to the default, because a dev tool that
+throws during page load has broken the app it exists to help you inspect. Same value, two
+audiences, two right answers.
+
+**The browser has its own claim on the modifier key, and dogear only contests it while
+visibly working.**
+Alt is not a free key. On Windows, Firefox reveals its menu bar on the modifier's *keydown*,
+while Chrome and Edge activate their menu or toolbar on the *keyup* — which is why cancelling
+one and not the other suppresses Firefox and neither Chromium. Both are cancelled now, and
+both only while dogear is actually outlining something. Cancelling unconditionally would take
+the browser's own menu key away from the user for as long as the page had focus, which is not
+dogear's to take; a lone Alt press on a page dogear is idle on still reaches the browser.
+
+The same investigation removed a `window` blur listener that disarmed the overlay. It was
+added to catch Alt+Tab delivering a keydown with no keyup, and it is the wrong trade here:
+focus moving to browser chrome is a *direct consequence of the key dogear is bound to*, so the
+outline could be raised and torn down in the same breath. Dropping it is nearly free, because
+nothing load-bearing reads the armed flag — every suppression handler reads the modifier off
+its own event, so a stuck flag cannot eat a click; the outline is cosmetic and the next
+pointer or key event re-derives the state; and `visibilitychange` still covers a hidden tab.
+Recorded honestly: the flash-and-vanish failure was **reasoned from the mechanism and never
+reproduced**. Synthetic input over CDP goes straight to the renderer and bypasses browser
+chrome, so no automated harness available here can raise it, and manual testing across Edge,
+Chrome, and Firefox showed the outline appearing and staying. The listener is gone on the
+argument, not on an observed defect.
+
+**The batch note is stamped onto every item, not stored once against the batch — B5.**
+The note was in the POST body from the first draft and in no story's acceptance criteria,
+and `validateBatch` was quietly dropping it. Folded into B5, because the review panel it
+has to live in is the one B5 builds.
+
+Per-item duplication is the deliberate choice. The queue file is `{version, updatedAt,
+items}` with no batch grouping, and adding one would be a schema change that every reader
+— the hook, D1's MCP server, the CLI's parity test — has to learn. The stronger argument
+is lifecycle: D2 resolves, D5 flags and D6 prunes **per item**, so a batch-scoped note is
+orphaned the moment its last item is pruned, and an item that outlives its siblings loses
+the instruction that explained it. Self-contained items are what append-with-status is
+built on; the note has to be one of their fields or it is not durable.
+
+The formatter renders it in the same ticket. A field that lands in `queue.json` and is
+never rendered reaches no agent, which is the "everything works through MCP" rule failing
+in its quietest form — and `format.ts` is shared by the hook, the MCP server and the
+clipboard export, so teaching it once covers all three.
+
+**A submit is confirmed by a badge that dismisses itself, so B7's guarantee stands
+unamended.**
+Clearing the queue on success leaves the panel with nothing to show, and something has to
+say the write happened — `queue.json` is not on screen. Keeping the panel open with a
+receipt was the informative option and it would have cost B7 its third criterion a second
+time: nodes mounted, queue empty, no interaction in progress. So the panel closes and the
+badge shows `3 sent` for a beat before reverting to the count and unmounting itself.
+
+This is close enough to the timed flash rejected under "zero nodes while idle" to be worth
+separating. That rejection was about the **pending count** — a number knowable at some
+moments and not others is worse than either honest option, because you cannot check what
+you are carrying. A submit confirmation is one-shot and answers a question that was asked
+a moment ago by pressing a button; there is nothing to come back and re-read.
+
+**A failed submit surfaces in the overlay and keeps every item.**
+The local queue is the only copy, so it is cleared on a confirmed 200 and on nothing else.
+Failure puts a normalised one-line reason in the panel footer with the queue intact and
+Submit re-enabled, and the detail on `console.error` — the overlay row because "surfaces
+the error" is otherwise only true with DevTools open, the console line because a 500 is a
+server-side problem that needs more than one line. Pressing Submit again is the retry; a
+backoff would be machinery for a localhost round trip.
+
+The clear is keyed to the **item keys that were sent**, not to the queue as a whole.
+Capturing an element closes the panel, so a modifier-click during an in-flight POST adds
+an item that was never submitted — and clearing wholesale would delete it on success.
+Keys already exist to stop exactly this class of mistake (see `QueueItem.key`).
+
 **Kill switch → detach, don't ignore.**
 An in-overlay toggle with a keyboard shortcut, persisted to `localStorage`, plus
 `dogear({ enabled: false })`. Listeners are removed rather than early-returning — an
 event handler that runs and decides to do nothing is still an event handler that ran.
+
+**The kill switch is one-way in the page, because the alternative falsifies the rule —
+B6.**
+
+Detaching everything leaves nothing to switch dogear back on with: no listener can hear a
+shortcut, and no node is on screen to click. The obvious fix is to keep one keydown
+listener alive while disabled, and it is precisely the thing "detach, don't ignore"
+forbids — a handler that runs on every keystroke and decides to do nothing, in the state
+whose entire promise is that interaction testing behaves as if dogear were absent. Keeping
+it would have made the headline claim conditional and left it untestable; the assertion
+that means anything is `registry.size === 0`, and it has to be unqualified.
+
+So disabling is terminal in the page, and re-enabling is `__dogear.start()` in the console
+or a reload once the preference is cleared. The console handle has existed since B1 and is
+already how the teardown is proved by hand, so this adds an affordance rather than
+inventing one. A single console line on disable names the way back — the affordance cost
+is real and this is what keeps it from being a dead end.
+
+Note the acceptance criteria only ever say *disable*, in both clauses. The one-way reading
+was the intended one.
+
+**`enabled: false` injects nothing, rather than injecting something inert.**
+The same call the missing-git-root case already makes, and for the stronger reason: there
+is no queue-location problem here, just no reason to ship a bundle to a page that asked
+for none. No script tag, no endpoint middleware, one line in the terminal. It also settles
+precedence for free — an in-browser `localStorage` preference cannot contradict a config
+that prevented dogear from reaching the browser at all.
+
+This is **not** a sixth production-safety layer. It is a convenience switch that happens to
+be absolute; `apply: 'serve'` is still the defense, and a developer toggling this changes
+nothing about what a build contains.
+
+**The queue outlives the session, so disabling never has to refuse.**
+
+The first cut of B6 blocked the kill switch while anything was unsent. B5 had made that
+look necessary: the queue lived in the session's closure, so a teardown destroyed it, and
+disabling became the one gesture in the overlay that could silently lose work.
+
+Implementing it exposed the refusal as a symptom. The toggle lives in the review panel —
+it has to, because while idle with an empty queue dogear renders nothing at all and a
+permanently reachable control would cost B7's guarantee. But the panel is only reachable
+*from the badge*, and the badge only exists when the queue is non-empty. So the button was
+visible in exactly one state, and refused in exactly that state: **a control that could
+never succeed.**
+
+The fix is one level down. `createQueue()` moved from the session to the controller, so
+the batch survives a teardown and the rebuilt session adopts it with the badge already
+counting. Disabling is now instant, unconditional and lossless; re-enabling brings the
+batch back. The refusal, the dead-end button, and a silent data-loss path in
+`__dogear.stop()` all disappeared together.
+
+This costs neither guarantee it looks like it should. The queue is pure data — no DOM, no
+listeners — so while disabled there is still not one handler attached and not one node in
+the document. What is kept alive is a JavaScript object holding some text, which a reload
+clears exactly as it always did.
+
+One guard survives, and it is not about losing work: a submit already in flight blocks the
+toggle for the length of a localhost round trip. Teardown aborts the request, but an abort
+is client-side — the POST may already have been written, while the local items are only
+cleared on a response nobody read. Disabling there and submitting again after a re-enable
+would write the same annotations twice.
+
+The general lesson is worth keeping: *a kill switch that can decline is not one*. "Get out
+of my way" is the whole request, and a version that answers "not until you deal with your
+queue" is solving a problem the design chose to have.
+
+**`stop()` stays ephemeral; only the toggle persists.**
+`window.__dogear.stop()` has meant "tear down now" since B1 and is what makes the teardown
+provable by hand. Now that a persisted preference exists, the two could have been merged
+under one meaning of "off" — and were not, because a console teardown during a debugging
+session would then follow the developer across every future page load in that browser,
+with the cause several reloads behind them. Two verbs for two intents: `stop()` for this
+page, the toggle for this browser. Both keep the batch, since the queue moved up to the
+controller.
+
+**Discovery is a documentation problem, and is solved with words rather than with pixels.**
+Nothing is on screen while dogear is idle, so a developer who wants it gone and has never
+read anything has no in-page surface to find. The tempting fix — keep the badge visible
+always — was rejected twice over: it spends B7's guarantee, and the badge is
+`pointer-events: auto` in the bottom-right corner, which is where floating action buttons
+and chat widgets live, so it would intercept clicks in every dev session and every browser
+test. Instead the chord is named in three places that cost nothing: the panel's footer hint,
+the Disable button's tooltip, and one line in the dev-server terminal at startup.
 
 **Source resolution → attribute transform plus selector floor. Fiber walk cut.**
 The attribute is exact wherever the transform ran, which in a Vite React app is all of
@@ -916,9 +1215,18 @@ to mirror.
 
 Which `dist/` is therefore not one answer but three: the consumer bundle
 (`examples/react-app/dist`) and `packages/core/dist/noop.js` are scanned;
-`packages/core/dist/index.js` is not, since it legitimately carries the sentinel. The
+`packages/core/dist/client.js` is not, since it legitimately carries the sentinel. The
 manifest is checked too — dogear in `dependencies` rather than `devDependencies` is a leak
 the content grep cannot see.
+
+*(Corrected during F4. This sentence named `dist/index.js` as the file that legitimately
+carries the sentinel, and that was never true: `sentinel.ts` is not imported by `index.ts`, so
+the literal never reached the library bundle. Nothing was scanning the wrong file — the
+conclusion was right and the reason was wrong — but it mattered once F4 asked whether the
+served bundle could carry the sentinel. `index.js` **cannot**: making it do so would need an
+export, which the parity test would force `noop.ts` to mirror, which ships the literal into
+every correct production build. The dev-client entry `client.ts` can, because it is in no
+exports map and has no noop counterpart.)*
 
 **Sentinel in `@dogear/vite` → a second copy behind a drift test, not an import from core.**
 A1 makes the plugin the sentinel's first emitter, which raises the question of how the

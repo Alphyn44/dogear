@@ -34,7 +34,12 @@ export interface AnnotationInput {
 }
 
 export type Validation =
-  | { readonly ok: true; readonly batch: readonly AnnotationInput[] }
+  | {
+      readonly ok: true
+      readonly batch: readonly AnnotationInput[]
+      /** The batch-wide note, absent when there was none or it was only whitespace. */
+      readonly note: string | undefined
+    }
   | { readonly ok: false; readonly errors: readonly string[] }
 
 /** The only version of the POST contract that exists. */
@@ -59,12 +64,24 @@ export function validateBatch(body: unknown): Validation {
     return { ok: false, errors: ['body must be a JSON object'] }
   }
 
-  const { version, batch } = body as { version?: unknown; batch?: unknown }
+  const {
+    version,
+    batch,
+    note: rawNote,
+  } = body as { version?: unknown; batch?: unknown; note?: unknown }
 
   if (version !== PROTOCOL_VERSION) {
     errors.push(
       `version must be ${PROTOCOL_VERSION}, received ${JSON.stringify(version)}`,
     )
+  }
+
+  // Optional, but a *present* note must be a string. Rejecting rather than coercing, for
+  // the same reason the comment check is strict: the note is stamped onto every item in the
+  // batch, so `String(someObject)` would write "[object Object]" onto all of them and the
+  // client would have no way to know it had happened.
+  if (rawNote !== undefined && typeof rawNote !== 'string') {
+    errors.push(`note must be a string when present, received ${JSON.stringify(rawNote)}`)
   }
 
   if (!Array.isArray(batch)) {
@@ -86,23 +103,57 @@ export function validateBatch(body: unknown): Validation {
 
   if (errors.length > 0) return { ok: false, errors }
 
-  return { ok: true, batch: batch as readonly AnnotationInput[] }
+  // Whitespace-only reads as absent. The client already omits an empty note, so this is for
+  // a hand-written `curl` batch — and one representation of "no instruction" in the queue
+  // file is worth more than faithfully recording that someone typed three spaces.
+  const trimmed = typeof rawNote === 'string' ? rawNote.trim() : ''
+
+  return {
+    ok: true,
+    batch: batch as readonly AnnotationInput[],
+    note: trimmed === '' ? undefined : trimmed,
+  }
 }
 
 /**
  * Stamp server-owned fields over a validated input.
  *
- * The spread order matters: client fields first, server fields second, so a batch that
- * arrives carrying `"status": "resolved"` cannot write itself into the queue pre-resolved.
+ * The spread order matters, and it is now three deep: client fields first, then the batch
+ * note, then the four server-owned fields. So a batch that arrives carrying
+ * `"status": "resolved"` cannot write itself into the queue pre-resolved, and a batch note
+ * wins over a per-item `note` the client had no business sending — while still being unable
+ * to forge identity or lifecycle.
+ *
+ * The note is copied onto **every** item rather than stored once against the batch. The
+ * queue file has no batch grouping, and everything downstream is per-item: D2 resolves, D5
+ * flags and D6 prune one annotation at a time, so a batch-scoped record would be orphaned
+ * by the first resolve. See the brief's Decisions log.
  */
-export function stampAnnotation(input: AnnotationInput, now = new Date()): Annotation {
+export function stampAnnotation(
+  input: AnnotationInput,
+  { note, now = new Date() }: StampOptions = {},
+): Annotation {
   return {
     ...input,
+    ...(note === undefined ? {} : { note }),
     id: uuidv7(now.getTime()),
     status: 'pending',
     createdAt: now.toISOString(),
     resolvedAt: null,
   }
+}
+
+/**
+ * An options bag rather than positional parameters, because `now` was already the second
+ * argument and B5 needed to get in front of it. Positionally that reads
+ * `stampAnnotation(input, undefined, fixedDate)` at every test call site — and C4 (#18) has
+ * `origin` and `app` to stamp next, which would make it worse. Named from the start instead.
+ */
+export interface StampOptions {
+  /** Copied onto the annotation. Batch-wide; see {@link stampAnnotation}. */
+  readonly note?: string
+  /** Injected by tests so the UUIDv7 timestamp and `createdAt` are deterministic. */
+  readonly now?: Date
 }
 
 /**

@@ -3,7 +3,10 @@
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["node"],
+    // `vite/client` is what declares `*.css` as a module. Without it the stylesheet import
+    // in main.tsx fails `npm run typecheck:example`, which is a build-dependent target and
+    // therefore the last place anyone would look.
+    "types": ["node", "vite/client"],
 
     // Bundler resolution rather than the base's nodenext: this app is bundled by
     // Vite, never run by Node. `module: preserve` is the pairing tsc requires.

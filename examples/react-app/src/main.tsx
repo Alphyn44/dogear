@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 // Extensionless, unlike the packages: this app uses bundler resolution, where Vite
 // resolves the extension. The packages use nodenext, which requires the explicit `.js`.
 import { App } from './App'
+import './app.css'
 
 const container = document.getElementById('root')
 if (container === null) {

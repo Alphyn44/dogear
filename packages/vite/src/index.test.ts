@@ -1,9 +1,114 @@
-import type { HtmlTagDescriptor } from 'vite'
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-import { CLIENT_SOURCE } from './client.js'
+import type { HtmlTagDescriptor, Plugin, ViteDevServer } from 'vite'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { readConfig } from '../../core/src/client-config.js'
 import { dogear } from './index.js'
 import { SENTINEL } from './sentinel.js'
+
+/**
+ * B1 (#8) turned `transformIndexHtml` into a *conditional* hook: it injects only after
+ * `configureServer` has found a git root, because dogear without a queue destination can
+ * point at elements and never submit them. That means these tests must drive
+ * `configureServer` first — a plugin whose hooks have not run injects nothing, which is
+ * itself asserted below.
+ *
+ * The fake server is acceptable here and nowhere else: this file has always asserted the
+ * *descriptor* dogear returns, and ./inject.test.ts is the real-dev-server counterweight
+ * that proves what a browser is actually served.
+ */
+
+let root: string
+
+beforeAll(() => {
+  root = mkdtempSync(join(tmpdir(), 'dogear-plugin-'))
+  // A plain FILE, not a directory. `findGitRoot` checks with `existsSync` rather than
+  // `isDirectory` precisely because worktrees and submodules use a `.git` file, so the
+  // fixture exercises the shape that would otherwise never be covered.
+  writeFileSync(join(root, '.git'), 'gitdir: /elsewhere/.git/worktrees/fixture')
+})
+
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true })
+})
+
+/** What a run of `configureServer` did, beyond what it returned. */
+interface ServerLog {
+  readonly warnings: string[]
+  readonly infos: string[]
+  /** How many middlewares were registered. B6 (#13) asserts this is zero when disabled. */
+  readonly middlewares: unknown[]
+}
+
+/** The smallest thing `configureServer` reads. Cast, because Vite's type is enormous. */
+function fakeServer(serverRoot: string, log: ServerLog): ViteDevServer {
+  return {
+    config: {
+      root: serverRoot,
+      logger: {
+        warn: (message: string) => log.warnings.push(message),
+        info: (message: string) => log.infos.push(message),
+      },
+    },
+    middlewares: {
+      use: (handler: unknown) => log.middlewares.push(handler),
+    },
+  } as unknown as ViteDevServer
+}
+
+/** Run `configureServer` and report what it did as well as the plugin it did it to. */
+function run(
+  options: Parameters<typeof dogear>[0] = {},
+  serverRoot = root,
+): { plugin: Plugin; log: ServerLog } {
+  const log: ServerLog = { warnings: [], infos: [], middlewares: [] }
+  const plugin = dogear(options)
+  const hook = plugin.configureServer
+  if (typeof hook !== 'function') {
+    throw new Error('expected configureServer in function form')
+  }
+
+  // Vite calls it with the plugin context as `this`; dogear reads none of it.
+  ;(hook as (server: ViteDevServer) => void).call(
+    plugin as never,
+    fakeServer(serverRoot, log),
+  )
+
+  return { plugin, log }
+}
+
+function configured(
+  options: Parameters<typeof dogear>[0] = {},
+  serverRoot = root,
+): Plugin {
+  return run(options, serverRoot).plugin
+}
+
+function injectedTags(plugin: Plugin): HtmlTagDescriptor[] {
+  const hook = plugin.transformIndexHtml
+  if (typeof hook !== 'object') {
+    throw new Error('expected transformIndexHtml in object form, so `order` is explicit')
+  }
+
+  // Vite declares the handler with a plugin-context `this` and `(html, ctx)` parameters.
+  // dogear's implementation reads none of them — it injects the same tag on every HTML
+  // entry — so this narrows the declared type to the signature actually written. The
+  // assertions below are what hold that claim honest; a handler that started reading its
+  // arguments would return something these tests reject.
+  const handler = hook.handler as unknown as () => HtmlTagDescriptor[]
+
+  return handler()
+}
+
+/** The injected tag's `src`, which is where the config now rides. */
+function injectedSrc(plugin: Plugin): string {
+  const src = injectedTags(plugin)[0]?.attrs?.['src']
+  if (typeof src !== 'string') throw new Error('expected a script src')
+  return src
+}
 
 describe('dogear()', () => {
   it.each([
@@ -27,25 +132,21 @@ describe('dogear()', () => {
   })
 
   it('returns a fresh object per call, so two Vite roots cannot share mutable state', () => {
+    // Now load-bearing rather than hygienic: the git root and client config live in a
+    // closure over this object, so a shared instance would let one Vite root's decision
+    // about whether to inject leak into another's.
     expect(dogear()).not.toBe(dogear())
   })
+
+  it('rejects an unknown modifier by name, at config time', () => {
+    // Thrown here rather than defaulted, unlike core's resolveOptions — the audience is a
+    // developer watching a dev server start, and a silently ignored typo would leave them
+    // pressing a key that does nothing.
+    expect(() => configured({ modifier: 'hyper' as never })).toThrow(
+      /alt, ctrl, meta, shift/,
+    )
+  })
 })
-
-function injectedTags(): HtmlTagDescriptor[] {
-  const hook = dogear().transformIndexHtml
-  if (typeof hook !== 'object') {
-    throw new Error('expected transformIndexHtml in object form, so `order` is explicit')
-  }
-
-  // Vite declares the handler with a plugin-context `this` and `(html, ctx)` parameters.
-  // dogear's implementation reads none of them — it injects the same tag on every HTML
-  // entry — so this narrows the declared type to the signature actually written. The
-  // assertions below are what hold that claim honest; a handler that started reading its
-  // arguments would return something these tests reject.
-  const handler = hook.handler as unknown as () => HtmlTagDescriptor[]
-
-  return handler()
-}
 
 describe('transformIndexHtml (A1)', () => {
   it('runs in the post bucket, so the inline script is emitted verbatim', () => {
@@ -56,7 +157,7 @@ describe('transformIndexHtml (A1)', () => {
   })
 
   it('injects exactly one tag — a second dogear script would double every handler in B1', () => {
-    expect(injectedTags()).toHaveLength(1)
+    expect(injectedTags(configured())).toHaveLength(1)
   })
 
   it.each([
@@ -70,13 +171,13 @@ describe('transformIndexHtml (A1)', () => {
       property: 'injectTo',
       read: (tag: HtmlTagDescriptor) => tag.injectTo,
       expected: 'head-prepend',
-      why: 'dogear runs before the app module, which is where B1 will need it',
+      why: 'dogear runs before the app module, so its listeners attach first',
     },
     {
       property: 'attrs.type',
       read: (tag: HtmlTagDescriptor) => tag.attrs?.['type'],
       expected: 'module',
-      why: 'B1 replaces the body with a module import of @dogear/core',
+      why: 'the body is an ES module importing @dogear/core from the dev server',
     },
     {
       property: 'attrs.data-dogear',
@@ -85,19 +186,114 @@ describe('transformIndexHtml (A1)', () => {
       why: 'the attribute is what carries the sentinel into served HTML',
     },
   ])('sets $property to "$expected" — $why', ({ read, expected }) => {
-    const tag = injectedTags()[0]
+    const tag = injectedTags(configured())[0]
     expect(tag).toBeDefined()
     expect(read(tag as HtmlTagDescriptor)).toBe(expected)
   })
 
-  it('carries the sentinel in the script body as well as the attribute', () => {
-    // Two carriers, because which one a hypothetical leak would preserve is exactly the
-    // thing that cannot be predicted, and check:leak is a plain substring scan.
-    expect(injectedTags()[0]?.children).toBe(CLIENT_SOURCE)
-    expect(CLIENT_SOURCE).toContain(SENTINEL)
+  it('emits no inline body at all — the criterion F4 (#34) rests on', () => {
+    // A strict `script-src 'self'` blocks inline execution outright, and dogear failed
+    // silently with a console error that read like the host app's own bug. Anything back in
+    // `children` reintroduces exactly that, on every project with a CSP.
+    expect(injectedTags(configured())[0]?.children).toBeUndefined()
   })
 
-  it('never emits a closing script tag, which would end the element early', () => {
-    expect(CLIENT_SOURCE).not.toContain('</script')
+  it('loads the client from the served endpoint', () => {
+    expect(injectedSrc(configured())).toContain('/__dogear/client.js?')
   })
+
+  it('passes a configured modifier through on the query string', () => {
+    // Decoded with core's real reader rather than a string match, so this fails if either
+    // half of the contract drifts.
+    expect(
+      readConfig(`http://localhost${injectedSrc(configured({ modifier: 'ctrl' }))}`),
+    ).toEqual({ modifier: 'ctrl', endpoint: '/__dogear' })
+  })
+
+  it('follows a custom endpoint into the src', () => {
+    expect(injectedSrc(configured({ endpoint: '/__x' }))).toContain('/__x/client.js?')
+  })
+
+  it('injects nothing when the project turned dogear off — B6 (#13)', () => {
+    // Not an inert overlay: no tag, so no bundle reaches a page that asked for none.
+    expect(injectedTags(configured({ enabled: false }))).toHaveLength(0)
+  })
+
+  it('tells core where to POST — B5 (#12)', () => {
+    // Both halves of the same value: the tag's path, and the config core reads its submit
+    // target from. They come from one `normaliseEndpoint` call, and they have to agree or a
+    // submit 404s into Vite's SPA fallback, which answers 200 with index.html.
+    const src = injectedSrc(configured({ endpoint: '/__x/' }))
+
+    expect(src).toContain('/__x/client.js?')
+    expect(readConfig(`http://localhost${src}`).endpoint).toBe('/__x')
+  })
+
+  it('injects nothing before configureServer has run', () => {
+    // Not a hypothetical ordering worry — it is the state every plugin object starts in, and
+    // the reason `injection` is `undefined` rather than eagerly built in the factory.
+    expect(injectedTags(dogear())).toHaveLength(0)
+  })
+
+  it('injects nothing when there is no git root', () => {
+    // Decision: half-present is worse than absent. An overlay that can point at elements but
+    // can never submit them is not a working tool, and the failure would surface as a MIME
+    // error from a client.js that Vite's SPA fallback answered with index.html.
+    const outside = mkdtempSync(join(tmpdir(), 'dogear-nogit-'))
+
+    try {
+      expect(injectedTags(configured({}, outside))).toHaveLength(0)
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+})
+
+/** B6 (#13) — the repo-wide kill switch. */
+describe('enabled: false', () => {
+  it('registers no middleware, so no endpoint is served either', () => {
+    // The coupling the git-root branch already states: no endpoint means no tag. A tag whose
+    // import 404s is a worse failure than absence.
+    const { log } = run({ enabled: false })
+
+    expect(log.middlewares).toHaveLength(0)
+  })
+
+  it('says so once, on info rather than warn', () => {
+    // Nothing is broken and nothing needs attention — this is a state the project chose.
+    const { log } = run({ enabled: false })
+
+    expect(log.infos).toHaveLength(1)
+    expect(log.infos[0]).toContain('disabled by config')
+    expect(log.warnings).toHaveLength(0)
+  })
+
+  it('registers the middleware normally when enabled', () => {
+    expect(run().log.middlewares).toHaveLength(1)
+    expect(run({ enabled: true }).log.middlewares).toHaveLength(1)
+  })
+
+  it('does not throw on a bad endpoint it will never use', () => {
+    // Checked before `normaliseEndpoint`, deliberately: a project that has turned dogear off
+    // should not be able to have its dev server taken down by a dogear misconfiguration.
+    expect(() => run({ enabled: false, endpoint: '/' })).not.toThrow()
+    // And the same endpoint still throws when dogear is on, so the guard has not been lost.
+    expect(() => run({ endpoint: '/' })).toThrow(/endpoint must be a path/)
+  })
+
+  it('does not throw on a bad modifier it will never use', () => {
+    expect(() => run({ enabled: false, modifier: 'ctr1' as never })).not.toThrow()
+  })
+})
+
+describe('the same plugin under `vite build`', () => {
+  it('is filtered out entirely by apply: "serve" — layer 1, the primary defense', async () => {
+    // Kept here rather than in inject.test.ts because it needs no server. The strongest
+    // available proof short of a real build: Vite resolves the plugin array for the build
+    // command and dogear is simply not in it.
+    const { resolveConfig } = await import('vite')
+    const config = await resolveConfig({ root, plugins: [dogear()] }, 'build')
+
+    expect(config.plugins.map((plugin) => plugin.name)).not.toContain('dogear')
+  }, 30_000)
 })

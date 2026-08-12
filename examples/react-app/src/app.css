@@ -1,0 +1,119 @@
+/*
+ * Deliberately plain, and deliberately *not* plain enough to be useless.
+ *
+ * Until B1 (#8) there was no CSS in this repo at all, which meant the example page could not
+ * scroll, had no nested scroll container, and rendered every element as a full-width block.
+ * Two of M1's acceptance criteria — B2's "no layout shift, no scrollbars" and the outline
+ * tracking a scroll — had nothing to be verified against. Each rule below exists because
+ * some step of the manual verification pass needs it:
+ *
+ * - a centred column narrower than the window, so a mis-sized overlay would show as a
+ *   horizontal scrollbar rather than hiding inside a full-bleed body
+ * - enough vertical content that the page scrolls
+ * - a `position: sticky` header, the interesting case for re-measuring during a scroll
+ * - a nested `overflow: auto` panel, whose scroll events do NOT bubble to window and are
+ *   only seen because the listener is registered with `capture: true`
+ * - a horizontal `.tab-bar`, so the tab buttons are small, adjacent targets rather than
+ *   three stacked full-width blocks
+ */
+
+:root {
+  color-scheme: light dark;
+  --line: #d5d8de;
+  --muted: #6b7280;
+  --panel: #f6f7f9;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --line: #333842;
+    --muted: #9aa3b2;
+    --panel: #1b1d23;
+  }
+}
+
+body {
+  margin: 0;
+  font:
+    15px/1.6 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+.app {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 0 1.5rem 6rem;
+}
+
+.masthead {
+  position: sticky;
+  top: 0;
+  background: Canvas;
+  border-bottom: 1px solid var(--line);
+  padding: 1rem 0;
+  margin-bottom: 1.5rem;
+}
+
+.masthead h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1.5rem 0;
+}
+
+.tab {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: var(--panel);
+}
+
+.log {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem;
+  background: var(--panel);
+}
+
+.log h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+}
+
+/*
+ * The nested scroller. A scroll event fired here does not bubble to window, so this is the
+ * only thing in the app that exercises dogear's capture-phase scroll listener.
+ */
+.log ol {
+  max-height: 7rem;
+  overflow: auto;
+  margin: 0;
+  padding-left: 1.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.log .empty {
+  color: var(--muted);
+  margin: 0;
+}
+
+.filler p {
+  color: var(--muted);
+}

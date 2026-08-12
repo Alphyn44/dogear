@@ -26,7 +26,8 @@
       "development": "./dist/index.js",
       "production": "./dist/noop.js",
       "default": "./dist/noop.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsup && tsc -p tsconfig.build.json",
