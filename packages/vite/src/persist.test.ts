@@ -56,6 +56,10 @@ async function startFixture(
   options: {
     git?: boolean
     endpoint?: string
+    /** Written as the Vite root's `package.json` name — C4's (#18) derivation input. */
+    packageName?: string
+    /** Passed as `dogear({ app })`, which must beat whatever `packageName` declares. */
+    app?: string
   } = {},
 ): Promise<Fixture> {
   const gitRoot = mkdtempSync(join(tmpdir(), 'dogear-persist-'))
@@ -64,6 +68,12 @@ async function startFixture(
   const viteRoot = join(gitRoot, 'packages', 'apps', 'web')
   mkdirSync(viteRoot, { recursive: true })
   writeFileSync(join(viteRoot, 'index.html'), '<!doctype html><html><head></head></html>')
+  if (options.packageName !== undefined) {
+    writeFileSync(
+      join(viteRoot, 'package.json'),
+      JSON.stringify({ name: options.packageName }),
+    )
+  }
 
   const server = await createServer({
     root: viteRoot,
@@ -74,7 +84,10 @@ async function startFixture(
     // server on 5173 cannot collide with this.
     server: { host: '127.0.0.1', port: 0 },
     plugins: [
-      dogear(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+      dogear({
+        ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+        ...(options.app === undefined ? {} : { app: options.app }),
+      }),
     ],
   })
   await server.listen()
@@ -115,6 +128,47 @@ describe('a real dev server', () => {
     // and the agent reading whichever one it happened to find.
     expect(existsSync(queuePathFor(viteRoot))).toBe(false)
     expect(existsSync(join(gitRoot, 'packages', '.dogear'))).toBe(false)
+  })
+
+  // C4 (#18), end to end. The fixture's Vite root already sits three levels below the git
+  // root, which is the shape the package-name walk exists for.
+  it('tags the annotation with its origin and workspace package — C4', async () => {
+    const { origin, gitRoot } = await startFixture({ packageName: '@acme/web' })
+
+    await fetch(`${origin}/__dogear/annotations`, { method: 'POST', body: BATCH })
+
+    const [item] = readQueue(queuePathFor(gitRoot)).items
+
+    // The origin is the one the request arrived at, read from its Host header — the same
+    // base URL this test dialled.
+    expect(item?.['origin']).toBe(origin)
+    // Derived by walking up from the Vite root, not from the git root: the queue is shared
+    // and the package name is what tells two apps in it apart.
+    expect(item?.['app']).toBe('@acme/web')
+  })
+
+  it('omits app when no package.json above the Vite root names one', async () => {
+    const { origin, gitRoot } = await startFixture()
+
+    await fetch(`${origin}/__dogear/annotations`, { method: 'POST', body: BATCH })
+
+    const [item] = readQueue(queuePathFor(gitRoot)).items
+
+    expect(item !== undefined && 'app' in item).toBe(false)
+    // The rest of the annotation is unaffected — a nameless package is an ordinary config,
+    // not a degraded state, and nothing warns about it.
+    expect(item?.['origin']).toBe(origin)
+  })
+
+  it('lets a configured app beat the derived one', async () => {
+    const { origin, gitRoot } = await startFixture({
+      packageName: '@acme/web',
+      app: 'the-storefront',
+    })
+
+    await fetch(`${origin}/__dogear/annotations`, { method: 'POST', body: BATCH })
+
+    expect(readQueue(queuePathFor(gitRoot)).items[0]?.['app']).toBe('the-storefront')
   })
 
   it('beats the SPA fallback — the endpoint answers, not index.html', async () => {

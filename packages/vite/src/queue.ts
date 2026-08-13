@@ -30,9 +30,17 @@ import type { Annotation } from './annotation.js'
  *    `rename()` a corrupted file into place.
  *
  * This does not make concurrent writes *safe* — two processes can still interleave between
- * the read and the rename, and the later writer wins. Closing that needs a lock file, which
- * is C4's story. What these rules buy is that the failure is a lost append rather than a
- * corrupted queue, and that nothing here has to be undone to fix it properly.
+ * the read and the rename, and the later writer wins. What these rules buy is that the
+ * failure is a lost append rather than a corrupted queue, and that nothing here has to be
+ * undone to fix it properly.
+ *
+ * **C4 (#18) deliberately left that window open**, having weighed it: `appendToQueue` is
+ * synchronous end to end, so no interleave is possible *within* a process, and across two
+ * processes the window is the few milliseconds of `fs` work between the read and the rename
+ * — reachable only by two humans submitting at the same instant in one repo. Closing it
+ * needs a lock file with stale-lock recovery, which a dev server that can be SIGKILLed makes
+ * into real machinery, and which D1's MCP server would inherit. It is in the brief's
+ * "Still open"; revisit it when someone actually loses an annotation.
  *
  * D1's MCP server needs all of this to resolve and prune. When it lands, move this file
  * rather than writing a second copy — a divergent implementation of the two rules above is

@@ -145,6 +145,52 @@ describe('stampAnnotation', () => {
     expect(stamped.status).toBe('pending')
     expect(stamped.resolvedAt).toBeNull()
   })
+
+  // C4 (#18).
+  it('stamps origin and app', () => {
+    const stamped = stampAnnotation(
+      { comment: 'x' },
+      { origin: 'http://localhost:5173', app: '@acme/admin', now },
+    )
+
+    expect(stamped['origin']).toBe('http://localhost:5173')
+    expect(stamped['app']).toBe('@acme/admin')
+  })
+
+  it.each(['origin', 'app'])(
+    'omits %s entirely when the server resolved none',
+    (field) => {
+      // Absent rather than `undefined`-valued: JSON.stringify drops the key either way, so
+      // writing it would make the annotation and its serialized form disagree about which
+      // fields exist.
+      expect(field in stampAnnotation({ comment: 'x' }, { now })).toBe(false)
+    },
+  )
+
+  it('overwrites a client-supplied origin and app — the server owns both', () => {
+    // Same boundary as the id. A batch from one dev server must not be able to claim it came
+    // from another, which is exactly the ambiguity C4 exists to remove.
+    const stamped = stampAnnotation(
+      { comment: 'x', origin: 'http://evil.example', app: '@someone-elses/package' },
+      { origin: 'http://localhost:5173', app: '@acme/admin', now },
+    )
+
+    expect(stamped['origin']).toBe('http://localhost:5173')
+    expect(stamped['app']).toBe('@acme/admin')
+  })
+
+  it('discards a client value even when the server resolved none of its own', () => {
+    // The sharp edge a conditional spread alone would leave: with nothing to overwrite it,
+    // the client's value would ride straight through into the queue. A repo whose package
+    // declares no name is exactly where a bogus `app` would go unnoticed.
+    const stamped = stampAnnotation(
+      { comment: 'x', origin: 'http://evil.example', app: '@someone-elses/package' },
+      { now },
+    )
+
+    expect('origin' in stamped).toBe(false)
+    expect('app' in stamped).toBe(false)
+  })
 })
 
 describe('validateBatch', () => {

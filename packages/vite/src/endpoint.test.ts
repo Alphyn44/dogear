@@ -208,6 +208,145 @@ describe('POST /__dogear/annotations', () => {
   })
 })
 
+// C4 (#18) — origin and app tagging.
+describe('origin and app tagging', () => {
+  it('stamps the origin the request actually arrived at', async () => {
+    await post(ONE_COMMENT)
+
+    const [item] = readQueue(queuePathFor(root)).items
+
+    // `origin` here is the fixture's own base URL — the same host:port the fetch above
+    // dialled. Read from the request rather than from config, because one dev server answers
+    // to `localhost`, `127.0.0.1` and an mDNS name alike.
+    expect(item?.['origin']).toBe(origin)
+  })
+
+  it('stamps http when the socket is not TLS', async () => {
+    await post(ONE_COMMENT)
+
+    const [item] = readQueue(queuePathFor(root)).items
+
+    expect(item?.['origin']).toMatch(/^http:\/\//)
+  })
+
+  it('leaves app off entirely when the server resolved no package name', async () => {
+    // The shared fixture builds its middleware without `app`, which is what a Vite root with
+    // no `package.json` above it produces. Absent, not `null` and not `""`.
+    await post(ONE_COMMENT)
+
+    const [item] = readQueue(queuePathFor(root)).items
+
+    expect(item !== undefined && 'app' in item).toBe(false)
+  })
+
+  it('cannot be forged by the client — the server owns both fields', async () => {
+    await post(
+      JSON.stringify({
+        version: 1,
+        batch: [
+          { comment: 'x', origin: 'http://evil.example', app: '@someone-elses/package' },
+        ],
+      }),
+    )
+
+    const [item] = readQueue(queuePathFor(root)).items
+
+    expect(item?.['origin']).toBe(origin)
+    // No `app` was configured, so the client's value must not survive as a fallback either.
+    expect(item !== undefined && 'app' in item).toBe(false)
+  })
+})
+
+/**
+ * AC2 and AC3: two dev servers in one repo write to one queue without ambiguity, and
+ * concurrent submits lose nothing.
+ *
+ * Two `createEndpoint` instances over one git root, which is exactly what a monorepo running
+ * two Vite servers produces — one queue, two writers, two different `app` values.
+ *
+ * **Honest limit:** these share a pid and one event loop, so this pins the read-modify-write
+ * rule (queue.ts rule 1) and the disambiguation, not temp-file isolation. Rule 2's pid suffix
+ * is pinned directly in queue.test.ts. A genuine cross-process interleave would need spawned
+ * children and would be racy enough to either flake or prove nothing; C4 weighed that and
+ * left the residual window documented rather than closed — see queue.ts's header.
+ */
+describe('two dev servers, one queue', () => {
+  const servers: Server[] = []
+
+  afterEach(async () => {
+    await Promise.all(
+      servers.splice(0).map((s) => new Promise<void>((done) => s.close(() => done()))),
+    )
+  })
+
+  async function startServerFor(app: string): Promise<string> {
+    const middleware = createEndpoint({
+      gitRoot: root,
+      endpoint: DEFAULT_ENDPOINT,
+      clientDist,
+      app,
+    })
+
+    const instance = createServer((req, res) => {
+      middleware(req, res, () => {
+        res.statusCode = 418
+        res.end('fell through')
+      })
+    })
+    servers.push(instance)
+
+    await new Promise<void>((resolve) => instance.listen(0, '127.0.0.1', resolve))
+    return `http://127.0.0.1:${(instance.address() as AddressInfo).port}`
+  }
+
+  function submit(base: string, comment: string): Promise<Response> {
+    return fetch(`${base}${DEFAULT_ENDPOINT}/annotations`, {
+      method: 'POST',
+      body: JSON.stringify({ version: 1, batch: [{ comment }] }),
+    })
+  }
+
+  it('keeps both servers’ items and tags each with its own app and origin', async () => {
+    const admin = await startServerFor('@acme/admin')
+    const web = await startServerFor('@acme/web')
+
+    await submit(admin, 'from admin')
+    await submit(web, 'from web')
+
+    const { items } = readQueue(queuePathFor(root))
+
+    // Neither erased the other — the read-modify-write rule. The second server re-read the
+    // file the first had written rather than serializing a remembered array.
+    expect(items).toHaveLength(2)
+    expect(items.map((item) => item['app'])).toEqual(['@acme/admin', '@acme/web'])
+    expect(items[0]?.['origin']).toBe(admin)
+    expect(items[1]?.['origin']).toBe(web)
+    // Different ports, and that is the point: the origins differ while the queue does not.
+    expect(items[0]?.['origin']).not.toBe(items[1]?.['origin'])
+  })
+
+  it('loses nothing when both submit at once', async () => {
+    const admin = await startServerFor('@acme/admin')
+    const web = await startServerFor('@acme/web')
+
+    // Issued together rather than in sequence, so the two requests are in flight at the same
+    // time and the handlers interleave at whatever await boundaries exist.
+    await Promise.all([
+      submit(admin, 'a1'),
+      submit(web, 'w1'),
+      submit(admin, 'a2'),
+      submit(web, 'w2'),
+    ])
+
+    const { items } = readQueue(queuePathFor(root))
+
+    expect(items).toHaveLength(4)
+    // Order is not asserted — it depends on which handler reached its write first, and the
+    // queue's own ordering guarantee is the UUIDv7 in `id`, not arrival.
+    expect(items.map((item) => item['comment']).sort()).toEqual(['a1', 'a2', 'w1', 'w2'])
+  })
+})
+
 describe('rejections leave the queue untouched', () => {
   it('returns 400 for malformed JSON — AC4', async () => {
     const response = await post('{ not json')

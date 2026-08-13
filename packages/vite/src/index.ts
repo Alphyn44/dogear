@@ -1,6 +1,7 @@
 import type { FilterPattern, Plugin } from 'vite'
 import { createFilter } from 'vite'
 
+import { findAppName } from './app-name.js'
 import type { ClientConfig, Modifier } from './client.js'
 import {
   buildClientConfig,
@@ -93,6 +94,23 @@ export interface DogearOptions {
    * keep the `node_modules` entry unless you mean to lose it.
    */
   readonly exclude?: FilterPattern
+  /**
+   * What to record as the workspace package this server serves — C4 (#18). Defaults to the
+   * `name` from the nearest `package.json` above the Vite root.
+   *
+   * The queue resolves from the git root, so a monorepo's three dev servers all append to
+   * one file; this is the field that tells their annotations apart when two apps both have a
+   * `Button`. Derived rather than configured in the ordinary case — set it when the package
+   * has no name, or when its published name is not what you would call the app.
+   *
+   * **Unlike the options above, E4 (#29) does not layer `.dogear/config.json` under this
+   * one.** That file lives at the git root, one per repo, and this value is per Vite root —
+   * a monorepo's three servers would all read the same key and tag their annotations
+   * identically, which is the exact ambiguity the field exists to remove. The nearest
+   * `package.json` is already the per-package layer, so the fallback that would matter is
+   * the one that is here.
+   */
+  readonly app?: string
 }
 
 /** What `configureServer` learned, and `transformIndexHtml` needs. */
@@ -234,7 +252,15 @@ export function dogear(options: DogearOptions = {}): Plugin {
         )
       }
 
-      server.middlewares.use(createEndpoint({ gitRoot, endpoint, clientDist }))
+      // C4 (#18). Resolved once, for the same reason the git root above is: the Vite root
+      // cannot move while this process lives, and neither can the name of the package
+      // containing it. The brief's "never cache" rule is about queue *contents*.
+      //
+      // An explicitly configured empty string reads as "not set" rather than stamping `""` —
+      // one representation of absence, matching how the note is handled at the endpoint.
+      const app = options.app?.trim() || findAppName(server.config.root, gitRoot)
+
+      server.middlewares.use(createEndpoint({ gitRoot, endpoint, clientDist, app }))
 
       // One line, once, naming both bindings — B6's (#13) other discovery vector.
       //

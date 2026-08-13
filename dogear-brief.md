@@ -566,6 +566,12 @@ wires the file underneath it.
 IPv4 CIDR range — and the list *replaces* the defaults rather than extending them. See
 the Decisions log.
 
+**C4's `app` is deliberately not a key here.** This file sits at the git root, one per
+repo, while `app` describes a single Vite root — a monorepo's three dev servers would all
+read the same key and tag their annotations identically, which is the ambiguity the field
+exists to remove. It is a plugin option (`dogear({ app })`) layered over the `name` in the
+nearest `package.json`, and that manifest *is* the per-package config layer.
+
 ---
 
 ## Install and init
@@ -1317,6 +1323,45 @@ rules, the default list — into every correct production build, which is precis
 layer 3 exists to prevent, and would leave the inert module reporting `localhost` as
 allowed while being incapable of acting on it.
 
+**`origin` is derived by the server, not sent by the client. Settled during C4.**
+The browser already sends `url` (`location.href`), so `origin` looked like a client field —
+it is a prefix of one the client is sending anyway. It is not. `origin` answers *which dev
+server wrote this*, which is the same class of question as `id` and `createdAt`, and the
+existing split in `annotation.ts` puts every such field on the server's side: the browser
+describes what it saw, the server owns identity. Two things follow that the client-side
+version gets wrong. A hand-written `curl` batch sends no `url` at all, and it is exactly the
+case the agent-facing formatter's `url → origin` fallback exists for — reading `origin` from
+the client would make that fallback dead code. And a batch arriving at one dev server could
+claim to have come from another, which is the precise ambiguity C4 exists to remove in a
+repo where several servers share one queue.
+
+The server reads it from the request's `Host` header rather than its own config, because one
+dev server answers to `localhost:5173`, `127.0.0.1:5173` and an mDNS `.local` name alike, and
+the annotation should record the one actually in the address bar. Scheme comes from
+`socket.encrypted`, not `x-forwarded-proto`: trusting a client-settable header to describe
+the server's own identity buys nothing here, since F3's guard only lets dogear run on
+loopback, `*.localhost` and `*.local` — the reverse-proxy hostnames that header exists for
+never have an overlay to submit from.
+
+A consequence worth stating: **`origin` and `app` are stripped from the client's input, not
+merely overwritten.** A conditional spread alone would let a client-sent value survive
+whenever *this* server resolved none of its own — and a repo whose package declares no name
+is exactly where a bogus `app` would go unnoticed. The server's answer is final, including
+when the answer is "none".
+
+**The queue lock stays unbuilt, and the write race stays documented. Settled during C4.**
+`queue.ts` had promised C4 a lock file to close the window between its read and its rename.
+C4 declined to build one. `appendToQueue` is synchronous end to end, so no interleave is
+possible *within* a process; across two processes the window is the few milliseconds of `fs`
+work between read and rename, reachable only by two people submitting at the same instant in
+one repo. Against that: a lock file needs stale-lock recovery, because a dev server can be
+SIGKILLed while holding it, and a stale lock that blocks submits is a worse failure than the
+one it prevents — it is *silent and permanent* rather than rare. D1's MCP server would
+inherit the whole mechanism. The two rules that are built (pid-suffixed temp file,
+read-modify-write on every submit) already guarantee the failure is a lost append rather
+than a corrupted queue, which is the property worth having. Moved to Still open; revisit
+when someone actually loses an annotation.
+
 **Tooling → npm workspaces, TypeScript 7, tsup, vitest, Prettier. No ESLint.**
 npm workspaces because pnpm isn't installed and this doesn't need it. TypeScript 7 is the
 native compiler and current `latest`; typechecking runs on every turn that touches a `.ts`
@@ -1345,6 +1390,10 @@ None of these block M0.
   that moved. Probably rare enough to ignore; the staleness flag covers the damage.
 - **Multi-agent concurrency.** Two agents in one repo resolving the same items. No reason
   to solve it until it happens.
+- **A queue lock.** Two dev servers can still interleave between the queue read and the
+  rename, and the later writer wins — a lost append, never a corrupted file. Closing it
+  needs stale-lock recovery for a dev server that gets SIGKILLed, which is more machinery
+  than the race deserves until someone actually loses an annotation. See the Decisions log.
 
 ---
 

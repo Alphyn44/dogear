@@ -118,11 +118,17 @@ export function validateBatch(body: unknown): Validation {
 /**
  * Stamp server-owned fields over a validated input.
  *
- * The spread order matters, and it is now three deep: client fields first, then the batch
- * note, then the four server-owned fields. So a batch that arrives carrying
- * `"status": "resolved"` cannot write itself into the queue pre-resolved, and a batch note
- * wins over a per-item `note` the client had no business sending — while still being unable
- * to forge identity or lifecycle.
+ * The spread order matters, and it is now four deep: client fields first, then the batch
+ * note, then C4's (#18) `origin` and `app`, then the four server-owned fields. So a batch
+ * that arrives carrying `"status": "resolved"` cannot write itself into the queue
+ * pre-resolved, and a batch note wins over a per-item `note` the client had no business
+ * sending — while still being unable to forge identity or lifecycle.
+ *
+ * `origin` and `app` sit on the server's side of that line deliberately. They answer "which
+ * dev server, which package" — the same class of question as `id`, and answerable only by
+ * the process that is actually serving. A client-supplied `origin` would also be forgeable
+ * by a batch from a *different* dev server in the same repo, which is precisely the
+ * ambiguity C4 exists to remove.
  *
  * The note is copied onto **every** item rather than stored once against the batch. The
  * queue file has no batch grouping, and everything downstream is per-item: D2 resolves, D5
@@ -131,11 +137,24 @@ export function validateBatch(body: unknown): Validation {
  */
 export function stampAnnotation(
   input: AnnotationInput,
-  { note, now = new Date() }: StampOptions = {},
+  { note, origin, app, now = new Date() }: StampOptions = {},
 ): Annotation {
+  // Discarded rather than merely overwritten. A conditional spread below would let a
+  // client-sent `origin` or `app` survive whenever *this* server resolved none of its own —
+  // and that is precisely the case where a wrong value is least likely to be noticed, since
+  // there is nothing to contradict it. The server's answer is final, including when the
+  // answer is "none". Unlike `note`, which is a legitimate thing for a client to send, these
+  // two describe the server itself and a client cannot know them.
+  const { origin: _clientOrigin, app: _clientApp, ...client } = input
+
   return {
-    ...input,
+    ...client,
     ...(note === undefined ? {} : { note }),
+    // Omitted rather than written as `undefined`: `queue.json` is a file people read, and
+    // `JSON.stringify` would drop the key anyway — so writing it would make the in-memory
+    // annotation and its serialized form disagree about which fields exist.
+    ...(origin === undefined ? {} : { origin }),
+    ...(app === undefined ? {} : { app }),
     id: uuidv7(now.getTime()),
     status: 'pending',
     createdAt: now.toISOString(),
@@ -146,12 +165,28 @@ export function stampAnnotation(
 /**
  * An options bag rather than positional parameters, because `now` was already the second
  * argument and B5 needed to get in front of it. Positionally that reads
- * `stampAnnotation(input, undefined, fixedDate)` at every test call site — and C4 (#18) has
- * `origin` and `app` to stamp next, which would make it worse. Named from the start instead.
+ * `stampAnnotation(input, undefined, fixedDate)` at every test call site — and C4 (#18) then
+ * added two more, which is the case this shape was chosen for.
  */
 export interface StampOptions {
   /** Copied onto the annotation. Batch-wide; see {@link stampAnnotation}. */
   readonly note?: string
+  /**
+   * Which dev server this arrived at, e.g. `http://localhost:5173` — C4 (#18).
+   *
+   * Per-request, not per-server: one dev server answers to `localhost:5173` and
+   * `127.0.0.1:5173` both, and the annotation should record the one the browser actually
+   * used. Derived from the request in ./endpoint.ts.
+   */
+  readonly origin?: string
+  /**
+   * The workspace package this dev server serves, e.g. `@acme/admin` — C4 (#18).
+   *
+   * Per-server, and resolved once at startup — see ./app-name.ts. Absent when there is no
+   * `package.json` above the Vite root or it declares no name, which is an ordinary
+   * outcome rather than a failure.
+   */
+  readonly app?: string
   /** Injected by tests so the UUIDv7 timestamp and `createdAt` are deterministic. */
   readonly now?: Date
 }
