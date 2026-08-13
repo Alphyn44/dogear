@@ -492,7 +492,16 @@ describe('B3 — comment and queue', () => {
         // Present and empty: nothing in this fixture's ancestry is stamped, and C2 (#16)
         // sends `[]` rather than omitting the key so every queue item has one shape.
         sites: [],
-        element: { tag: 'button', id: null, classes: ['tab'], text: 'Settings' },
+        // C3's (#17) floor, in full. `selector` is always present — the fixture is a
+        // `button.tab` alone in the body, so one segment identifies it — and `testId` is
+        // absent as a key rather than null, because this element carries no test id.
+        element: {
+          tag: 'button',
+          selector: 'button.tab',
+          text: 'Settings',
+          classes: ['tab'],
+          id: null,
+        },
         url: location.href,
         viewport: {
           w: window.innerWidth,
@@ -533,6 +542,29 @@ describe('B3 — comment and queue', () => {
     keyInBox({ key: 'Enter' })
 
     expect(firstQueued().element.text).toBe('Settings')
+  })
+
+  it('carries C3 (#17) — a selector that finds the element again', () => {
+    // The floor, from the session's side. ./selector.test.ts owns what the string contains;
+    // what matters here is that it reaches the payload and still resolves.
+    captureAndType('too dark')
+
+    keyInBox({ key: 'Enter' })
+
+    const { selector } = firstQueued().element
+    expect(selector).not.toBe('')
+    expect(document.querySelector(selector)).toBe(target)
+  })
+
+  it('carries a test id when the element has one', () => {
+    target.setAttribute('data-testid', 'settings-tab')
+
+    captureAndType('too dark')
+    keyInBox({ key: 'Enter' })
+
+    expect(firstQueued().element.testId).toBe('settings-tab')
+    // And the test id becomes the selector, since it outranks everything below an id.
+    expect(firstQueued().element.selector).toBe('[data-testid="settings-tab"]')
   })
 
   it('carries C2 (#16) — the chain of the element that was clicked', () => {
@@ -1399,7 +1431,13 @@ describe('B6 — the kill switch', () => {
       carried.add({
         comment: 'from before the disable',
         sites: [],
-        element: { tag: 'button', id: null, classes: [], text: 'Save' },
+        element: {
+          tag: 'button',
+          selector: 'button',
+          id: null,
+          classes: [],
+          text: 'Save',
+        },
         url: 'http://localhost:5173/',
         viewport: { w: 1512, h: 945, dpr: 2 },
         authoredAt: '2026-08-12T10:00:00.000Z',
@@ -1418,7 +1456,13 @@ describe('B6 — the kill switch', () => {
       carried.add({
         comment: 'from before the disable',
         sites: [],
-        element: { tag: 'button', id: null, classes: [], text: 'Save' },
+        element: {
+          tag: 'button',
+          selector: 'button',
+          id: null,
+          classes: [],
+          text: 'Save',
+        },
         url: 'http://localhost:5173/',
         viewport: { w: 1512, h: 945, dpr: 2 },
         authoredAt: '2026-08-12T10:00:00.000Z',

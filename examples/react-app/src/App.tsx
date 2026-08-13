@@ -52,7 +52,9 @@ export function App() {
       />
 
       <section className="log">
-        <h2>Click log</h2>
+        {/* The one test id in this app, so C3's (#17) `element.testId` and its selector
+            fast path are observable by clicking rather than only in a unit test. */}
+        <h2 data-testid="log-heading">Click log</h2>
         {log.length === 0 ? (
           <p className="empty">Nothing yet.</p>
         ) : (
