@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { SOURCE_ATTRIBUTE, stampSource } from './stamp.js'
+import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE, stampSource } from './stamp.js'
 
 /**
  * C1 (#15) as the issue asks for it: table-driven, against fixture source.
@@ -51,8 +51,10 @@ describe('the attribute value', () => {
 
     const result = stamped(code)
 
-    expect(result).toContain(`<main ${SOURCE_ATTRIBUTE}="src/App.tsx:3:5">`)
-    expect(result).toContain(`<p ${SOURCE_ATTRIBUTE}="src/App.tsx:4:7">`)
+    // No trailing `>` in these: C5 (#19) stamps a component attribute after this one, and
+    // this test is about the position, not about what follows it.
+    expect(result).toContain(`<main ${SOURCE_ATTRIBUTE}="src/App.tsx:3:5"`)
+    expect(result).toContain(`<p ${SOURCE_ATTRIBUTE}="src/App.tsx:4:7"`)
   })
 
   it('measures columns in UTF-16 units, matching the offsets Oxc reports', () => {
@@ -244,6 +246,143 @@ describe('returning null — leave the module untouched', () => {
 
     expect(result).toContain(`<b ${SOURCE_ATTRIBUTE}="mine.tsx:1:1">`)
     expect(result).toContain(`<i ${SOURCE_ATTRIBUTE}="src/App.tsx:1:`)
+  })
+})
+
+/** C5 (#19) — the component display name, derived from the transform. */
+describe('the component name', () => {
+  /** The name stamped on the first host element, or null when none was. */
+  function componentOf(code: string): string | null {
+    const result = stamp(code)
+    if (result === null) return null
+    return new RegExp(`${COMPONENT_ATTRIBUTE}="([^"]+)"`).exec(result.code)?.[1] ?? null
+  }
+
+  it.each([
+    {
+      what: 'a function declaration',
+      code: 'export function Panel() { return <div/> }',
+      expected: 'Panel',
+      why: 'the declaration carries the name',
+    },
+    {
+      what: 'an arrow assigned to a const',
+      code: 'const Button = () => <div/>',
+      expected: 'Button',
+      why: 'the arrow is anonymous, so the binding is the only name there is',
+    },
+    {
+      what: 'a function expression assigned to a const',
+      code: 'const Button = function () { return <div/> }',
+      expected: 'Button',
+      why: 'same shape, different spelling',
+    },
+    {
+      what: 'a named function expression',
+      code: 'const X = function Button() { return <div/> }',
+      expected: 'Button',
+      why: 'the innermost name wins, matching Function.prototype.name',
+    },
+    {
+      what: 'a memo wrapper',
+      code: 'const Button = memo(() => <div/>)',
+      expected: 'Button',
+      why: 'the declarator name survives the wrapper call, so memo works unaided',
+    },
+    {
+      what: 'a forwardRef wrapper',
+      code: 'const Button = forwardRef((props, ref) => <div/>)',
+      expected: 'Button',
+      why: 'the same reason, and the reason the initialiser is never inspected',
+    },
+    {
+      what: 'a class component',
+      code: 'class Panel extends Component { render() { return <div/> } }',
+      expected: 'Panel',
+      why: 'render is lowercase, so the class name shows through it',
+    },
+    {
+      what: 'a map callback',
+      code: 'function App() { return <ul>{items.map((item) => <li/>)}</ul> }',
+      expected: 'App',
+      why: 'the anonymous callback is transparent — this is the example app’s tab bar',
+    },
+    {
+      what: 'a lowercase helper',
+      code: 'function App() { const row = () => <td/>; return <table>{row()}</table> }',
+      expected: 'App',
+      why: 'naming the helper would point the agent at the wrong thing to open',
+    },
+    {
+      what: 'an anonymous default export',
+      code: 'export default function () { return <div/> }',
+      expected: null,
+      why: 'no name was written; C5 calls that legitimate rather than a failure',
+    },
+    {
+      what: 'a lowercase top-level binding',
+      code: 'const tree = <div/>',
+      expected: null,
+      why: 'not a component by React’s own capitalisation rule',
+    },
+    {
+      what: 'an element outside any binding',
+      code: 'render(<div/>)',
+      expected: null,
+      why: 'there is no component boundary to name',
+    },
+  ])('$what -> $expected — $why', ({ code, expected }) => {
+    expect(componentOf(code)).toBe(expected)
+  })
+
+  it('omits the attribute entirely rather than emitting an empty one', () => {
+    // "Where available" has to mean absent, not `data-dogear-component=""` — an empty
+    // string would reach the queue as a component named nothing.
+    const result = stamped('const tree = <div/>')
+
+    expect(result).toContain(SOURCE_ATTRIBUTE)
+    expect(result).not.toContain(COMPONENT_ATTRIBUTE)
+  })
+
+  it('gives sibling components in one file their own names', () => {
+    const result = stamped(
+      'function Header() { return <h1>t</h1> }\nfunction Footer() { return <small>c</small> }',
+    )
+
+    expect(result).toContain(
+      `<h1 ${SOURCE_ATTRIBUTE}="src/App.tsx:1:28" ${COMPONENT_ATTRIBUTE}="Header"`,
+    )
+    expect(result).toContain(
+      `<small ${SOURCE_ATTRIBUTE}="src/App.tsx:2:28" ${COMPONENT_ATTRIBUTE}="Footer"`,
+    )
+  })
+
+  it('gives a nested component the inner name, not the outer one', () => {
+    // A component declared inside another is the nearest capitalized binding, so elements
+    // under it belong to it — the inherited name is replaced on the way down, not merged.
+    const result = stamped(
+      'function Outer() { const Inner = () => <span/>; return <div><Inner/></div> }',
+    )
+
+    expect(result).toContain(
+      `<span ${SOURCE_ATTRIBUTE}="src/App.tsx:1:40" ${COMPONENT_ATTRIBUTE}="Inner"`,
+    )
+    expect(result).toContain(
+      `<div ${SOURCE_ATTRIBUTE}="src/App.tsx:1:56" ${COMPONENT_ATTRIBUTE}="Outer"`,
+    )
+  })
+
+  it('puts the component attribute after the source attribute', () => {
+    // Fixed order, so C2's reader and anyone eyeballing the DOM see one shape.
+    const result = stamped('function App() { return <div {...rest} /> }')
+
+    expect(result).toBe(
+      `function App() { return <div {...rest} ${SOURCE_ATTRIBUTE}="src/App.tsx:1:25" ${COMPONENT_ATTRIBUTE}="App" /> }`,
+    )
+  })
+
+  it('stays idempotent now that two attributes are written', () => {
+    expect(stamp(stamped('function App() { return <div/> }'))).toBeNull()
   })
 })
 

@@ -50,6 +50,24 @@ import { normalizePath, parseSync } from 'vite'
  */
 export const SOURCE_ATTRIBUTE = 'data-dogear-src'
 
+/**
+ * The component display name — C5 (#19). Stamped only where the source actually wrote one.
+ *
+ * A second attribute rather than a fourth field inside {@link SOURCE_ATTRIBUTE}, because
+ * "where available" is doing real work in C5: anonymous components and host elements
+ * outside any component boundary legitimately have no name. A positional format with an
+ * optional trailing part is the shape that rots.
+ *
+ * Named to match the wire contract — the brief's annotation carries `sites[].component`, and
+ * the agent-facing formatter prints `(Button, via attribute)`. One word the whole way down.
+ *
+ * `scripts/check-leak.ts` needs its own literal rule for this, separate from the one
+ * watching `data-dogear-src`. Widening that rule's needle to `data-dogear` would look
+ * tempting and is wrong: the example app renders the text `<script data-dogear>` as prose
+ * explaining A1, so the substring is legitimately present in a healthy production build.
+ */
+export const COMPONENT_ATTRIBUTE = 'data-dogear-component'
+
 export interface StampResult {
   readonly code: string
   readonly map: SourceMap
@@ -84,15 +102,15 @@ export function stampSource(
   const parsed = parseSync(file, code)
   if (parsed.errors.length > 0) return null
 
-  const elements: JsxOpeningElement[] = []
-  collectOpeningElements(parsed.program, elements)
-  if (elements.length === 0) return null
+  const found: FoundElement[] = []
+  collectOpeningElements(parsed.program, null, found)
+  if (found.length === 0) return null
 
   const starts = lineStarts(code)
   const magic = new MagicString(code)
   let stamped = 0
 
-  for (const element of elements) {
+  for (const { element, component } of found) {
     if (!isHostElement(element.name)) continue
     if (isAlreadyStamped(element.attributes)) continue
 
@@ -100,7 +118,19 @@ export function stampSource(
     if (insertAt === null) continue
 
     const { line, column } = positionAt(starts, element.start)
-    magic.appendLeft(insertAt, ` ${SOURCE_ATTRIBUTE}="${repoPath}:${line}:${column}"`)
+
+    // Both attributes in one string rather than two `appendLeft` calls at the same offset,
+    // so the emitted order is stated here instead of resting on magic-string's same-index
+    // semantics. The component half is simply absent when the source wrote no name — C5's
+    // "where available", which is a fact about the code rather than a failure to resolve.
+    //
+    // A component name needs no escaping: it is a JS identifier, so it cannot contain a
+    // quote. The path can in principle, which is why `repoRelative` guards that one.
+    const name = component === null ? '' : ` ${COMPONENT_ATTRIBUTE}="${component}"`
+    magic.appendLeft(
+      insertAt,
+      ` ${SOURCE_ATTRIBUTE}="${repoPath}:${line}:${column}"${name}`,
+    )
     stamped += 1
   }
 
@@ -156,6 +186,12 @@ interface JsxOpeningElement {
   readonly start: number
 }
 
+/** An element and the component it was found inside, or `null` outside any. */
+interface FoundElement {
+  readonly element: JsxOpeningElement
+  readonly component: string | null
+}
+
 interface Position {
   readonly line: number
   readonly column: number
@@ -197,26 +233,77 @@ function repoRelative(file: string, gitRoot: string): string | null {
 }
 
 /**
- * Depth-first over every own property, collecting opening elements.
+ * Depth-first over every own property, collecting opening elements and the component that
+ * encloses each one.
  *
  * Generic rather than a typed visitor on purpose: it cannot miss a node type nobody
  * anticipated, and it descends into attribute expressions too, so `<div title={<Icon/>}>`
  * yields both elements. Oxc's AST is a plain acyclic object tree, so there is no parent
  * pointer to guard against.
+ *
+ * `component` is the enclosing name inherited from above, replaced on the way down whenever
+ * a node introduces a capitalized binding of its own. Carrying it downward rather than
+ * walking back up is what keeps this a single pass — and it is why an anonymous `.map`
+ * callback or a lowercase helper is *transparent* rather than shadowing: neither one
+ * produces a name, so children keep seeing the component that contains them.
  */
-function collectOpeningElements(node: unknown, found: JsxOpeningElement[]): void {
+function collectOpeningElements(
+  node: unknown,
+  component: string | null,
+  found: FoundElement[],
+): void {
   if (Array.isArray(node)) {
-    for (const child of node) collectOpeningElements(child, found)
+    for (const child of node) collectOpeningElements(child, component, found)
     return
   }
 
   if (node === null || typeof node !== 'object') return
 
   if ((node as { type?: unknown }).type === 'JSXOpeningElement') {
-    found.push(node as unknown as JsxOpeningElement)
+    found.push({ element: node as unknown as JsxOpeningElement, component })
   }
 
-  for (const value of Object.values(node)) collectOpeningElements(value, found)
+  const inner = componentNameOf(node) ?? component
+  for (const value of Object.values(node)) {
+    collectOpeningElements(value, inner, found)
+  }
+}
+
+/**
+ * The component name a node introduces, if any — C5 (#19).
+ *
+ * Capitalized only, which is React's own rule for what is a component rather than a plain
+ * function. That single filter is what makes the whole table work:
+ *
+ * - `const Button = memo(() => …)` keeps `Button`, because the declarator carries the name
+ *   and the wrapper call is just another node on the way down.
+ * - `class Panel { render() {…} }` keeps `Panel`, because `render` is lowercase.
+ * - `items.map((item) => <li/>)` keeps whatever contains it, because the arrow is anonymous.
+ * - `const row = () => <td/>` keeps the enclosing component rather than reporting `row`,
+ *   which would name a helper as though it were the thing to open.
+ *
+ * `VariableDeclarator` is checked without looking at its initialiser for exactly the
+ * `memo`/`forwardRef` case. The `Identifier` test also disposes of destructuring —
+ * `const { A } = x` has an `ObjectPattern` id and yields nothing.
+ */
+function componentNameOf(node: object): string | null {
+  const candidate = node as { type?: unknown; id?: unknown }
+
+  switch (candidate.type) {
+    case 'FunctionDeclaration':
+    case 'FunctionExpression':
+    case 'ClassDeclaration':
+    case 'ClassExpression':
+    case 'VariableDeclarator':
+      break
+    default:
+      return null
+  }
+
+  const id = candidate.id as { type?: unknown; name?: unknown } | null | undefined
+  if (id?.type !== 'Identifier' || typeof id.name !== 'string') return null
+
+  return /^[A-Z]/.test(id.name) ? id.name : null
 }
 
 /**

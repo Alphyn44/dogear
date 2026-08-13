@@ -9,7 +9,7 @@ import { createServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { dogear } from './index.js'
-import { SOURCE_ATTRIBUTE } from './stamp.js'
+import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE } from './stamp.js'
 
 /**
  * C1's (#15) ordering claim, which nothing else can prove.
@@ -42,6 +42,10 @@ const SOURCE = [
   '',
   'function Nested() {',
   '  return <p>inner</p>',
+  '}',
+  '',
+  'export default function () {',
+  '  return <hr />',
   '}',
 ].join('\n')
 
@@ -126,9 +130,25 @@ describe('a real dev server with dogear and @vitejs/plugin-react', () => {
   })
 
   it('leaves the component element unstamped', () => {
-    // `<Nested />` is a component reference. Exactly three host elements exist in the
-    // fixture, so a fourth occurrence would mean components had started being stamped.
-    expect(output.split(SOURCE_ATTRIBUTE)).toHaveLength(4)
+    // `<Nested />` is a component reference. Exactly four host elements exist in the
+    // fixture, so a fifth occurrence would mean components had started being stamped.
+    expect(output.split(SOURCE_ATTRIBUTE)).toHaveLength(5)
+  })
+
+  it('carries the component name of each element through compilation — C5 (#19)', () => {
+    // Two named components in one file, each owning its own elements. The React plugin has
+    // rewritten all of this into `jsx()` calls by now; the names still describe the source.
+    expect(output).toContain(`${COMPONENT_ATTRIBUTE}": "Panel`)
+    expect(output).toContain(`${COMPONENT_ATTRIBUTE}": "Nested`)
+  })
+
+  it('omits the name for the anonymous default export', () => {
+    // The `<hr />` inside `export default function () {}` still gets a location...
+    expect(output).toContain(`${SOURCE_ATTRIBUTE}": "src/Panel.jsx:15:10`)
+    // ...but only three of the four host elements carry a name. C5's "where available" has
+    // to mean a missing attribute rather than an empty one, or the queue would end up with
+    // a component named nothing.
+    expect(output.split(COMPONENT_ATTRIBUTE)).toHaveLength(4)
   })
 
   it('keeps the stamp after the spread in the compiled props object', () => {

@@ -426,6 +426,11 @@ Every resolved site carries a `via` field so the agent knows how much to trust i
 - **`sites[].file`** — relative to the **git root**, forward slashes on every platform. The
   same root the queue resolves from, so an agent started anywhere in the repo can open the
   path unchanged. See the Decisions log.
+- **`sites[].component`** — **optional.** Read from `data-dogear-component`, which the
+  transform stamps only where the source wrote a name: the innermost enclosing binding
+  starting with a capital, which is React's own rule for a component. Anonymous default
+  exports and elements outside any component boundary carry no name, and the attribute is
+  absent rather than empty. See the Decisions log.
 - **`via`** — `"attribute"` | `"runtime"`.
 - **`element.text`** — first 80 chars of `innerText`, trimmed. The re-anchoring lifeline.
 
