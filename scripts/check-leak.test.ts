@@ -43,6 +43,14 @@ describe('scanBuildOutput — detection', () => {
       why: "C1's transform stamped production DOM",
     },
     {
+      // Only the component attribute in this fixture, and only the source attribute in the
+      // one above: each row asserts exactly one finding, and the two needles are not
+      // substrings of one another, so neither row can trip the other's rule.
+      rule: 'component-attribute',
+      contents: '<div data-dogear-component="Button">hi</div>',
+      why: "C5's transform stamped production DOM",
+    },
+    {
       rule: 'package-specifier',
       contents: 'import x from "@dogear/core"',
       why: 'dogear was in the module graph',

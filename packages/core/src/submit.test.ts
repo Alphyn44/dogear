@@ -21,7 +21,14 @@ function draft(
 ): AnnotationDraft {
   return {
     comment,
-    element: { tag: 'button', id: null, classes: ['tab'], text: 'Settings' },
+    sites: [],
+    element: {
+      tag: 'button',
+      selector: 'nav.tab-bar > button:nth-of-type(1)',
+      id: null,
+      classes: ['tab'],
+      text: 'Settings',
+    },
     url: 'http://localhost:5173/settings',
     viewport: { w: 1512, h: 945, dpr: 2 },
     authoredAt: '2026-08-11T10:00:00.000Z',

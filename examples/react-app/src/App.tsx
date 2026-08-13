@@ -7,9 +7,16 @@
  * own click handler does not fire", and until it existed this app had no click handlers at
  * all — so the criterion was unverifiable in the very app dogear is dogfooded in. Now a
  * plain click on a tab appends a line and a modifier-click must not.
+ *
+ * The tab bar lives in TabBar.tsx and Button.tsx rather than here, and that split is also
+ * not decoration: it is the brief's `Button.tsx:12` vs `TabBar.tsx:42` example made real,
+ * so C5's (#19) component names have more than one name to show and C2 (#16) has a chain
+ * that genuinely crosses a component boundary.
  */
 
 import { useState } from 'react'
+
+import { TabBar } from './TabBar.js'
 
 const items = ['Overview', 'Settings', 'Billing']
 
@@ -34,32 +41,20 @@ export function App() {
         line, an Alt-click must not.
       </p>
 
-      <nav className="tab-bar">
-        {items.map((item) => (
-          <button
-            key={item}
-            className="tab"
-            type="button"
-            onClick={() => {
-              setLog((entries) => [`clicked ${item}`, ...entries])
-            }}
-          >
-            {item}
-          </button>
-        ))}
-        <button
-          className="tab"
-          type="button"
-          onClick={() => {
-            setLog([])
-          }}
-        >
-          Clear
-        </button>
-      </nav>
+      <TabBar
+        items={items}
+        onSelect={(item) => {
+          setLog((entries) => [`clicked ${item}`, ...entries])
+        }}
+        onClear={() => {
+          setLog([])
+        }}
+      />
 
       <section className="log">
-        <h2>Click log</h2>
+        {/* The one test id in this app, so C3's (#17) `element.testId` and its selector
+            fast path are observable by clicking rather than only in a unit test. */}
+        <h2 data-testid="log-heading">Click log</h2>
         {log.length === 0 ? (
           <p className="empty">Nothing yet.</p>
         ) : (

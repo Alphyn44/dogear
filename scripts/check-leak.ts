@@ -55,6 +55,16 @@ export const RULES: readonly Rule[] = [
     why: "C1's JSX transform stamps this in dev only; production DOM must never carry it",
   },
   {
+    // A separate literal rather than widening the rule above to `data-dogear`. That would
+    // look like the tidier fix and would break the gate: examples/react-app renders the
+    // text `<script data-dogear>` as prose explaining A1, so the shorter substring is
+    // legitimately present in a healthy production build. Same trap as using the product
+    // name — see the Decisions log.
+    name: 'component-attribute',
+    needle: 'data-dogear-component',
+    why: "C5's JSX transform stamps this in dev only; production DOM must never carry it",
+  },
+  {
     name: 'package-specifier',
     needle: '@dogear/',
     why: 'an unresolved import or a surviving sourcemap path — dogear was in the module graph',

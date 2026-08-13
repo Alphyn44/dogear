@@ -48,7 +48,7 @@ describe('the consumer bundle', () => {
     expect(scanBuildOutput(EXAMPLE_DIST).filesScanned).toBeGreaterThan(0)
   })
 
-  it('carries no dogear sentinel, source attribute, or package specifier', () => {
+  it('carries no dogear sentinel, source or component attribute, or package specifier', () => {
     expect(formatFindings(scanBuildOutput(EXAMPLE_DIST).findings)).toBe('')
   })
 })
@@ -120,7 +120,7 @@ describe('the gated dynamic import (F1, layer 2)', () => {
     expect(formatFindings(survivors.findings)).toBe('')
   })
 
-  it('carries no sentinel, source attribute, or package specifier either', () => {
+  it('carries no sentinel, source or component attribute, or package specifier either', () => {
     // The standard rules on top, so the fixture is held to the same bar as the example.
     expect(formatFindings(scanBuildOutput(GATED_DIST).findings)).toBe('')
   })

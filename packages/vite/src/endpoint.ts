@@ -50,6 +50,15 @@ export interface EndpointOptions {
    * {@link sendMissingBundleStub}.
    */
   readonly clientDist: ClientDist | undefined
+  /**
+   * The workspace package this dev server serves — C4 (#18). Stamped onto every annotation
+   * written through it.
+   *
+   * `undefined` when there is no `package.json` above the Vite root, it declares no name, or
+   * it would not parse. The field is then absent from the annotation entirely; a repo with
+   * one package has nothing to disambiguate and loses nothing by it.
+   */
+  readonly app?: string
 }
 
 /**
@@ -140,10 +149,12 @@ export function createEndpoint(options: EndpointOptions): Connect.NextHandleFunc
       return
     }
 
-    handleSubmit(req, res, queuePath, options.gitRoot).catch((error: unknown) => {
-      // The catch-all exists so a throw cannot leave a dev server holding an open socket.
-      sendJson(res, 500, { ok: false, error: messageOf(error) })
-    })
+    handleSubmit(req, res, queuePath, options.gitRoot, options.app).catch(
+      (error: unknown) => {
+        // The catch-all exists so a throw cannot leave a dev server holding an open socket.
+        sendJson(res, 500, { ok: false, error: messageOf(error) })
+      },
+    )
   }
 }
 
@@ -152,6 +163,7 @@ async function handleSubmit(
   res: ServerResponse,
   queuePath: string,
   gitRoot: string,
+  app: string | undefined,
 ): Promise<void> {
   let raw: string
   try {
@@ -198,7 +210,11 @@ async function handleSubmit(
         : appendToQueue(
             queuePath,
             validation.batch.map((input) =>
-              stampAnnotation(input, { note: validation.note }),
+              stampAnnotation(input, {
+                note: validation.note,
+                origin: originOf(req),
+                app,
+              }),
             ),
           )
   } catch (error) {
@@ -218,6 +234,33 @@ async function handleSubmit(
 
 function countPending(queuePath: string): number {
   return readQueue(queuePath).items.filter((item) => item.status === 'pending').length
+}
+
+/**
+ * The origin this request arrived at — C4's (#18) `origin`, e.g. `http://localhost:5173`.
+ *
+ * Read from the request rather than from the server's own config, because one dev server
+ * answers to several names: `localhost:5173`, `127.0.0.1:5173` and a `.local` mDNS name can
+ * all reach the same process, and the annotation should record the one the browser was
+ * actually looking at. `Host` is exactly that.
+ *
+ * **Scheme comes from the socket, not from `x-forwarded-proto`.** `encrypted` is set on a
+ * `TLSSocket` and absent on a plain one, which correctly distinguishes a dev server started
+ * with `server.https`. Trusting the forwarded header instead would let a client describe the
+ * server's own identity, and buys nothing: F3's runtime guard only lets dogear run on
+ * loopback, `*.localhost` and `*.local`, so the reverse-proxy hostnames that header exists
+ * for never have an overlay to submit from. See @dogear/core's host.ts.
+ *
+ * `undefined` when there is no usable `Host` — an HTTP/1.0 client may send none. The field
+ * is then absent rather than `http://undefined`.
+ */
+function originOf(req: IncomingMessage): string | undefined {
+  const host = req.headers.host?.trim()
+  if (host === undefined || host === '') return undefined
+
+  const scheme =
+    (req.socket as { encrypted?: boolean }).encrypted === true ? 'https' : 'http'
+  return `${scheme}://${host}`
 }
 
 /** Thrown past the byte cap so the caller can answer 413 rather than guess. */

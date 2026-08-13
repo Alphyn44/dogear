@@ -489,7 +489,19 @@ describe('B3 — comment and queue', () => {
         // Trimmed, because @dogear/vite's validateBatch rejects the whole batch on a
         // comment that is not a non-empty trimmed string.
         comment: 'shade this darker',
-        element: { tag: 'button', id: null, classes: ['tab'], text: 'Settings' },
+        // Present and empty: nothing in this fixture's ancestry is stamped, and C2 (#16)
+        // sends `[]` rather than omitting the key so every queue item has one shape.
+        sites: [],
+        // C3's (#17) floor, in full. `selector` is always present — the fixture is a
+        // `button.tab` alone in the body, so one segment identifies it — and `testId` is
+        // absent as a key rather than null, because this element carries no test id.
+        element: {
+          tag: 'button',
+          selector: 'button.tab',
+          text: 'Settings',
+          classes: ['tab'],
+          id: null,
+        },
         url: location.href,
         viewport: {
           w: window.innerWidth,
@@ -515,6 +527,7 @@ describe('B3 — comment and queue', () => {
       'comment',
       'element',
       'key',
+      'sites',
       'url',
       'viewport',
     ])
@@ -529,6 +542,78 @@ describe('B3 — comment and queue', () => {
     keyInBox({ key: 'Enter' })
 
     expect(firstQueued().element.text).toBe('Settings')
+  })
+
+  it('carries C3 (#17) — a selector that finds the element again', () => {
+    // The floor, from the session's side. ./selector.test.ts owns what the string contains;
+    // what matters here is that it reaches the payload and still resolves.
+    captureAndType('too dark')
+
+    keyInBox({ key: 'Enter' })
+
+    const { selector } = firstQueued().element
+    expect(selector).not.toBe('')
+    expect(document.querySelector(selector)).toBe(target)
+  })
+
+  it('carries a test id when the element has one', () => {
+    target.setAttribute('data-testid', 'settings-tab')
+
+    captureAndType('too dark')
+    keyInBox({ key: 'Enter' })
+
+    expect(firstQueued().element.testId).toBe('settings-tab')
+    // And the test id becomes the selector, since it outranks everything below an id.
+    expect(firstQueued().element.selector).toBe('[data-testid="settings-tab"]')
+  })
+
+  it('carries C2 (#16) — the chain of the element that was clicked', () => {
+    // The end of the localization ladder, from the session's side: `collectSites` is proved
+    // in ./sites.test.ts, and this is the wiring — capture reads the DOM, commit sends it.
+    const wrapper = document.createElement('nav')
+    wrapper.setAttribute('data-dogear-src', 'src/TabBar.tsx:22:5')
+    wrapper.setAttribute('data-dogear-component', 'TabBar')
+    target.setAttribute('data-dogear-src', 'src/Button.tsx:20:5')
+    target.setAttribute('data-dogear-component', 'Button')
+    target.before(wrapper)
+    wrapper.append(target)
+
+    captureAndType('shade this darker')
+    keyInBox({ key: 'Enter' })
+
+    expect(firstQueued().sites).toEqual([
+      {
+        file: 'src/Button.tsx',
+        line: 20,
+        column: 5,
+        tag: 'button',
+        component: 'Button',
+        via: 'attribute',
+      },
+      {
+        file: 'src/TabBar.tsx',
+        line: 22,
+        column: 5,
+        tag: 'nav',
+        component: 'TabBar',
+        via: 'attribute',
+      },
+    ])
+  })
+
+  it('resolves the chain at capture, not at Enter', () => {
+    // The same argument the element description makes one test above, for the same reason:
+    // the two are views of one element and must not disagree. HMR replacing the subtree
+    // mid-comment is what this protects against — `refresh()` releases a disconnected
+    // element, but only on the next frame.
+    target.setAttribute('data-dogear-src', 'src/Button.tsx:20:5')
+
+    captureAndType('too dark')
+    target.setAttribute('data-dogear-src', 'src/Somewhere.tsx:99:1')
+
+    keyInBox({ key: 'Enter' })
+
+    expect(firstQueued().sites[0]?.file).toBe('src/Button.tsx')
   })
 
   it('releases on Enter, so the next thing you do is point somewhere else', () => {
@@ -1345,7 +1430,14 @@ describe('B6 — the kill switch', () => {
       const carried = createQueue()
       carried.add({
         comment: 'from before the disable',
-        element: { tag: 'button', id: null, classes: [], text: 'Save' },
+        sites: [],
+        element: {
+          tag: 'button',
+          selector: 'button',
+          id: null,
+          classes: [],
+          text: 'Save',
+        },
         url: 'http://localhost:5173/',
         viewport: { w: 1512, h: 945, dpr: 2 },
         authoredAt: '2026-08-12T10:00:00.000Z',
@@ -1363,7 +1455,14 @@ describe('B6 — the kill switch', () => {
       const carried = createQueue()
       carried.add({
         comment: 'from before the disable',
-        element: { tag: 'button', id: null, classes: [], text: 'Save' },
+        sites: [],
+        element: {
+          tag: 'button',
+          selector: 'button',
+          id: null,
+          classes: [],
+          text: 'Save',
+        },
         url: 'http://localhost:5173/',
         viewport: { w: 1512, h: 945, dpr: 2 },
         authoredAt: '2026-08-12T10:00:00.000Z',

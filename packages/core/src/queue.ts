@@ -12,6 +12,7 @@
  */
 
 import type { ElementDescription } from './describe.js'
+import type { SourceSite } from './sites.js'
 
 /**
  * The brief's `viewport` shape — `w`/`h`/`dpr`, not `width`/`height`.
@@ -37,14 +38,24 @@ export interface QueuedViewport {
  * server discards — or worse, one that survives into `queue.json` and breaks the
  * time-sortability v7 was chosen for.
  *
- * The rest of the holes are named tickets, not oversights: `sites` is C1/C2 (#15, #16),
- * `origin` and `app` are C4 (#18), and `element`'s `selector` and `testId` are C3 (#17) —
- * see ./describe.ts for why the description is deliberately a subset rather than a
- * throwaway full payload.
+ * The remaining holes are named tickets, not oversights: `origin` and `app` are C4 (#18),
+ * and `element`'s `selector` and `testId` are C3 (#17) — see ./describe.ts for why the
+ * description is deliberately a subset rather than a throwaway full payload.
  */
 export interface AnnotationDraft {
   /** Trimmed and non-empty. The server rejects the whole batch otherwise — see `validateBatch`. */
   readonly comment: string
+  /**
+   * C2's (#16) ancestor chain — nearest-first, deduplicated by file, capped at 5.
+   *
+   * **Always present, empty when nothing resolved.** A third-party component, a portal, a
+   * `.js` file or a project with the transform off all produce `[]`, and that is an ordinary
+   * outcome rather than a failure: C3's (#17) floor is what keeps such an item useful, which
+   * is the sense of its "`sites` may be empty; `element` never is". Present-and-empty rather
+   * than omitted so every item in `queue.json` has one shape and D1/D5 never branch on a
+   * missing key.
+   */
+  readonly sites: readonly SourceSite[]
   readonly element: ElementDescription
   readonly url: string
   readonly viewport: QueuedViewport

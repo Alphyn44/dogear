@@ -27,6 +27,8 @@ import type { Panel } from './panel.js'
 import { createPanel } from './panel.js'
 import type { Queue } from './queue.js'
 import { acceptableComment } from './queue.js'
+import type { SourceSite } from './sites.js'
+import { collectSites } from './sites.js'
 import { buildBatch, submitBatch, SUBMIT_TIMEOUT_MS } from './submit.js'
 
 /** The `MouseEvent`/`KeyboardEvent` flag each modifier is carried on. */
@@ -227,6 +229,13 @@ export function createSession({
    * re-anchoring lifeline for an agent, so it has to be the text that was pointed at.
    */
   let capturedDescription: ElementDescription | null = null
+  /**
+   * C2's (#16) chain, taken at the same instant as the description above and for the same
+   * reason — the two are views of one element, and resolving the chain at Enter could
+   * describe the element that was clicked while locating the one HMR replaced it with.
+   * `refresh()` does release a disconnected element, but only on the next frame.
+   */
+  let capturedSites: readonly SourceSite[] = []
   let frameScheduled = false
   /** Non-null while a POST is in flight. Aborted by {@link Session.dispose}. */
   let inFlight: AbortController | null = null
@@ -364,6 +373,7 @@ export function createSession({
 
     capturedElement = element
     capturedDescription = describeElement(element)
+    capturedSites = collectSites(element)
     captured.show(rect)
     hover.hide()
 
@@ -378,6 +388,7 @@ export function createSession({
   function release(): void {
     capturedElement = null
     capturedDescription = null
+    capturedSites = []
     captured.hide()
     box.hide()
   }
@@ -403,6 +414,7 @@ export function createSession({
 
     queue.add({
       comment,
+      sites: capturedSites,
       element: capturedDescription,
       url: location.href,
       viewport: {
