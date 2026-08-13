@@ -298,6 +298,7 @@ describe('the cycle', () => {
 describe('the batch across a disable', () => {
   const draft = {
     comment: 'shade this darker',
+    sites: [],
     element: { tag: 'button', id: null, classes: ['tab'], text: 'Settings' },
     url: 'http://localhost:5173/settings',
     viewport: { w: 1512, h: 945, dpr: 2 },

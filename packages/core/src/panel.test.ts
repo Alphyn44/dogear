@@ -31,6 +31,7 @@ function draft(
 ): AnnotationDraft {
   return {
     comment,
+    sites: [],
     element: { tag: 'button', id: null, classes: ['tab'], text: 'Settings' },
     url: 'http://localhost:5173/settings',
     viewport: { w: 1512, h: 945, dpr: 2 },

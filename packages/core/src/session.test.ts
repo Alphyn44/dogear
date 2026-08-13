@@ -489,6 +489,9 @@ describe('B3 — comment and queue', () => {
         // Trimmed, because @dogear/vite's validateBatch rejects the whole batch on a
         // comment that is not a non-empty trimmed string.
         comment: 'shade this darker',
+        // Present and empty: nothing in this fixture's ancestry is stamped, and C2 (#16)
+        // sends `[]` rather than omitting the key so every queue item has one shape.
+        sites: [],
         element: { tag: 'button', id: null, classes: ['tab'], text: 'Settings' },
         url: location.href,
         viewport: {
@@ -515,6 +518,7 @@ describe('B3 — comment and queue', () => {
       'comment',
       'element',
       'key',
+      'sites',
       'url',
       'viewport',
     ])
@@ -529,6 +533,55 @@ describe('B3 — comment and queue', () => {
     keyInBox({ key: 'Enter' })
 
     expect(firstQueued().element.text).toBe('Settings')
+  })
+
+  it('carries C2 (#16) — the chain of the element that was clicked', () => {
+    // The end of the localization ladder, from the session's side: `collectSites` is proved
+    // in ./sites.test.ts, and this is the wiring — capture reads the DOM, commit sends it.
+    const wrapper = document.createElement('nav')
+    wrapper.setAttribute('data-dogear-src', 'src/TabBar.tsx:22:5')
+    wrapper.setAttribute('data-dogear-component', 'TabBar')
+    target.setAttribute('data-dogear-src', 'src/Button.tsx:20:5')
+    target.setAttribute('data-dogear-component', 'Button')
+    target.before(wrapper)
+    wrapper.append(target)
+
+    captureAndType('shade this darker')
+    keyInBox({ key: 'Enter' })
+
+    expect(firstQueued().sites).toEqual([
+      {
+        file: 'src/Button.tsx',
+        line: 20,
+        column: 5,
+        tag: 'button',
+        component: 'Button',
+        via: 'attribute',
+      },
+      {
+        file: 'src/TabBar.tsx',
+        line: 22,
+        column: 5,
+        tag: 'nav',
+        component: 'TabBar',
+        via: 'attribute',
+      },
+    ])
+  })
+
+  it('resolves the chain at capture, not at Enter', () => {
+    // The same argument the element description makes one test above, for the same reason:
+    // the two are views of one element and must not disagree. HMR replacing the subtree
+    // mid-comment is what this protects against — `refresh()` releases a disconnected
+    // element, but only on the next frame.
+    target.setAttribute('data-dogear-src', 'src/Button.tsx:20:5')
+
+    captureAndType('too dark')
+    target.setAttribute('data-dogear-src', 'src/Somewhere.tsx:99:1')
+
+    keyInBox({ key: 'Enter' })
+
+    expect(firstQueued().sites[0]?.file).toBe('src/Button.tsx')
   })
 
   it('releases on Enter, so the next thing you do is point somewhere else', () => {
@@ -1345,6 +1398,7 @@ describe('B6 — the kill switch', () => {
       const carried = createQueue()
       carried.add({
         comment: 'from before the disable',
+        sites: [],
         element: { tag: 'button', id: null, classes: [], text: 'Save' },
         url: 'http://localhost:5173/',
         viewport: { w: 1512, h: 945, dpr: 2 },
@@ -1363,6 +1417,7 @@ describe('B6 — the kill switch', () => {
       const carried = createQueue()
       carried.add({
         comment: 'from before the disable',
+        sites: [],
         element: { tag: 'button', id: null, classes: [], text: 'Save' },
         url: 'http://localhost:5173/',
         viewport: { w: 1512, h: 945, dpr: 2 },
