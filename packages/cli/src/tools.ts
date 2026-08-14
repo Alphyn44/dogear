@@ -7,8 +7,8 @@ import {
   tryReadQueue,
   withApp,
 } from '@dogear/queue'
+import { formatQueue } from '@dogear/queue/format'
 
-import { formatQueue } from './format.js'
 import { findStale } from './stale.js'
 
 /**

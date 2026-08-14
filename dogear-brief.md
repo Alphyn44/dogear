@@ -233,7 +233,8 @@ Because MCP owns the formatting and the resolve path, the hook stays thin — it
 trigger, not a second implementation. Any future agent that ships a context-injecting
 prompt hook becomes a one-adapter addition rather than a redesign.
 
-**Floor — the clipboard.** `Ctrl+Alt+P` in the overlay copies the formatted queue. No
+**Floor — the clipboard.** `Ctrl+Alt+P` in the overlay copies the formatted queue — the
+batch the tab is holding, formatted by the same renderer the other two tiers use. No
 server, no config, no protocol. Works with a web chat window, an agent nobody's written
 an adapter for, or a colleague on Slack. Annoying by design — it's the thing that always
 works, including when MCP is misconfigured.
@@ -483,7 +484,7 @@ matching Vite's own `/__vite_ping` convention):
 | `POST` | `/__dogear/annotations` | Submit a batch |
 | `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
 | `GET` | `/__dogear/client.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
-| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. Left here as a known loose end rather than deleted, in case D5 or E5 wants it |
+| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. D4 was the last plausible claimant and turned it down — its clipboard copies the in-memory batch, since "works with no server" is one of its acceptance criteria. E5 is the only story left that could want it |
 | `POST` | `/__dogear/prune` | Drop resolved items — **not built.** D6 shipped prune on the CLI and MCP surfaces and deferred this one for want of a caller; see the Decisions log |
 
 ### MCP tools
@@ -538,8 +539,20 @@ When you have addressed an item, call dogear_resolve with its id.
 The stale sentence is emitted only when an item in the block actually carries the marker;
 the resolve instruction is always there. Both sit below the block, in that order.
 
-The clipboard variant appends "…paste this to your agent" instead of the resolve
-instruction, since a pasting user has no MCP server.
+The clipboard variant closes with a different line instead of the resolve instruction:
+
+```
+These were pasted in rather than read from the queue, so there is nothing to resolve
+when you are done.
+```
+
+Amended during D4 — the original wording was "…paste this to your agent", on the reasoning
+that a pasting user has no MCP server. Both halves of that turned out to be wrong. The line
+is read by the *agent*, not the user, and by then the pasting has already happened; and the
+browser cannot know where a paste lands, which may well be a session with `dogear_resolve`
+registered. What is true in every destination is the fact above: the clipboard renders the
+browser's in-memory batch, which never reached `queue.json` and carries no ids, so nothing
+there is resolvable regardless of tooling. See the Decisions log.
 
 ### Config
 
@@ -1350,6 +1363,56 @@ is a maintenance surface that gets no test pressure from real use. Both surfaces
 already satisfy "everything works through MCP", so nothing is missing — only convenience for
 a caller that does not exist. Build it when the overlay grows a "clear resolved" control,
 which is the only thing that would make it a *shorter* path than the two that ship.
+
+**The clipboard copies the in-memory batch, not the queue file. Settled during D4.**
+"Copies the formatted queue" admits two readings, and the acceptance criteria settle it: "works
+with no server". The on-disk reading needs `GET /__dogear/queue` — the route B5 found
+caller-less and never built — plus a live dev server and a round trip, which is three
+dependencies for the tier whose entire claim is that it has none. So the clipboard renders what
+the tab is holding.
+
+The consequence is real and accepted rather than engineered around: a successful Submit empties
+the batch, so `Ctrl+Alt+P` is an **alternative** to Submit, not a companion to it. A user who
+does both delivers the same annotations twice — once as pasted text, once through
+`dogear_pending` — with nothing linking the two. That is visible in the paste itself, which says
+the items were never queued, and choosing both paths is the user's to choose. Making a copy
+*clear* the batch was the alternative and is worse: a clipboard write has no receipt. A 200
+proves the annotations reached disk; `execCommand` can report success on a clipboard the OS then
+refuses, and the in-memory queue is the one thing in dogear that cannot be recovered. A copy is
+therefore a read, and reads do not destroy.
+
+**The formatter moved to `@dogear/queue`, behind its own export subpath. Settled during D4.**
+Three callers now — the hook, the MCP server, and the clipboard — and the third is the browser.
+`@dogear/core` declares no dependencies and `@dogear/cli` is a bin package with no `exports`
+field, so the formatter could not stay where it was. The rejected alternative was a copy in core
+guarded by a drift test, which is the pattern already used for `SENTINEL` and the source
+attributes: that works for a constant, where the test can compare two strings, and does not for
+two hundred lines of rendering, where the test would have to compare behaviour and would only
+ever catch the drift it was written for.
+
+`./format` is a **separate subpath from `.`**, and that is the load-bearing part. The package's
+main entry imports `node:fs`, which a browser bundle must never resolve — so the browser-safe
+module is reachable by a specifier that cannot reach the rest, rather than by a convention
+someone has to remember. `format.ts` re-exports `StoredAnnotation` so the subpath is
+self-sufficient, and its own suite asserts mechanically that it imports nothing from `node:`.
+The failure this prevents is invisible everywhere else: a `node:` import there builds, typechecks
+and passes every Node-side suite, and shows up only as an overlay that throws on page load.
+
+**Drafts carry no id, and the formatter omits it. Settled during D4.**
+Identity is stamped by the server at submit — a UUIDv7 whose time-sortability a browser-minted
+v4 would break — so the items in a clipboard block genuinely have none. The block reads
+`[1] — src/Button.tsx:20`, and the positional number is the reader's handle. Nothing is lost:
+`dogear_resolve` cannot act on items that are not in the queue, which is what the paste footer
+says. The alternative was to send the local `key`, which the queue module already warns will
+eventually be mistaken for the server's id — putting it in the id slot in text an agent reads
+is that mistake, made deliberately.
+
+**`Ctrl+Alt+P` is global, like `Ctrl+Alt+D` and unlike `⌘/Ctrl+Enter`.**
+Submit is guarded on the panel being open, which is what keeps B4's review step unavoidable. The
+clipboard is the tier that has to work when nothing else does, so putting a step in front of it
+would contradict the only thing it claims. It is stopped hard for the same reason the kill switch
+is — an app binding the same chord must not also fire — and it is the one chord that guards on
+`event.repeat`, because neither of the others can fire twice and this one can.
 
 **Cross-repo isolation → free, via same-origin.**
 Each dev server serves its own endpoint and knows its own root, so port collisions across

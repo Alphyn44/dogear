@@ -40,11 +40,16 @@ import type { QueueItem } from './queue.js'
 /**
  * The panel's key hints, in the shape ./box.ts's `HINT` established.
  *
- * `Ctrl+Alt+D` written literally rather than as ⌃⌥D, because the binding really is
- * `ctrlKey && altKey` on every platform — it is not remapped to Command on macOS — so the
- * symbols would be the ambiguous form here, not the friendly one.
+ * `Ctrl+Alt+D` and `Ctrl+Alt+P` written literally rather than as ⌃⌥D and ⌃⌥P, because the
+ * bindings really are `ctrlKey && altKey` on every platform — neither is remapped to Command on
+ * macOS — so the symbols would be the ambiguous form here, not the friendly one.
+ *
+ * D4's (#23) copy sits between the two it sits between in meaning: submit is the wired-up path,
+ * copy is the floor beneath it, disable is the exit. "disable dogear" loses its second word to
+ * make room — three bindings on one line is already what ./box.ts's `HINT` is doing, and the
+ * word `dogear` is on the badge two inches away.
  */
-export const FOOTER_HINT = '⌘/Ctrl+⏎ submit · Ctrl+Alt+D disable dogear'
+export const FOOTER_HINT = '⌘/Ctrl+⏎ submit · Ctrl+Alt+P copy · Ctrl+Alt+D disable'
 
 /** What the panel asks the session to do. It mutates nothing itself. */
 export interface PanelHandlers {

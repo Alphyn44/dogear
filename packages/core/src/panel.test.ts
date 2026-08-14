@@ -234,11 +234,14 @@ describe('the footer', () => {
     expect(onDisable).not.toHaveBeenCalled()
   })
 
-  it('names the chord in the footer, which is the only in-page place it appears', () => {
+  it('names the chords in the footer, which is the only in-page place they appear', () => {
     // Discovery: the panel is reachable only when the queue has something in it, so this is
-    // where someone learns the binding while they are here for another reason.
+    // where someone learns the bindings while they are here for another reason. D4's (#23)
+    // copy especially — an undiscoverable fallback is not a fallback, and the whole point of
+    // that one is that it is what you reach for when the wired-up path has failed.
     expect(panel.element.querySelector('.footer-hint')?.textContent).toBe(FOOTER_HINT)
     expect(FOOTER_HINT).toContain('Ctrl+Alt+D')
+    expect(FOOTER_HINT).toContain('Ctrl+Alt+P')
   })
 
   it('carries the way back in its title, since nothing in the page will after this', () => {

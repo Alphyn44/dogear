@@ -30,6 +30,18 @@ export default defineConfig({
   // They are never loaded together — one is the library entry, the other is the dev client.
   splitting: false,
 
+  // D4's clipboard export reaches `@dogear/queue/format` — the one module in that package a
+  // browser may load. It must be INLINED, and `splitting: false` above is exactly why: the
+  // bare specifier would otherwise survive into `client.js`, which @dogear/vite serves as a
+  // single file over HTTP, and the browser would ask the endpoint for `/@dogear/queue/format`
+  // and get a 404. `test-built/self-contained.test.ts` is the guard.
+  //
+  // Belt and braces rather than strictly required today: tsup externalises `dependencies` by
+  // default and core declares none, so this would bundle regardless. Stated anyway, for the
+  // reason @dogear/vite's config gives — the cost of that default changing is a broken
+  // publish nobody notices.
+  noExternal: ['@dogear/queue'],
+
   // Declarations come from `tsc --emitDeclarationOnly` (see tsconfig.build.json and
   // the package's `build` script), NOT from tsup.
   //

@@ -1,6 +1,6 @@
 import { findGitRoot, pendingOnly, queuePathFor, tryReadQueue } from '@dogear/queue'
 
-import { formatQueue } from './format.js'
+import { formatQueue } from '@dogear/queue/format'
 import type { Result } from './run.js'
 import { findStale } from './stale.js'
 

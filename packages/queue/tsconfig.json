@@ -1,8 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // Node only, no DOM. Both consumers run this on the server side: the Vite plugin
-    // inside the dev server, the CLI inside the MCP process.
+    // No DOM, and `node` types available — which is right for every module here EXCEPT
+    // ./src/format.ts, and that exception is the one worth knowing about.
+    //
+    // Two of the three consumers run on the server side: the Vite plugin inside the dev
+    // server, the CLI inside the MCP process. The third is @dogear/core, which reaches
+    // ./src/format.ts through the `./format` export subpath and inlines it into a browser
+    // bundle. tsc cannot express "this one file may not touch node:" — so the rule is stated
+    // in that file's header and enforced by a source guard in ./src/format.test.ts.
     "lib": ["ES2022"],
     "types": ["node"]
   },

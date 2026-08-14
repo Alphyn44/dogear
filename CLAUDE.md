@@ -91,16 +91,27 @@ Don't over-explain basics.
 | `@dogear/core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
 | `@dogear/vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
 | `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. `hook`, `mcp` and `prune` are implemented. |
-| `@dogear/queue` | The queue file: git-root walk, atomic read/write, annotation identity. **Private, source-only, never published** — see below. |
+| `@dogear/queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. **Private, source-only, never published** — see below. |
 
 **`@dogear/queue` has no build and is not published.** Its `exports` points straight at
-`src/index.ts`; `@dogear/vite` and `@dogear/cli` list it as a **devDependency** and their
-tsup configs set `noExternal` so it is inlined at build time. Two consequences worth
+`src/index.ts`; `@dogear/vite`, `@dogear/cli` and `@dogear/core` list it as a **devDependency**
+and their tsup configs set `noExternal` so it is inlined at build time. Two consequences worth
 knowing: the published install story is still three packages with no new runtime
 dependency, and `npm run typecheck` keeps working with **no prior build** — which it must,
 because CI typechecks before it builds and `stop-verify.sh` typechecks every TypeScript
 turn. A built fourth package would have put `dist/*.d.ts` on that critical path, which is
 the trap `examples/react-app` already documents.
+
+**The formatter lives here too, and it is the one module a browser loads.** `formatQueue`
+renders the `<dogear-queue>` block for all three callers — `dogear hook`, `dogear_pending`, and
+D4's clipboard export in `@dogear/core`. The third is why it moved out of `@dogear/cli`: core
+declares no dependencies and cli is a bin package with no `exports` field, so a shared file
+there was unreachable. It sits behind a **separate `./format` export subpath**, deliberately not
+re-exported from `index.ts`, because the main entry imports `node:fs` and core inlines whatever
+it resolves into `client.js`. So **`packages/queue/src/format.ts` must never import a `node:`
+module** — a violation builds, typechecks and passes every Node-side suite, and surfaces only as
+an overlay that throws on page load. `format.test.ts` guards it with a source rule, in the shape
+`packages/core/src/listeners.test.ts` established.
 
 **Two readers in `@dogear/queue`, and the rule is not stylistic: reads may tolerate, writes
 must refuse.** `readQueue` throws; `tryReadQueue` never does and is *derived* from it.
@@ -194,8 +205,8 @@ and was rejected: it would be a second live entry point a bundler could follow i
 production, which is the hole F1 layer 3 exists to close.
 
 **Three vitest environments, one config.** The DOM suites (`overlay`, `session`, `listeners`,
-`teardown`, `describe`, `init.host-bail`, `badge`, `panel`, `controller`, `preference`) carry a
-`// @vitest-environment happy-dom` docblock; everything else stays `node`. All geometry is pure
+`teardown`, `describe`, `init.host-bail`, `badge`, `panel`, `controller`, `preference`,
+`clipboard`) carry a `// @vitest-environment happy-dom` docblock; everything else stays `node`. All geometry is pure
 functions tested in the node environment, because happy-dom has no layout engine and
 `getBoundingClientRect` there returns zeros. B5's `submit` suite is `node` for the same reason
 — it stubs `fetch` and touches no DOM, which is why the transport is a module of its own.

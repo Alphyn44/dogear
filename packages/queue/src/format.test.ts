@@ -1,8 +1,9 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
-import type { StoredAnnotation } from '@dogear/queue'
-
 import { formatQueue } from './format.js'
+import type { StoredAnnotation } from './queue.js'
 
 /** The brief's worked example, once the C epic has filled in every field. */
 const FULL: StoredAnnotation = {
@@ -169,6 +170,41 @@ describe('formatQueue', () => {
     expect(formatQueue([FULL])).toContain(FULL.id)
   })
 
+  describe('an item with no id — D4’s clipboard export', () => {
+    // The browser's in-memory batch has never been submitted, so the server has stamped no
+    // identity onto it. The formatter renders what is there rather than a placeholder.
+    const NO_ID: StoredAnnotation = { ...FULL, id: '' }
+
+    it('drops the id and keeps the em dash before the location', () => {
+      expect(formatQueue([NO_ID], { footer: 'paste' })).toContain(
+        '[1] — src/components/Button.tsx:12  (Button, via attribute)\n',
+      )
+    })
+
+    it('leaves the headline as just the position when there is no site either', () => {
+      const bare = formatQueue([{ id: '', status: 'pending', comment: 'no anchors' }], {
+        footer: 'paste',
+      })
+
+      expect(bare).toContain('[1]\n    comment: no anchors')
+    })
+
+    it('still carries the stale marker if a caller somehow marks it', () => {
+      // No caller does — the browser passes no set — but the headline is built by one
+      // expression and a missing id must not be able to detach the marker from it.
+      expect(formatQueue([NO_ID], { stale: new Set(['']) })).toContain(
+        '(Button, via attribute)  ⚠ stale',
+      )
+    })
+
+    it('does not change the rendering of an item that HAS one', () => {
+      // The guard against fixing D4 by breaking the two callers that were already correct.
+      expect(formatQueue([FULL])).toContain(
+        `[1] ${FULL.id} — src/components/Button.tsx:12  (Button, via attribute)\n`,
+      )
+    })
+  })
+
   it('renders NO stale marker when the caller passes no set — D4’s case', () => {
     // Retargeted by D5. This used to assert "nothing computes staleness yet"; now something
     // does, and the property worth pinning is that the formatter never invents it. D4's
@@ -257,14 +293,58 @@ describe('formatQueue', () => {
       )
     })
 
-    it.each([{ footer: 'resolve' as const }, { footer: 'none' as const }])(
-      'still renders nothing at all for an empty queue with $footer',
-      ({ footer }) => {
-        // The zero-bytes rule outranks the footer. A lone closing instruction with no items
-        // above it would be worse than silence — it would tell the agent to resolve nothing.
-        expect(formatQueue([], { footer })).toBe('')
-      },
-    )
+    it.each([
+      { footer: 'resolve' as const },
+      { footer: 'none' as const },
+      { footer: 'paste' as const },
+    ])('still renders nothing at all for an empty queue with $footer', ({ footer }) => {
+      // The zero-bytes rule outranks the footer. A lone closing instruction with no items
+      // above it would be worse than silence — it would tell the agent to resolve nothing.
+      expect(formatQueue([], { footer })).toBe('')
+    })
+
+    describe('{ footer: paste } — D4', () => {
+      it('closes with the paste line instead of the resolve instruction', () => {
+        const output = formatQueue([FULL], { footer: 'paste' })
+
+        expect(output).toContain(
+          '\n\nThese were pasted in rather than read from the queue, so there is nothing ' +
+            'to resolve when you are done.',
+        )
+        expect(output).not.toContain('dogear_resolve')
+      })
+
+      it('emits it as one line', () => {
+        // The constant is split across two source lines for Prettier's benefit only. A reader
+        // pasting into a chat window gets one sentence, not a wrapped fragment.
+        const output = formatQueue([FULL], { footer: 'paste' })
+
+        expect(output.split('\n').at(-1)).toBe(
+          'These were pasted in rather than read from the queue, so there is nothing to ' +
+            'resolve when you are done.',
+        )
+      })
+
+      it('keeps the stale note above it, in the same order the resolve footer has', () => {
+        // The browser passes no set, so this pairing does not arise today. Pinned anyway:
+        // the ordering is the brief's, and it belongs to the block rather than to a caller.
+        const output = formatQueue([FULL], {
+          footer: 'paste',
+          stale: new Set([FULL.id]),
+        })
+
+        expect(output.indexOf('Items marked')).toBeLessThan(
+          output.indexOf('These were pasted in'),
+        )
+      })
+
+      it('leaves the shared paragraph above the block untouched', () => {
+        // The one thing that varies between the three callers is the closing instruction.
+        expect(formatQueue([FULL], { footer: 'paste' })).toContain(
+          'These are annotations left by clicking elements in the running app.',
+        )
+      })
+    })
   })
 
   it('falls back to origin when there is no url', () => {
@@ -320,5 +400,37 @@ describe('formatQueue', () => {
     ])
 
     expect(output).toContain('    text: "Save \\"now\\"\\nor later"')
+  })
+})
+
+describe('the browser-safety rule', () => {
+  /**
+   * A source rule, in the shape @dogear/core's ./listeners.test.ts established, and it is the
+   * only mechanical thing standing between an ordinary-looking edit and a dead overlay.
+   *
+   * @dogear/core reaches this module at the `./format` export subpath and tsup inlines it into
+   * `client.js`, which runs in a browser. A `node:` import here would build fine, typecheck
+   * fine, and pass every suite in this package — the failure surfaces only when a dev server
+   * serves the bundle and the page throws on load. Nothing else in `npm run verify` looks.
+   *
+   * Deliberately narrow: it guards this one file, because this one file is the only part of
+   * @dogear/queue a browser ever loads. `./queue.ts` next door imports `node:fs` and should.
+   */
+  it('imports nothing from node:', () => {
+    const source = readFileSync(new URL('./format.ts', import.meta.url), 'utf8')
+
+    expect(source).not.toMatch(/from '(node:|fs|path)/)
+    expect(source).not.toMatch(/require\(/)
+  })
+
+  it('imports nothing that would drag one in transitively', () => {
+    // The type re-export is `export type`, which erases. Any *value* import from './queue.js'
+    // would resolve the module that owns every filesystem line in this package.
+    const source = readFileSync(new URL('./format.ts', import.meta.url), 'utf8')
+
+    const fromQueue = source.match(/^(?:import|export).*from '\.\/queue\.js'/gm) ?? []
+
+    expect(fromQueue.length).toBeGreaterThan(0)
+    for (const line of fromQueue) expect(line).toMatch(/^(?:import|export) type /)
   })
 })

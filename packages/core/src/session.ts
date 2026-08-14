@@ -1,6 +1,7 @@
 /**
  * B2 (#9) and B1 (#8) — the modifier state machine, the suppression set, and capture — plus
- * B3's (#10) queueing on Enter, B4's (#11) review panel, and B5's (#12) submit.
+ * B3's (#10) queueing on Enter, B4's (#11) review panel, B5's (#12) submit, and D4's (#23)
+ * clipboard copy.
  *
  * Everything here attaches through the registry `init()` owns, so B6's (#13) "detach, don't
  * ignore" holds by construction rather than by discipline. See ./listeners.ts.
@@ -12,9 +13,12 @@
  * without adding the panel to the list.
  */
 
+import { formatQueue } from '@dogear/queue/format'
+
 import type { Badge } from './badge.js'
 import { createBadge } from './badge.js'
 import type { CommentBox } from './box.js'
+import { copyText, toStoredAnnotations } from './clipboard.js'
 import { createCommentBox } from './box.js'
 import type { ElementDescription } from './describe.js'
 import { describeElement, labelFor } from './describe.js'
@@ -142,8 +146,12 @@ export interface SessionDeps {
 }
 
 /**
- * How long B5's (#12) `N sent` confirmation stays up before the badge reverts and the host
- * unmounts itself.
+ * How long a one-shot badge notice stays up before the badge reverts to the count and the host
+ * unmounts itself if there is nothing left to show.
+ *
+ * B5's (#12) `N sent`, and since D4 (#23) also `N copied` and `nothing to copy`. The name is
+ * B5's and is kept: the two notices are the same mechanism, and renaming it would churn every
+ * test that advances the clock by it for no behavioural gain.
  *
  * Long enough to read, short enough that it is gone before you have done anything else —
  * which is what keeps B7's (#14) "zero nodes while idle and the queue is empty" true without
@@ -449,8 +457,10 @@ export function createSession({
     const items = queue.items
     if (items.length === 0) return
 
-    // Cancel a pending revert before starting: two submits in quick succession would
-    // otherwise leave the first one's timer to overwrite the second one's notice.
+    // Cancel a pending revert before starting. `announce()` does this too, but only on the
+    // path that reaches it — a submit that *fails* never announces, and leaving an earlier
+    // `3 sent` or `3 copied` to revert mid-flight would reset the badge under an error the
+    // panel is still showing.
     clearNotice()
     panel.clearStatus()
     panel.setBusy(true)
@@ -495,8 +505,84 @@ export function createSession({
 
     // Announced rather than set, then reverted on a timer — the panel has just closed, so
     // this is the only thing left saying the write happened.
-    badge.announce(`${result.written} sent`)
+    announce(`${result.written} sent`)
+  }
+
+  /**
+   * D4 (#23) — the floor beneath MCP. Copy the batch, formatted exactly as `dogear_pending`
+   * and `dogear hook` format it, with no server involved at all.
+   *
+   * **Read-only, and that is the whole shape of it.** Nothing is removed, the note survives,
+   * the panel keeps whatever it was showing. A submit clears the batch because a 200 is proof
+   * it reached disk; a clipboard write has no equivalent receipt — `execCommand` can report
+   * success on a clipboard the OS then refuses — and the in-memory queue is the one thing in
+   * dogear that cannot be recovered.
+   *
+   * The consequence, accepted rather than worked around: a user who copies *and* submits
+   * delivers the same annotations twice. It is visible, because the pasted block says the
+   * items were never queued, and choosing both paths is theirs to choose.
+   */
+  async function copy(): Promise<void> {
+    // Same commit `send()` makes, for the same reason. This chord is global, so it can fire
+    // while a row's textarea has focus mid-edit — and copying the last *committed* comment
+    // while different text is on screen is a silent wrong answer. A no-op when nothing is
+    // being edited; see ./panel.ts.
+    if (panel.editing) panel.commitEdit()
+
+    const items = queue.items
+
+    if (items.length === 0) {
+      // The clipboard is deliberately not written. `formatQueue` returns the empty string for
+      // an empty list, and clobbering whatever the user had copied — in the one case where
+      // dogear has nothing to say — is worse than saying nothing.
+      announce('nothing to copy')
+      return
+    }
+
+    const text = formatQueue(toStoredAnnotations(items, panel.note), { footer: 'paste' })
+    const copied = await copyText(text)
+
+    // Torn down while the clipboard write was settling. Same guard and same reason as
+    // `send()`'s above: scheduling a notice here would leave a timer `dispose()` has already
+    // run past, which is the one thing it exists to prevent.
+    if (disposed) return
+
+    if (!copied) {
+      announce('copy failed')
+      // The badge gets one word; the developer gets somewhere to look. A refused clipboard is
+      // a permissions or origin problem, and the badge cannot say which.
+      console.error('[dogear] clipboard copy failed — the batch is untouched')
+      return
+    }
+
+    announce(`${items.length} copied`)
+
+    // The one thing `copyText` cannot put back. Its fallback path has to focus a textarea to
+    // select it, and everything inside our closed shadow root reports the *host* as
+    // `document.activeElement` — so restoring that focuses an element with no tabindex, which
+    // is a no-op, and the caret the user was typing in is gone.
+    //
+    // Conditional on focus having actually left, rather than unconditional: the async clipboard
+    // path moves nothing, and stealing focus back to the box there would be dogear taking a
+    // caret the user had put somewhere else.
+    if (box.open && document.activeElement !== overlay.host) box.focus()
+  }
+
+  /**
+   * Show a one-shot notice on the badge, then revert to the count.
+   *
+   * Shared by B5's submit and D4's copy so the two cannot drift. One timer serves both: the
+   * revert reads `queue.count` when it *fires* rather than when it is scheduled, so whichever
+   * notice was announced last wins and the count it reverts to is correct either way.
+   */
+  function announce(text: string): void {
+    // Cancel a pending revert first: two notices in quick succession would otherwise leave the
+    // first one's timer to overwrite the second one's text.
+    clearNotice()
+
+    badge.announce(text)
     overlay.mount()
+
     noticeTimer = setTimeout(() => {
       noticeTimer = null
       badge.set(queue.count)
@@ -625,12 +711,34 @@ export function createSession({
         return
       }
 
+      // D4's (#23) clipboard copy — the other half of the `Ctrl+Alt` family, and global for the
+      // same reason the kill switch is. This is the tier that has to work when nothing else
+      // does, so requiring the panel to be open first would put a step in front of the one
+      // binding whose whole claim is that it always works.
+      //
+      // `event.code` for the layout reason above. `!event.repeat` is the guard the other two
+      // chords do not need and this one does: submit is protected by `inFlight` and disable by
+      // the fact that its first firing tears the session down, whereas a held `Ctrl+Alt+P`
+      // would copy on every autorepeat and thrash the badge with a queue of revert timers.
+      if (
+        event.code === 'KeyP' &&
+        event.ctrlKey &&
+        event.altKey &&
+        !event.isComposing &&
+        !event.repeat
+      ) {
+        void copy()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
+
       // B5's (#12) keyboard path to submit. Before the two plain-Enter arms below, because
       // ⌘/Ctrl+Enter inside a row or the note would otherwise commit the edit and stop.
       //
       // Not bound to the box's Enter: submitting is a panel action, and requiring the panel
-      // to be open is what keeps B4's (#11) review step unavoidable. `Ctrl+Alt+P` is
-      // reserved for D4's (#23) clipboard export, so the two do not collide.
+      // to be open is what keeps B4's (#11) review step unavoidable. D4's `Ctrl+Alt+P` is
+      // handled above, so the two do not collide.
       if (
         event.key === 'Enter' &&
         (event.metaKey || event.ctrlKey) &&

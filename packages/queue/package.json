@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Shared, unpublished home for the dogear queue file: the git-root walk, atomic reads and writes, and annotation identity.",
+  "description": "Shared, unpublished home for the dogear queue: the git-root walk, atomic reads and writes, annotation identity, and the agent-facing formatter.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -17,6 +17,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./format": {
+      "types": "./src/format.ts",
+      "default": "./src/format.ts"
     }
   },
   "scripts": {

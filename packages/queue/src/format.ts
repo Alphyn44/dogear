@@ -1,20 +1,29 @@
-import type { StoredAnnotation } from '@dogear/queue'
+import type { StoredAnnotation } from './queue.js'
 
 /**
  * The agent-facing rendering of the queue, specified in the brief under "Agent-facing
  * format".
  *
- * This is written as **the** formatter, not as a throwaway for A3. The brief's ordering
- * argument — MCP before the hook, "building the hook first would mean writing the formatter
- * twice" — holds only because `dogear mcp` (D1) and `dogear hook` live in the same package
- * and can share this file. D1 and D4's clipboard export call it; the hook is a trigger, not
- * a second implementation.
+ * This is written as **the** formatter, not as a throwaway for A3. There are three callers —
+ * `dogear mcp` (D1), `dogear hook` (D3), and D4's (#23) clipboard export — and the hook is a
+ * trigger rather than a second implementation.
+ *
+ * **It lives in @dogear/queue, and the third caller is why.** The first two are `@dogear/cli`
+ * and could have shared a file there; `@dogear/core` is the browser half, declares no
+ * dependencies of its own, and cannot import a bin package. Moving the formatter down to the
+ * package that already owns {@link StoredAnnotation} gives all three one copy instead of two
+ * and a drift test.
+ *
+ * **This file must never import a `node:` module.** It is reachable at the `./format` export
+ * subpath — deliberately separate from `.`, whose `./index.js` pulls in `node:fs` — and
+ * @dogear/core inlines it into `client.js`, which runs in a browser. A single `node:` import
+ * here is an overlay that fails to load, and nothing in the Node-side suites would see it.
+ * ./format.test.ts guards the rule mechanically.
  *
  * Both of the brief's original departures are now closed. The `⚠ stale` marker arrived with
- * D5, which computes staleness in ./stale.ts and passes the result in — **this file still
- * touches no filesystem**, and that is load-bearing rather than incidental: D4's clipboard
- * export runs this same formatter in a browser, where there is neither `node:fs` nor a
- * repository to read. It passes no set, and no markers render.
+ * D5, which computes staleness in ../../cli/src/stale.ts and passes the result in — so this
+ * file touches no filesystem, which is the same constraint stated from the other end. The
+ * browser passes no set, and no markers render.
  *
  * The other departure — a missing `dogear_resolve` footer — was A3's, and D1 closed it by
  * registering the tool. The footer is now emitted by default and selected by {@link
@@ -27,6 +36,16 @@ import type { StoredAnnotation } from '@dogear/queue'
  * every line for the entire first two milestones.
  */
 
+/**
+ * Re-exported so the `./format` subpath is self-sufficient.
+ *
+ * @dogear/core needs this type to build what it passes in, and reaching for it through the
+ * package's `.` entry would name the module graph that imports `node:fs` from a file bundled
+ * for a browser. Type-only, so it erases entirely — but a value import written there by
+ * mistake would not, and the point of the separate subpath is that the mistake is unavailable.
+ */
+export type { StoredAnnotation } from './queue.js'
+
 /** `element.text` is capped at 80 chars by the browser; a hand-written file is not. */
 const MAX_TEXT = 80
 
@@ -36,6 +55,26 @@ const MAX_TEXT = 80
  * agent and never skips it, so this is not a promise the reader might be unable to keep.
  */
 const RESOLVE_FOOTER = 'When you have addressed an item, call dogear_resolve with its id.'
+
+/**
+ * D4's (#23) closing line, and it is not the brief's original wording — see the Decisions log.
+ *
+ * The brief said "…paste this to your agent", which addresses the person doing the pasting.
+ * By the time anything reads this line the pasting has happened, and the reader is the agent.
+ * It also cannot claim there is no MCP server: the browser has no idea where a paste lands,
+ * and it may well be a session with `dogear_resolve` registered.
+ *
+ * What *is* true in every destination is the fact this states. The clipboard export renders
+ * the browser's in-memory batch, which never reached `queue.json` and carries no ids — so
+ * `dogear_resolve` cannot act on these items whatever tooling the reader has, and an agent
+ * that has seen the tool elsewhere should not go inventing ids to call it with.
+ *
+ * Split across two lines because the sentence is longer than Prettier's print width, not for
+ * any rendering reason — it is emitted as one line.
+ */
+const PASTE_FOOTER =
+  'These were pasted in rather than read from the queue, so there is nothing to ' +
+  'resolve when you are done.'
 
 /**
  * D5's explanation of the marker, emitted only when something actually carries it.
@@ -54,15 +93,14 @@ export interface FormatOptions {
   /**
    * What the reader should do next.
    *
-   * `'resolve'` (the default) closes the block with the `dogear_resolve` instruction.
-   * `'none'` omits it. **D4 adds a third member here** — its clipboard export ends with
-   * "…paste this to your agent" instead, since someone pasting into a web chat window has no
-   * MCP server to call and telling them to call a tool wastes a turn.
+   * `'resolve'` (the default) closes the block with the `dogear_resolve` instruction, for the
+   * two callers whose items are on disk and addressable by id. `'paste'` is D4's (#23)
+   * clipboard export — see {@link PASTE_FOOTER}. `'none'` omits the line entirely.
    *
    * A parameter rather than three copies of the renderer: the item block is identical for
    * all three callers, and the closing instruction is the only thing that varies.
    */
-  readonly footer?: 'resolve' | 'none'
+  readonly footer?: 'resolve' | 'none' | 'paste'
   /**
    * Ids the caller has determined are stale — D5 (#24).
    *
@@ -109,7 +147,12 @@ export function formatQueue(
     'the element was seen; treat the location as a strong hint, not a constraint — if it',
     'does not match, locate the element by its selector or text instead.',
     ...(anyStale ? ['', ...STALE_NOTE] : []),
-    ...(footer === 'none' ? [] : ['', RESOLVE_FOOTER]),
+    // Stale note first, footer last, whichever footer it is — the brief pins that order under
+    // "Agent-facing format", and it is the useful one: what is wrong with the block, then what
+    // to do about it.
+    ...(footer === 'none'
+      ? []
+      : ['', footer === 'paste' ? PASTE_FOOTER : RESOLVE_FOOTER]),
   ].join('\n')
 }
 
@@ -120,12 +163,22 @@ function formatItem(item: StoredAnnotation, position: number, stale: boolean): s
   // The full id, not the brief example's shortened form. D2's `dogear_resolve` takes ids
   // verbatim, and an abbreviated one would either not match or match ambiguously — the id
   // is the model's handle on the item, so it has to be the real thing.
+  //
+  // **Omitted when there isn't one**, which is D4's (#23) case and only D4's: the clipboard
+  // export renders the browser's in-memory batch, and identity is stamped by the server at
+  // submit, so those items genuinely have no id to print. `[1] — src/Button.tsx:20` is the
+  // honest rendering; the positional number is the reader's handle, and a resolve instruction
+  // is not emitted for that footer anyway. `asString` already maps `''` to undefined, so this
+  // is one call rather than a new predicate, and an item that *has* an id renders unchanged.
+  //
   // The marker closes the headline, after the location, as the brief's example block has it.
   // Two spaces before it, matching the gap `formatSite` puts before its parenthetical — it is
   // a separate fact about the item, not part of the location.
+  const id = asString(item.id)
   const [primary, ...rest] = sites
   const lines = [
-    `[${position}] ${item.id}${primary ? ` — ${formatSite(primary)}` : ''}` +
+    `[${position}]${id === undefined ? '' : ` ${id}`}` +
+      (primary ? ` — ${formatSite(primary)}` : '') +
       (stale ? '  ⚠ stale' : ''),
   ]
 

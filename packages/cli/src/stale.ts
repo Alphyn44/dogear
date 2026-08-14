@@ -10,10 +10,12 @@ import type { StoredAnnotation } from '@dogear/queue'
  * whose text has vanished is still pending, just flagged. A stored flag would go out of date
  * the moment someone re-added the snippet. See the brief's Decisions log.
  *
- * This module owns every line that touches the filesystem, and {@link formatQueue} owns every
- * line that renders. That split is not tidiness: D4's clipboard export runs the same formatter
- * in a *browser*, which has no `node:fs` and no repository. It passes no set and renders no
- * markers, and nothing has to be unpicked first.
+ * This module owns every line that touches the filesystem, and `formatQueue` — now over in
+ * @dogear/queue, at the `./format` subpath — owns every line that renders. That split is not
+ * tidiness: D4's (#23) clipboard export runs the same formatter in a *browser*, which has no
+ * `node:fs` and no repository. It passes no set and renders no markers, and nothing had to be
+ * unpicked when it landed. Staleness stays here, in the CLI, because it is a fact about a
+ * working tree that only the Node half can see.
  *
  * ## Why this is not `file.includes(text)`
  *
