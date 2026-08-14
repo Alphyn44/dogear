@@ -352,3 +352,93 @@ describe('callTool', () => {
     expect(callTool(root, 'dogear_pending', args).isError).toBe(false)
   })
 })
+
+describe('staleness reaches the agent through BOTH registers — D5', () => {
+  /**
+   * The reason this is not tested only through the formatter: D1 found Claude Code rendering
+   * `structuredContent` and discarding the text block entirely, which is what made D2 put the
+   * resolve instruction in the tool description as well as the footer. A `⚠` living only in
+   * the formatted block would never reach a model on the MCP-only baseline — and a capability
+   * that works solely behind the hook is exactly what the brief forbids.
+   */
+  function sited(id: string, text: string, file: string): StoredAnnotation {
+    return {
+      id,
+      status: 'pending',
+      comment: 'a comment',
+      element: { tag: 'p', selector: 'p', text },
+      sites: [{ file, line: 1 }],
+    }
+  }
+
+  function write(relative: string, contents: string): void {
+    const full = join(root, relative)
+    mkdirSync(dirname(full), { recursive: true })
+    writeFileSync(full, contents, 'utf8')
+  }
+
+  function itemsOf(outcome: ReturnType<typeof pending>): readonly StoredAnnotation[] {
+    return (outcome.structured as { items: readonly StoredAnnotation[] }).items
+  }
+
+  it('sets stale: true on the structured item, and marks it in the text', () => {
+    write('src/App.tsx', 'const heading = "something else"')
+    seed([sited('gone', 'a string that is not in that file', 'src/App.tsx')])
+
+    const outcome = pending(root, {})
+
+    expect(itemsOf(outcome)[0]?.['stale']).toBe(true)
+    expect(outcome.text).toContain('⚠ stale')
+  })
+
+  it('leaves a FRESH item byte-identical to what is on disk', () => {
+    // The property that keeps "derived at read time, never stored" honest. A fresh item must
+    // not gain a `stale: false` key, or the tool's answer stops matching queue.json and the
+    // next reader has to wonder which is authoritative.
+    write('src/App.tsx', 'const items = ["Overview"]')
+    const stored = sited('fresh', 'Overview', 'src/App.tsx')
+    seed([stored])
+
+    const outcome = pending(root, {})
+
+    expect(itemsOf(outcome)[0]).toEqual(stored)
+    expect('stale' in (itemsOf(outcome)[0] ?? {})).toBe(false)
+    expect(outcome.text).not.toContain('⚠')
+  })
+
+  it('never writes the derived flag back to the queue file', () => {
+    write('src/App.tsx', 'nothing relevant here')
+    seed([sited('gone', 'a string that is not in that file', 'src/App.tsx')])
+
+    pending(root, {})
+
+    expect(readQueue(queuePath).items[0]?.['stale']).toBeUndefined()
+  })
+
+  it('documents stale in the annotation schema without requiring it', () => {
+    // Walked one key at a time rather than in one cast: this is hand-written JSON Schema, so
+    // a wrong turn should surface as a readable `undefined` here rather than as a TypeError
+    // thrown from inside an assertion.
+    const byName = new Map(TOOLS.map((tool) => [tool.name, tool]))
+    const annotation = at(
+      at(at(byName.get('dogear_pending')?.outputSchema, 'properties'), 'items'),
+      'items',
+    )
+
+    expect(at(annotation, 'properties')?.['stale']).toEqual({ type: 'boolean' })
+    // Optional on purpose: it is derived per call and absent whenever an item is fresh, so
+    // requiring it would describe an answer the tool never gives.
+    expect(annotation?.['required']).not.toContain('stale')
+  })
+})
+
+/** One step down a JSON Schema, without asserting a shape the schema may not have. */
+function at(
+  schema: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  const value = schema?.[key]
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return undefined
+  return value as Record<string, unknown>
+}

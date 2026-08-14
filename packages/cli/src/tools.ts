@@ -9,6 +9,7 @@ import {
 } from '@dogear/queue'
 
 import { formatQueue } from './format.js'
+import { findStale } from './stale.js'
 
 /**
  * The three MCP tools, as pure functions.
@@ -79,6 +80,10 @@ const ANNOTATION_SCHEMA: JsonSchema = {
     id: { type: 'string' },
     status: { type: 'string' },
     comment: { type: 'string' },
+    // D5. Documented but not required, and present only when true — it is derived at read
+    // time from the working tree, so it is a property of this *answer* rather than of the
+    // annotation, and it never appears in queue.json.
+    stale: { type: 'boolean' },
   },
   required: ['id', 'status', 'comment'],
   // Open on purpose. `sites`, `element`, `app`, `origin` and `note` are all written by the
@@ -224,9 +229,24 @@ export function pending(gitRoot: string, args: unknown): ToolOutcome {
   const allPending = pendingOnly(queue.items)
   const items = app.value === undefined ? allPending : withApp(allPending, app.value)
 
+  // Computed after the filter, so a repo-wide read does not pay to stat files belonging to
+  // items the caller asked to exclude.
+  const stale = findStale(items, gitRoot)
+
   return {
-    text: describePending(items, allPending.length, app.value),
-    structured: { count: items.length, items },
+    text: describePending(items, allPending.length, app.value, stale),
+    // **`stale` goes in the structured output too, and that is not redundancy.** D1 found
+    // Claude Code rendering `structuredContent` and discarding the text block entirely — the
+    // same discovery that made D2 put the resolve instruction in the tool description. A
+    // marker that existed only in the formatted block would never reach a model on the
+    // MCP-only baseline, which would make D5 a capability that works solely behind the hook.
+    //
+    // Set only when true, so a fresh item's structured shape is byte-identical to what is on
+    // disk. It is derived per call and never written back; see ./stale.ts.
+    structured: {
+      count: items.length,
+      items: items.map((item) => (stale.has(item.id) ? { ...item, stale: true } : item)),
+    },
     isError: false,
   }
 }
@@ -272,8 +292,9 @@ function describePending(
   items: readonly StoredAnnotation[],
   totalPending: number,
   app: string | undefined,
+  stale: ReadonlySet<string>,
 ): string {
-  if (items.length > 0) return formatQueue(items)
+  if (items.length > 0) return formatQueue(items, { stale })
 
   if (app === undefined) return 'No pending dogear annotations in this repo.'
 

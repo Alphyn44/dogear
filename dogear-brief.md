@@ -529,10 +529,14 @@ One formatter, shared by the hook, the MCP server, and the clipboard export:
     comment: this needs to be two tabs over
 </dogear-queue>
 
-Items marked ⚠ stale had their text snippet disappear from the named file — the line
-number is probably wrong; locate by selector or text instead. When you have addressed
-an item, call dogear_resolve with its id.
+Items marked ⚠ stale no longer have their text snippet in any file they name — the
+line number is probably wrong; locate by selector or text instead.
+
+When you have addressed an item, call dogear_resolve with its id.
 ```
+
+The stale sentence is emitted only when an item in the block actually carries the marker;
+the resolve instruction is always there. Both sit below the block, in that order.
 
 The clipboard variant appends "…paste this to your agent" instead of the resolve
 instruction, since a pasting user has no MCP server.
@@ -781,8 +785,13 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 - Falls back to a hidden-textarea copy where `navigator.clipboard` is unavailable.
 
 **D5 — Stale items are obvious and disposable**
-- An item is marked `stale` when its text snippet no longer appears in its named file.
+- An item is marked `stale` when its text snippet appears in **none** of the files it
+  names, compared whitespace- and case-insensitively. Amended during D5 — the original
+  criterion said "its named file", literally, and flagged every healthy item; see the
+  Decisions log.
 - Stale items are still shown, flagged, with an instruction to locate by selector or text.
+- The flag reaches the agent in both registers — the `⚠ stale` marker in the formatted
+  block, and a derived `stale: true` on the item in `dogear_pending`'s structured output.
 - Nothing is ever auto-deleted.
 
 **D6 — Prune**
@@ -1293,6 +1302,42 @@ item and report a successful resolve. Every writer therefore reads strictly; onl
 callers may tolerate. `dogear_pending` tolerates and reports the reason as a tool error —
 unlike a hook, an MCP call has an error channel, and telling an agent "nothing pending" for
 a file that would not parse is the one answer that makes it stop looking.
+
+**Staleness is a fragment match across every site, not a substring of one file. Settled
+during D5 by implementing the original criterion and watching it fail.**
+
+"An item is stale when its text snippet no longer appears in its named file" flags *every*
+checkable item in a real queue. Four independent reasons, all found on this repo's own
+example app:
+
+- **The text lives at the call site.** dogear's premise is that the innermost site is the
+  component's own file — so `Button.tsx` holds `{label}` while the string "Overview" is at
+  `App.tsx`, two frames up. Checking only the primary site condemns every component-authored
+  element in a component-based UI, which is the case dogear exists for.
+- **CSS transforms the text.** `innerText` respects `text-transform`, so a source reading
+  `Click log` is captured as `CLICK LOG`.
+- **JSX interpolates.** Source `Paragraph {index + 1}.` renders as `Paragraph 1.`, so no
+  whole-snippet comparison can ever succeed.
+- **Source wraps, snippets do not.** `describe.ts` collapses whitespace before capping; the
+  file it came from is indented and hard-wrapped.
+
+So: normalize both sides (lowercase, collapse whitespace), search **every** file the item
+names, and accept a five-word window rather than the whole snippet for snippets longer than
+that. Checking all the sites is not re-anchoring — the pin is never rewritten, and the
+decision above still stands; it only widens where we look before *flagging*.
+
+The asymmetry is what drives every remaining choice. A **false stale** tells the agent to
+distrust a correct line number on every prompt, which teaches everyone to ignore the marker
+and makes the feature worse than absent. A **false fresh** is the status quo: a wrong line
+number goes unflagged and the item still carries three other anchors. Every ambiguity
+therefore resolves toward fresh — an item with no text, no sites, or nothing readable is
+never flagged, and only a file that is *missing* counts as evidence, because a rename or a
+delete is the case worth catching. A file that exists but cannot be read is "could not
+check".
+
+Heavily-interpolated short strings — `Showing 24 results`, `Deleted 3 of 12 items` — remain
+unmatchable at any window size. That is a floor of the text-snippet anchor rather than a
+tuning problem, and it is the price of not re-anchoring.
 
 **`POST /__dogear/prune` → deferred for want of a caller. Settled during D6.**
 The endpoint table has listed it since the first draft, and D6's notes called it "the third

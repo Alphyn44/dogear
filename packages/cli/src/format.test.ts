@@ -169,12 +169,74 @@ describe('formatQueue', () => {
     expect(formatQueue([FULL])).toContain(FULL.id)
   })
 
-  it.each([{ why: 'nothing computes staleness until D5', absent: 'stale' }])(
-    'omits $absent, because $why',
-    ({ absent }) => {
-      expect(formatQueue([FULL])).not.toContain(absent)
-    },
-  )
+  it('renders NO stale marker when the caller passes no set — D4’s case', () => {
+    // Retargeted by D5. This used to assert "nothing computes staleness yet"; now something
+    // does, and the property worth pinning is that the formatter never invents it. D4's
+    // clipboard export runs in a browser with no filesystem and passes nothing, and the
+    // honest answer there is an unmarked block rather than a guess.
+    const output = formatQueue([FULL])
+
+    expect(output).not.toContain('stale')
+    expect(output).not.toContain('⚠')
+  })
+
+  describe('the ⚠ stale marker — D5', () => {
+    it('closes the headline of exactly the items in the set', () => {
+      const output = formatQueue([FULL, MINIMAL], { stale: new Set([MINIMAL.id]) })
+
+      expect(output).toContain(`[2] ${MINIMAL.id}  ⚠ stale`)
+      expect(output).toContain(
+        `[1] ${FULL.id} — src/components/Button.tsx:12  (Button, via attribute)\n`,
+      )
+      expect(output).not.toContain(
+        `${FULL.id} — src/components/Button.tsx:12  (Button, via attribute)  ⚠`,
+      )
+    })
+
+    it('sits after the location, not inside it', () => {
+      // The marker is a separate fact about the item. Putting it before the location would
+      // read as part of the file path, which is the one string in the block a reader copies.
+      expect(formatQueue([FULL], { stale: new Set([FULL.id]) })).toContain(
+        '(Button, via attribute)  ⚠ stale',
+      )
+    })
+
+    it('explains itself in the footer, but only when something carries it', () => {
+      const marked = formatQueue([FULL], { stale: new Set([FULL.id]) })
+      const clean = formatQueue([FULL], { stale: new Set() })
+
+      expect(marked).toContain(
+        'Items marked ⚠ stale no longer have their text snippet in any file they name',
+      )
+      expect(clean).not.toContain('Items marked')
+    })
+
+    it('omits the note when the set names only items that were filtered out', () => {
+      // `dogear_pending`'s `app` filter can leave every stale item out of the block. A note
+      // explaining a marker that appears nowhere above it is worse than no note at all.
+      expect(formatQueue([FULL], { stale: new Set(['some-other-id']) })).not.toContain(
+        'Items marked',
+      )
+    })
+
+    it('keeps the note above the resolve instruction, and drops it with footer: none', () => {
+      const both = formatQueue([FULL], { stale: new Set([FULL.id]) })
+
+      expect(both.indexOf('Items marked')).toBeLessThan(both.indexOf('dogear_resolve'))
+      expect(
+        formatQueue([FULL], { stale: new Set([FULL.id]), footer: 'none' }),
+      ).not.toContain('dogear_resolve')
+    })
+
+    it('marks an item that has no sites at all, if asked to', () => {
+      // Such an item is never stale in practice — ./stale.ts cannot check it — but the
+      // formatter must not depend on that, or the headline construction breaks the day
+      // something else computes the set.
+      expect(formatQueue([MINIMAL], { stale: new Set([MINIMAL.id]) })).toContain(
+        `[1] ${MINIMAL.id}  ⚠ stale`,
+      )
+    })
+  })
 
   describe('the footer', () => {
     it('closes with the dogear_resolve instruction by default', () => {

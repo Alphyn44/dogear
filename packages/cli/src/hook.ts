@@ -2,6 +2,7 @@ import { findGitRoot, pendingOnly, queuePathFor, tryReadQueue } from '@dogear/qu
 
 import { formatQueue } from './format.js'
 import type { Result } from './run.js'
+import { findStale } from './stale.js'
 
 /**
  * `dogear hook` — the `UserPromptSubmit` adapter for Claude Code.
@@ -75,7 +76,12 @@ export function hook(env: HookEnv, cwd: string): Result {
     return { output: '', exitCode: 0, diagnostic: `dogear: ${queue.reason}` }
   }
 
-  const context = formatQueue(pendingOnly(queue.items))
+  // Staleness is computed against the working tree on every prompt, never cached and never
+  // stored — the files under these annotations are exactly what the user is changing between
+  // one prompt and the next. `findStale` reads only the files the queue names, deduplicated,
+  // which is why this stays inside the hook's budget.
+  const pending = pendingOnly(queue.items)
+  const context = formatQueue(pending, { stale: findStale(pending, gitRoot) })
   if (context === '') return { output: '', exitCode: 0 }
 
   return {

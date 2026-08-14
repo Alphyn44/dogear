@@ -10,10 +10,11 @@ import type { StoredAnnotation } from '@dogear/queue'
  * and can share this file. D1 and D4's clipboard export call it; the hook is a trigger, not
  * a second implementation.
  *
- * One deliberate departure from the brief's example block remains:
- *
- * - **No `⚠ stale` marker.** Staleness is derived by re-reading the source file for the
- *   text snippet, which is D5's work. Nothing computes it yet, so nothing renders it.
+ * Both of the brief's original departures are now closed. The `⚠ stale` marker arrived with
+ * D5, which computes staleness in ./stale.ts and passes the result in — **this file still
+ * touches no filesystem**, and that is load-bearing rather than incidental: D4's clipboard
+ * export runs this same formatter in a browser, where there is neither `node:fs` nor a
+ * repository to read. It passes no set, and no markers render.
  *
  * The other departure — a missing `dogear_resolve` footer — was A3's, and D1 closed it by
  * registering the tool. The footer is now emitted by default and selected by {@link
@@ -36,6 +37,19 @@ const MAX_TEXT = 80
  */
 const RESOLVE_FOOTER = 'When you have addressed an item, call dogear_resolve with its id.'
 
+/**
+ * D5's explanation of the marker, emitted only when something actually carries it.
+ *
+ * "in any file it names" rather than the brief's original "the named file": staleness is
+ * decided across every site, so an item reaching this state has had its text looked for in
+ * several places and found in none. Saying "the named file" would misdescribe both what was
+ * checked and how much the reader should distrust the line number.
+ */
+const STALE_NOTE = [
+  'Items marked ⚠ stale no longer have their text snippet in any file they name — the',
+  'line number is probably wrong; locate by selector or text instead.',
+]
+
 export interface FormatOptions {
   /**
    * What the reader should do next.
@@ -49,6 +63,16 @@ export interface FormatOptions {
    * all three callers, and the closing instruction is the only thing that varies.
    */
   readonly footer?: 'resolve' | 'none'
+  /**
+   * Ids the caller has determined are stale — D5 (#24).
+   *
+   * A set computed by ./stale.ts rather than a `gitRoot` this function would read from, so
+   * the formatter stays pure and D4 can run it in a browser. Absent means *nothing is
+   * marked*, which is exactly right for a caller that has no filesystem: it is the honest
+   * answer, not a degraded one, because staleness is a fact about a working tree the browser
+   * cannot see.
+   */
+  readonly stale?: ReadonlySet<string>
 }
 
 /**
@@ -63,11 +87,18 @@ export interface FormatOptions {
  */
 export function formatQueue(
   items: readonly StoredAnnotation[],
-  { footer = 'resolve' }: FormatOptions = {},
+  { footer = 'resolve', stale }: FormatOptions = {},
 ): string {
   if (items.length === 0) return ''
 
-  const blocks = items.map((item, index) => formatItem(item, index + 1))
+  const blocks = items.map((item, index) =>
+    formatItem(item, index + 1, stale?.has(item.id) === true),
+  )
+
+  // Keyed off what was actually *rendered*, not off the set's size. `dogear_pending`'s `app`
+  // filter can leave every stale item out of this block, and a note explaining a marker that
+  // appears nowhere above it is worse than no note.
+  const anyStale = items.some((item) => stale?.has(item.id) === true)
 
   return [
     `<dogear-queue count="${items.length}">`,
@@ -77,19 +108,26 @@ export function formatQueue(
     'These are annotations left by clicking elements in the running app. Each names where',
     'the element was seen; treat the location as a strong hint, not a constraint — if it',
     'does not match, locate the element by its selector or text instead.',
+    ...(anyStale ? ['', ...STALE_NOTE] : []),
     ...(footer === 'none' ? [] : ['', RESOLVE_FOOTER]),
   ].join('\n')
 }
 
-function formatItem(item: StoredAnnotation, position: number): string {
+function formatItem(item: StoredAnnotation, position: number, stale: boolean): string {
   const sites = asArray(item.sites).map(asRecord).filter(isPresent)
   const element = asRecord(item.element)
 
   // The full id, not the brief example's shortened form. D2's `dogear_resolve` takes ids
   // verbatim, and an abbreviated one would either not match or match ambiguously — the id
   // is the model's handle on the item, so it has to be the real thing.
+  // The marker closes the headline, after the location, as the brief's example block has it.
+  // Two spaces before it, matching the gap `formatSite` puts before its parenthetical — it is
+  // a separate fact about the item, not part of the location.
   const [primary, ...rest] = sites
-  const lines = [`[${position}] ${item.id}${primary ? ` — ${formatSite(primary)}` : ''}`]
+  const lines = [
+    `[${position}] ${item.id}${primary ? ` — ${formatSite(primary)}` : ''}` +
+      (stale ? '  ⚠ stale' : ''),
+  ]
 
   for (const site of rest) lines.push(`    also: ${formatSite(site)}`)
 
