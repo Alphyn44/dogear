@@ -1,12 +1,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { relative, sep } from 'node:path'
 
+import {
+  appendToQueue,
+  pendingOnly,
+  queuePathFor,
+  readQueue,
+  stampAnnotation,
+} from '@dogear/queue'
 import type { Connect } from 'vite'
 
-import { stampAnnotation, validateBatch } from './annotation.js'
+import { validateBatch } from './batch.js'
 import type { ClientDist } from './client.js'
 import { sendClientBundle, sendMissingBundleStub, sendSourcemap } from './client-route.js'
-import { appendToQueue, queuePathFor, readQueue } from './queue.js'
 
 /**
  * The HTTP half of the pipe: `POST <endpoint>/annotations` → `.dogear/queue.json`, plus
@@ -233,7 +239,10 @@ async function handleSubmit(
 }
 
 function countPending(queuePath: string): number {
-  return readQueue(queuePath).items.filter((item) => item.status === 'pending').length
+  // `pendingOnly` rather than an inline predicate: what counts as pending is one rule, and
+  // it lives with the queue. An inline copy here would be a second place to fix if D5 or a
+  // later status ever changes it.
+  return pendingOnly(readQueue(queuePath).items).length
 }
 
 /**

@@ -15,6 +15,14 @@ import type { Annotation } from './annotation.js'
 import { stampAnnotation } from './annotation.js'
 import { appendToQueue, queuePathFor, readQueue, tempPathFor } from './queue.js'
 
+/**
+ * Moved verbatim from `@dogear/vite` when D1 gave the queue a shared home. Nothing here
+ * changed but the import paths — in particular `RE-READS immediately before writing, so a
+ * second dev server is not erased`, which guards the rule that silently eats another
+ * process's annotations when it is broken. ./queue.write.test.ts carries its siblings for
+ * the two writers D1 added.
+ */
+
 let root: string
 let queuePath: string
 
@@ -67,6 +75,15 @@ describe('readQueue', () => {
     writeFileSync(queuePath, contents)
 
     expect(() => readQueue(queuePath)).toThrow()
+  })
+
+  it('names the path in every message, since tryReadQueue surfaces them as its reason', () => {
+    // Not cosmetic: `tryReadQueue` returns these verbatim, and the hook puts them on stderr
+    // as the only clue a developer gets about why no context appeared this turn.
+    appendToQueue(queuePath, [])
+    writeFileSync(queuePath, '{"version":1,"items":[')
+
+    expect(() => readQueue(queuePath)).toThrow(queuePath)
   })
 })
 

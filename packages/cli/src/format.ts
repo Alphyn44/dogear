@@ -1,4 +1,4 @@
-import type { Annotation } from './queue.js'
+import type { StoredAnnotation } from '@dogear/queue'
 
 /**
  * The agent-facing rendering of the queue, specified in the brief under "Agent-facing
@@ -10,13 +10,15 @@ import type { Annotation } from './queue.js'
  * and can share this file. D1 and D4's clipboard export call it; the hook is a trigger, not
  * a second implementation.
  *
- * Two deliberate departures from the brief's example block, both because A3 predates the
- * machinery the example assumes:
+ * One deliberate departure from the brief's example block remains:
  *
- * 1. **No `dogear_resolve` footer.** The tool does not exist until D1 registers it. Telling
- *    the model to call a tool that is not there costs it a turn discovering that.
- * 2. **No `⚠ stale` marker.** Staleness is derived by re-reading the source file for the
- *    text snippet, which is D5's work. Nothing computes it yet, so nothing renders it.
+ * - **No `⚠ stale` marker.** Staleness is derived by re-reading the source file for the
+ *   text snippet, which is D5's work. Nothing computes it yet, so nothing renders it.
+ *
+ * The other departure — a missing `dogear_resolve` footer — was A3's, and D1 closed it by
+ * registering the tool. The footer is now emitted by default and selected by {@link
+ * FormatOptions}, because the one thing that varies between the three callers is what the
+ * reader is supposed to do next.
  *
  * Everything else follows the brief. Every field below `sites` is optional in practice: at
  * M0 an annotation carries a comment and whatever the browser knew, and the C epic is what
@@ -28,14 +30,41 @@ import type { Annotation } from './queue.js'
 const MAX_TEXT = 80
 
 /**
+ * The brief's sentence, verbatim. Emitted for the hook and the MCP server, both of which
+ * reach an agent that has `dogear_resolve` available — E3 registers the MCP server for every
+ * agent and never skips it, so this is not a promise the reader might be unable to keep.
+ */
+const RESOLVE_FOOTER = 'When you have addressed an item, call dogear_resolve with its id.'
+
+export interface FormatOptions {
+  /**
+   * What the reader should do next.
+   *
+   * `'resolve'` (the default) closes the block with the `dogear_resolve` instruction.
+   * `'none'` omits it. **D4 adds a third member here** — its clipboard export ends with
+   * "…paste this to your agent" instead, since someone pasting into a web chat window has no
+   * MCP server to call and telling them to call a tool wastes a turn.
+   *
+   * A parameter rather than three copies of the renderer: the item block is identical for
+   * all three callers, and the closing instruction is the only thing that varies.
+   */
+  readonly footer?: 'resolve' | 'none'
+}
+
+/**
  * Render pending annotations as the `<dogear-queue>` block.
  *
- * Returns the empty string for an empty list rather than an empty block. The caller puts
- * this on stdout, and `UserPromptSubmit` injects stdout verbatim as context — so an empty
- * queue has to produce zero bytes, not a well-formed announcement that there is nothing to
- * announce.
+ * Returns the empty string for an empty list rather than an empty block, **whatever the
+ * footer**. The hook puts this on stdout and `UserPromptSubmit` injects stdout verbatim as
+ * context, so an empty queue has to produce zero bytes — not a well-formed announcement that
+ * there is nothing to announce, and not a lone closing instruction with nothing above it.
+ * `dogear_pending` substitutes its own sentence for this case, because an MCP tool returning
+ * an empty text block tells the agent nothing.
  */
-export function formatQueue(items: readonly Annotation[]): string {
+export function formatQueue(
+  items: readonly StoredAnnotation[],
+  { footer = 'resolve' }: FormatOptions = {},
+): string {
   if (items.length === 0) return ''
 
   const blocks = items.map((item, index) => formatItem(item, index + 1))
@@ -48,13 +77,11 @@ export function formatQueue(items: readonly Annotation[]): string {
     'These are annotations left by clicking elements in the running app. Each names where',
     'the element was seen; treat the location as a strong hint, not a constraint — if it',
     'does not match, locate the element by its selector or text instead.',
-    // TODO(dogear): D1 appends the `dogear_resolve` instruction here once the MCP server
-    // registers the tool. D4's clipboard variant appends "…paste this to your agent"
-    // instead, since a pasting user has no MCP server.
+    ...(footer === 'none' ? [] : ['', RESOLVE_FOOTER]),
   ].join('\n')
 }
 
-function formatItem(item: Annotation, position: number): string {
+function formatItem(item: StoredAnnotation, position: number): string {
   const sites = asArray(item.sites).map(asRecord).filter(isPresent)
   const element = asRecord(item.element)
 

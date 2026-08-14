@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Node only, no DOM. Both consumers run this on the server side: the Vite plugin
+    // inside the dev server, the CLI inside the MCP process.
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

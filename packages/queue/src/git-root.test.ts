@@ -6,10 +6,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { findGitRoot } from './git-root.js'
 
+/**
+ * Merged from the identical copies that lived in `@dogear/cli` and `@dogear/vite` before
+ * D1 gave the walk a shared home. The two differed only in comment wording and in which
+ * caller their walk-up case was named for; both of those cases are kept below, because
+ * they document the two distinct entry points and cost nothing to run.
+ */
+
 let dir: string
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'dogear-cli-root-'))
+  dir = mkdtempSync(join(tmpdir(), 'dogear-root-'))
 })
 
 afterEach(() => {
@@ -31,16 +38,26 @@ describe('findGitRoot', () => {
   })
 
   it('finds a `.git` FILE — worktrees and submodules write a gitdir pointer', () => {
-    // The reason this file checks existence rather than isDirectory(). Missing a worktree
-    // would send the hook looking for a queue in a directory nothing ever writes to.
+    // The reason this file checks existence rather than isDirectory(). A worktree that
+    // resolved to some unrelated parent repo would put the queue where no reader looks.
     writeFileSync(join(dir, '.git'), 'gitdir: /somewhere/else/.git/worktrees/wt\n')
 
     expect(findGitRoot(dir)).toBe(dir)
   })
 
+  it('walks up from a Vite root nested several levels below — the monorepo case', () => {
+    // This is the rule's entire reason for existing: three apps in one repo must agree on
+    // one queue. packages/apps/admin is a plausible third-level Vite root.
+    makeDir('.git')
+    const viteRoot = makeDir('packages', 'apps', 'admin')
+
+    expect(findGitRoot(viteRoot)).toBe(dir)
+  })
+
   it('walks up from a package subdirectory — where a session is often opened', () => {
-    // CLAUDE_PROJECT_DIR is wherever the user started Claude Code, which in a monorepo is
-    // routinely a package rather than the repo. The dev server wrote at the git root.
+    // CLAUDE_PROJECT_DIR is wherever the user started Claude Code, and the MCP server's
+    // cwd is wherever its client spawned it. In a monorepo both are routinely a package
+    // rather than the repo. The dev server wrote at the git root.
     makeDir('.git')
     const packageDir = makeDir('packages', 'apps', 'admin')
 
@@ -48,6 +65,8 @@ describe('findGitRoot', () => {
   })
 
   it('returns the NEAREST repository when one is nested inside another', () => {
+    // A submodule, or a fixture repo checked into a repo. Nearest wins: that is the repo
+    // whose files the dev server is actually serving.
     makeDir('.git')
     const inner = makeDir('vendor', 'plugin')
     mkdirSync(join(inner, '.git'))
@@ -56,8 +75,8 @@ describe('findGitRoot', () => {
   })
 
   it('returns undefined outside a repository rather than guessing a fallback', () => {
-    // The temp dir has no .git anywhere above it on any runner we support. If this fails
-    // locally it means someone ran `git init` in their temp directory.
+    // The temp dir has no .git anywhere above it on any CI runner we support. If this ever
+    // fails locally it means someone ran `git init` in their temp directory.
     expect(findGitRoot(makeDir('nested', 'deeper'))).toBeUndefined()
   })
 
@@ -72,7 +91,8 @@ describe('findGitRoot', () => {
     makeDir('packages')
 
     // Built by concatenation, not join(), which would collapse the '..' itself and leave
-    // nothing for resolve() to do.
+    // nothing for resolve() to do. Vite hands us `config.root`, and a user-supplied root
+    // in a vite.config.ts is under no obligation to be canonical.
     const messy = `${dir}${sep}packages${sep}..${sep}packages`
 
     expect(findGitRoot(messy)).toBe(dir)

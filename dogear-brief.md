@@ -497,6 +497,18 @@ Exposed by `dogear mcp`. The server resolves its repo by walking up from `cwd` f
 | `dogear_resolve` | `{ ids: string[] }` | `{ resolved, remaining }` |
 | `dogear_prune` | `{}` | `{ pruned }` |
 
+The `Returns` column is the tool's **structured** output. Each tool also returns a text
+block, and for `dogear_pending` that text is the shared formatter's `<dogear-queue>` block
+verbatim — the two are the same answer in two registers, which is what lets the same
+rendering reach the hook, the server, and the clipboard. `app` is matched **exactly**, and
+an item carrying no `app` is excluded when a filter is given.
+
+Counts, since the names alone are ambiguous: **`resolved` is how many items the call
+actually changed from `pending` to `resolved`**, not how many ids were passed — an unknown,
+duplicated, or already-resolved id contributes nothing, which is what makes D2's no-op rule
+observable. `remaining` and `pruned` are likewise counted after the write. Per-id detail
+goes in the text block rather than in a fourth structured field.
+
 ### Agent-facing format
 
 One formatter, shared by the hook, the MCP server, and the clipboard export:
@@ -1222,6 +1234,45 @@ doesn't, nothing is missing. The hook must never be the only place a behavior li
 **Distribution → global CLI plus local plugin.**
 Machine-level tool, repo-level config — the CodeGraph model. It also absorbs the hook,
 removing a package that would have existed to hold fifty lines.
+
+**The queue file gets its own package, `@dogear/queue` — source-only and never published.
+Settled during D1, overturning an earlier call.**
+`findGitRoot` was duplicated between `@dogear/vite` and `@dogear/cli` behind a parity test,
+and `git-root.ts`'s header recorded why: all three ways to share it — the CLI depending on
+the plugin, the plugin depending on the CLI, or a fourth package — were "worse than a
+fourteen-line duplicate", the last one because this document argued against a package
+holding fifty lines when it folded the hook into the CLI. That header then said the CLI's
+copy should win when D1 landed, which *is* the plugin→CLI edge it had just rejected. It
+contradicted itself, so there was nothing to defer to.
+
+Re-decided on merits, because D1 destroys the premise both rejections rested on. The shared
+surface is no longer fourteen lines of path-walking: it is the atomic writer plus two new
+mutating operations, whose two concurrency rules lose a user's annotations *silently* when
+two implementations disagree. And it has two consumers, not one — the "fifty lines with a
+single consumer" argument does not reach it.
+
+Between the two live options the material cost is near identical: both are private,
+source-only, and inlined by their consumers at build time, so no published artifact gains a
+dependency and the install story stays three packages. What separates them is the effect on
+`@dogear/cli` — folding in would force a bin package to expose `./queue` and `./git-root`
+subpaths that are really internal, and leave every later reader asking why a Vite plugin
+imports a CLI. A dedicated package keeps every dependency arrow pointing downward.
+
+**Source-only is the load-bearing detail.** `exports` points at `src/index.ts` and there is
+no build. CI runs `typecheck` *before* `build`, and `stop-verify.sh` runs it on every
+TypeScript turn, so a package whose types came from `dist/` would make typechecking depend
+on a prior build — the trap `examples/react-app` is already documented as falling into.
+
+**Two readers, one module: reads may tolerate, writes must refuse. Settled during D1.**
+The plugin's reader threw on a corrupt queue and the hook's swallowed everything, in two
+packages, guarded by a parity test. Merged, `tryReadQueue` is now *derived* from `readQueue`
+so the two cannot drift on the envelope — and the surviving divergence turns out to be a
+rule rather than a quirk. The tolerant reader **drops** entries that are not
+annotation-shaped, so handing its result to a writer would silently delete a hand-broken
+item and report a successful resolve. Every writer therefore reads strictly; only read-only
+callers may tolerate. `dogear_pending` tolerates and reports the reason as a tool error —
+unlike a hook, an MCP call has an error channel, and telling an agent "nothing pending" for
+a file that would not parse is the one answer that makes it stop looking.
 
 **Cross-repo isolation → free, via same-origin.**
 Each dev server serves its own endpoint and knows its own root, so port collisions across

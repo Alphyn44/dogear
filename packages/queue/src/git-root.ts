@@ -6,20 +6,17 @@ import { dirname, join, resolve } from 'node:path'
  *
  * The brief's rule: the queue resolves from the git root, NOT from `cwd` and not from
  * `CLAUDE_PROJECT_DIR`. One repo is one queue is one agent session. A monorepo with three
- * dev servers writes to one file, so the reader has to walk to the same place all three
+ * dev servers writes to one file, so every reader has to walk to the same place all three
  * writers walked to.
  *
- * **Why this is a copy of `packages/vite/src/git-root.ts` rather than an import.** The two
- * packages have no dependency edge, and the three ways to create one are all worse than a
- * fourteen-line duplicate: making the CLI depend on a Vite plugin it never runs, inverting
- * the edge so the plugin depends on the CLI, or adding a fourth workspace package to hold
- * fifty lines — which the brief argued against explicitly when it folded the hook into the
- * CLI. The same trade was made for the leak sentinel, and it is guarded the same way:
- * ./parity.test.ts imports both and fails if they ever disagree.
+ * Three callers, all of which must agree, which is why this lives in a shared package
+ * rather than being copied per consumer:
  *
- * D1's MCP server lives in this package and performs exactly this walk, so this file is the
- * one that survives. When D1 lands, delete the vite copy in favour of this one rather than
- * keeping both.
+ * - The **plugin** walks from `config.root` — a Vite root that in a monorepo is routinely
+ *   several levels below the repo, and that a hand-written `vite.config.ts` is under no
+ *   obligation to hand us in canonical form.
+ * - The **hook** walks from `CLAUDE_PROJECT_DIR`, which is wherever the session was opened.
+ * - The **MCP server** walks from `cwd`, which is wherever the client spawned it.
  */
 
 /**
@@ -29,7 +26,7 @@ import { dirname, join, resolve } from 'node:path'
  * is load-bearing: in a git worktree or a submodule, `.git` is a *file* containing a
  * `gitdir:` pointer. Testing `isDirectory()` would walk straight past those and either find
  * an unrelated parent repository or nothing at all — a silent wrong answer, which is the
- * worst kind here, since it would send the hook looking for a queue in a directory nothing
+ * worst kind here, since it would send a reader looking for a queue in a directory nothing
  * ever writes to.
  *
  * Returns `undefined` outside a repository. The caller decides what that means; this

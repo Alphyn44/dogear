@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import type { StoredAnnotation } from '@dogear/queue'
+
 import { formatQueue } from './format.js'
-import type { Annotation } from './queue.js'
 
 /** The brief's worked example, once the C epic has filled in every field. */
-const FULL: Annotation = {
+const FULL: StoredAnnotation = {
   id: '0199c8f4-3a21-7c5e-b3d9-1f2a4c6e8b07',
   status: 'pending',
   comment: "shade this darker, it's competing with the primary CTA",
@@ -37,7 +38,7 @@ const FULL: Annotation = {
 }
 
 /** What M0 and M1 actually produce: a comment, a selector, a text snippet. No source. */
-const MINIMAL: Annotation = {
+const MINIMAL: StoredAnnotation = {
   id: '019fef13-1d76-7000-9fbf-91e24ad5889b',
   status: 'pending',
   comment: 'make this darker',
@@ -70,6 +71,8 @@ describe('formatQueue', () => {
         'These are annotations left by clicking elements in the running app. Each names where',
         'the element was seen; treat the location as a strong hint, not a constraint — if it',
         'does not match, locate the element by its selector or text instead.',
+        '',
+        'When you have addressed an item, call dogear_resolve with its id.',
       ].join('\n'),
     )
   })
@@ -101,7 +104,7 @@ describe('formatQueue', () => {
   // quietly — and this is the one formatter the hook, the MCP server and D4's clipboard all
   // share.
   describe('the batch note', () => {
-    const noted: Annotation = { ...MINIMAL, note: 'all on the settings page' }
+    const noted: StoredAnnotation = { ...MINIMAL, note: 'all on the settings page' }
 
     it('renders above the comment, as context rather than payload', () => {
       // The comment stays last and unconditional — everything above it is context for
@@ -166,14 +169,40 @@ describe('formatQueue', () => {
     expect(formatQueue([FULL])).toContain(FULL.id)
   })
 
-  it.each([
-    {
-      why: 'no dogear_resolve tool exists until D1 registers it',
-      absent: 'dogear_resolve',
+  it.each([{ why: 'nothing computes staleness until D5', absent: 'stale' }])(
+    'omits $absent, because $why',
+    ({ absent }) => {
+      expect(formatQueue([FULL])).not.toContain(absent)
     },
-    { why: 'nothing computes staleness until D5', absent: 'stale' },
-  ])('omits $absent, because $why', ({ absent }) => {
-    expect(formatQueue([FULL])).not.toContain(absent)
+  )
+
+  describe('the footer', () => {
+    it('closes with the dogear_resolve instruction by default', () => {
+      // D1 registered the tool, so the block may now tell the model to call it. E3 registers
+      // the MCP server for every agent and never skips it, which is what makes this a
+      // promise the reader can actually keep.
+      expect(formatQueue([FULL])).toContain(
+        '\n\nWhen you have addressed an item, call dogear_resolve with its id.',
+      )
+    })
+
+    it('omits it entirely with { footer: none }', () => {
+      const output = formatQueue([FULL], { footer: 'none' })
+
+      expect(output).not.toContain('dogear_resolve')
+      expect(output.endsWith('locate the element by its selector or text instead.')).toBe(
+        true,
+      )
+    })
+
+    it.each([{ footer: 'resolve' as const }, { footer: 'none' as const }])(
+      'still renders nothing at all for an empty queue with $footer',
+      ({ footer }) => {
+        // The zero-bytes rule outranks the footer. A lone closing instruction with no items
+        // above it would be worse than silence — it would tell the agent to resolve nothing.
+        expect(formatQueue([], { footer })).toBe('')
+      },
+    )
   })
 
   it('falls back to origin when there is no url', () => {
