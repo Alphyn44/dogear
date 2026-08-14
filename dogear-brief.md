@@ -1263,6 +1263,26 @@ no build. CI runs `typecheck` *before* `build`, and `stop-verify.sh` runs it on 
 TypeScript turn, so a package whose types came from `dist/` would make typechecking depend
 on a prior build — the trap `examples/react-app` is already documented as falling into.
 
+**The resolve instruction is delivered twice — the formatter's footer AND the tool
+description — and the duplication is deliberate. Settled during D2.**
+A client may render `structuredContent` and drop the text content block entirely. Inspecting
+a live session found Claude Code doing exactly that: the `<dogear-queue>` block, and with it
+the "call `dogear_resolve` with its id" footer, never reached the model. On the MCP-only
+baseline — which this document calls the baseline experience, not an edge case — the agent
+was therefore never told to resolve anything, and the loop the D epic exists to close stayed
+open.
+
+Tool *descriptions* cannot be dropped that way: they arrive through `tools/list` and sit in
+context for the whole session. So `dogear_pending`'s description names `dogear_resolve` as
+the next step, and `dogear_resolve`'s forbids hand-editing the queue. The hook path delivers
+the footer, the MCP path delivers the description, and neither depends on the other.
+
+Two consequences worth stating. The server was *not* changed to suit one client — declaring
+`outputSchema` and returning both content forms is correct, and the fix adds a delivery route
+rather than removing one. And these sentences are now pinned by tests, because until D2
+nothing asserted their content: the suite checked only that descriptions were longer than
+forty characters, so either could have been deleted in a tidy-up without a single failure.
+
 **Two readers, one module: reads may tolerate, writes must refuse. Settled during D1.**
 The plugin's reader threw on a corrupt queue and the hook's swallowed everything, in two
 packages, guarded by a parity test. Merged, `tryReadQueue` is now *derived* from `readQueue`

@@ -105,6 +105,22 @@ describe('resolveInQueue', () => {
     })
   })
 
+  it('bumps updatedAt when it does resolve something', () => {
+    // The counterpart to the no-op test below. Between them they pin both directions:
+    // a real resolve rewrites the envelope, and a no-op leaves the bytes alone. Asserting
+    // only the second would be satisfied by a writer that never wrote at all.
+    appendToQueue(
+      queuePath,
+      [annotation('done me')],
+      new Date('2026-08-13T09:00:00.000Z'),
+    )
+    expect(readQueue(queuePath).updatedAt).toBe('2026-08-13T09:00:00.000Z')
+
+    resolveInQueue(queuePath, [idOf('done me')], new Date('2026-08-13T12:00:00.000Z'))
+
+    expect(readQueue(queuePath).updatedAt).toBe('2026-08-13T12:00:00.000Z')
+  })
+
   it('does not touch the FILE when nothing matched', () => {
     // The strongest reading of "a no-op". A resolve that still rewrote the file would bump
     // updatedAt for nothing — and could lose a concurrent append while doing it.

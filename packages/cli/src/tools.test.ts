@@ -81,6 +81,36 @@ describe('TOOLS', () => {
     expect(byName.get('dogear_pending')?.inputSchema['required']).toBeUndefined()
     expect(byName.get('dogear_prune')?.inputSchema['required']).toBeUndefined()
   })
+
+  describe('the instructions carried in descriptions — D2', () => {
+    // These two sentences are load-bearing rather than explanatory, and until D2 nothing
+    // asserted their content: the whole table above only checked that descriptions were
+    // longer than 40 characters, so either could have been deleted in a tidy-up and every
+    // test would still have passed.
+    const descriptionOf = (name: string): string =>
+      TOOLS.find((tool) => tool.name === name)?.description ?? ''
+
+    it('dogear_pending tells the agent to resolve what it addresses', () => {
+      // The MCP-only baseline's only route to this instruction. `format.ts`'s footer says
+      // the same thing, but a client that renders structuredContent drops the text block
+      // and the footer with it — which is exactly what Claude Code does.
+      expect(descriptionOf('dogear_pending')).toContain('call dogear_resolve with')
+    })
+
+    it('dogear_resolve forbids hand-editing the queue', () => {
+      // D2's first acceptance criterion, in the one place an agent is guaranteed to read.
+      const description = descriptionOf('dogear_resolve')
+
+      expect(description).toContain('Never edit .dogear/queue.json by hand')
+      expect(description).toContain('only supported way to resolve')
+    })
+
+    it('dogear_resolve says an unknown id is not an error', () => {
+      // Without this, an agent replaying a stale transcript reads a 0 count as a failure
+      // and retries — the reason the no-op rule exists at all.
+      expect(descriptionOf('dogear_resolve')).toContain('not an error')
+    })
+  })
 })
 
 describe('dogear_pending', () => {

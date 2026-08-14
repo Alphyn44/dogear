@@ -48,6 +48,18 @@ export interface ToolDescriptor {
    * MCP is **pull**: nothing calls these tools unless the agent decides to, so the
    * description is most of what makes dogear work at all. Each one says what the tool does
    * *and when to reach for it*, because "when" is the part an agent has no other way to know.
+   *
+   * **Two descriptions here carry instructions, not just explanations, and that is D2's
+   * doing.** `dogear_pending` names `dogear_resolve` as the next step, and `dogear_resolve`
+   * forbids hand-editing the queue. Both sentences also exist elsewhere — the first is
+   * `format.ts`'s footer, the second is the brief — and the duplication is deliberate.
+   *
+   * A description arrives through `tools/list` and stays in the agent's context; a *result*
+   * can be dropped. Inspecting a live session during D1 showed Claude Code rendering
+   * `structuredContent` and discarding the text block entirely, which took the footer with
+   * it — so on the MCP-only baseline the agent was never told to resolve anything. The hook
+   * path delivers the footer, the MCP path delivers the description, and neither depends on
+   * the other. ./tools.test.ts pins both sentences; do not "de-duplicate" them.
    */
   readonly description: string
   readonly inputSchema: JsonSchema
@@ -83,7 +95,8 @@ export const TOOLS: readonly ToolDescriptor[] = [
       'Read the pending dogear annotations for this repository — comments a developer left ' +
       'by clicking elements in the running app, each already bound to a source location. ' +
       'Call this at the start of a task, and whenever the user mentions dogear or says they ' +
-      'left notes in the UI.',
+      'left notes in the UI. After you have addressed an item, call dogear_resolve with ' +
+      'its id.',
     inputSchema: {
       type: 'object',
       properties: {
