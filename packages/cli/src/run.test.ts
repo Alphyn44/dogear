@@ -7,9 +7,14 @@ import { COMMANDS, isServe, run, usage } from './run.js'
  * Split rather than loosened when `hook` landed. The unimplemented table used to be every
  * entry in COMMANDS; keeping the two lists explicit means the next command to be built has
  * to move itself across, and a command added to COMMANDS and then forgotten shows up as a
- * failure here rather than as a silently untested code path. D1 moved `mcp`.
+ * failure here rather than as a silently untested code path. D1 moved `mcp`, D6 `prune`.
+ *
+ * Moving `prune` across is also what keeps it *out* of the `UNIMPLEMENTED` table below, and
+ * that matters more than the assertion it stops making: those cases call `run([command])`, and
+ * `run(['prune'])` would prune the queue of the repo this suite is running in. ./prune.test.ts
+ * covers the command against temp roots; see the comment beside its dispatch in ./run.ts.
  */
-const IMPLEMENTED = ['hook', 'mcp'] as const
+const IMPLEMENTED = ['hook', 'mcp', 'prune'] as const
 const UNIMPLEMENTED = COMMANDS.filter(
   (command) => !(IMPLEMENTED as readonly string[]).includes(command),
 )

@@ -90,7 +90,7 @@ Don't over-explain basics.
 |---|---|
 | `@dogear/core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
 | `@dogear/vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
-| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. `hook` and `mcp` are implemented. |
+| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. `hook`, `mcp` and `prune` are implemented. |
 | `@dogear/queue` | The queue file: git-root walk, atomic read/write, annotation identity. **Private, source-only, never published** — see below. |
 
 **`@dogear/queue` has no build and is not published.** Its `exports` points straight at

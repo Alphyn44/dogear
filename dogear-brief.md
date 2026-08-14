@@ -484,7 +484,7 @@ matching Vite's own `/__vite_ping` convention):
 | `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
 | `GET` | `/__dogear/client.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
 | `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. Left here as a known loose end rather than deleted, in case D5 or E5 wants it |
-| `POST` | `/__dogear/prune` | Drop resolved items |
+| `POST` | `/__dogear/prune` | Drop resolved items — **not built.** D6 shipped prune on the CLI and MCP surfaces and deferred this one for want of a caller; see the Decisions log |
 
 ### MCP tools
 
@@ -1293,6 +1293,18 @@ item and report a successful resolve. Every writer therefore reads strictly; onl
 callers may tolerate. `dogear_pending` tolerates and reports the reason as a tool error —
 unlike a hook, an MCP call has an error channel, and telling an agent "nothing pending" for
 a file that would not parse is the one answer that makes it stop looking.
+
+**`POST /__dogear/prune` → deferred for want of a caller. Settled during D6.**
+The endpoint table has listed it since the first draft, and D6's notes called it "the third
+caller of the same operation" — but D6's acceptance criteria name only `dogear prune` and
+`dogear_prune`, and no story in any milestone gives the route a caller. The overlay has no
+prune affordance; D4 is clipboard, D5 is a read-time decoration, and Epic E is install. This
+is the same situation B5 found with `GET /__dogear/queue` and resolved the same way: a live
+dev-server route reachable only by curl is a third way to do one thing, and an unused route
+is a maintenance surface that gets no test pressure from real use. Both surfaces that exist
+already satisfy "everything works through MCP", so nothing is missing — only convenience for
+a caller that does not exist. Build it when the overlay grows a "clear resolved" control,
+which is the only thing that would make it a *shorter* path than the two that ship.
 
 **Cross-repo isolation → free, via same-origin.**
 Each dev server serves its own endpoint and knows its own root, so port collisions across

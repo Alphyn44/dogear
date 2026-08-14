@@ -1,5 +1,6 @@
 import { hook } from './hook.js'
 import { mcp } from './mcp.js'
+import { prune } from './prune.js'
 
 /**
  * Argument handling for the `dogear` CLI, kept separate from the executable so it can
@@ -12,9 +13,9 @@ import { mcp } from './mcp.js'
  */
 
 /**
- * TODO(dogear): `hook` and `mcp` are implemented. `prune` is D6, `init` is E1 and `status`
- * is E5. Listing them now is deliberate — an unknown command and an unimplemented one are
- * different failures, and the CLI should be able to say which.
+ * TODO(dogear): `hook`, `mcp` and `prune` are implemented. `init` is E1 and `status` is E5.
+ * Listing them now is deliberate — an unknown command and an unimplemented one are different
+ * failures, and the CLI should be able to say which.
  */
 export const COMMANDS = ['init', 'hook', 'mcp', 'prune', 'status'] as const
 
@@ -76,7 +77,7 @@ export function usage(): string {
     '  prune    Drop resolved items from the queue',
     '  status   What is running and what is pending, across all repos',
     '',
-    'Only `hook` and `mcp` are implemented. See https://github.com/Alphyn44/dogear/milestones',
+    'Only `hook`, `mcp` and `prune` are implemented. See https://github.com/Alphyn44/dogear/milestones',
   ].join('\n')
 }
 
@@ -100,6 +101,16 @@ export function run(argv: readonly string[]): Outcome {
   // running it, and only Claude Code sets that variable. Where the client spawns from is the
   // one thing every client tells us.
   if (command === 'mcp') return mcp(process.cwd())
+
+  // Not covered by a `run(['prune'])` test, and that is deliberate rather than an oversight.
+  // This line reads `process.cwd()` directly — the same design that keeps ./cli.ts three
+  // statements long — so calling it under vitest would prune *this repo's* queue and silently
+  // delete the developer's resolved annotations on every `npm test`. The alternatives are
+  // worse than the gap: `process.chdir()` is global mutable state shared by every test in the
+  // worker, and threading a cwd parameter through `run()` would put argv handling and
+  // environment plumbing back in the same function. ./prune.test.ts drives `prune()` against
+  // temp git roots instead, and ./run.test.ts pins the command out of the unimplemented table.
+  if (command === 'prune') return prune(process.cwd())
 
   return {
     output: `dogear: '${command}' is recognised but not implemented yet`,
