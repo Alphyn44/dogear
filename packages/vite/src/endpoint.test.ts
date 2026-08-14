@@ -11,11 +11,11 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
+import { queuePathFor, readQueue } from '@dogear/queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { ClientDist } from './client.js'
 import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
-import { queuePathFor, readQueue } from './queue.js'
 
 /**
  * Driven over real HTTP rather than through fabricated req/res objects.

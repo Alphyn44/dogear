@@ -1,19 +1,28 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { relative, sep } from 'node:path'
 
+import {
+  appendToQueue,
+  pendingOnly,
+  queuePathFor,
+  readQueue,
+  stampAnnotation,
+} from '@dogear/queue'
 import type { Connect } from 'vite'
 
-import { stampAnnotation, validateBatch } from './annotation.js'
+import { validateBatch } from './batch.js'
 import type { ClientDist } from './client.js'
 import { sendClientBundle, sendMissingBundleStub, sendSourcemap } from './client-route.js'
-import { appendToQueue, queuePathFor, readQueue } from './queue.js'
 
 /**
  * The HTTP half of the pipe: `POST <endpoint>/annotations` → `.dogear/queue.json`, plus
  * `GET <endpoint>/client.js`, which is how @dogear/core reaches the browser at all (B1, #8).
  *
- * `GET <endpoint>/queue` arrives with B3's pending badge and `POST <endpoint>/prune` with
- * D6 — both are in the brief's endpoint table, and neither has a caller yet.
+ * `GET <endpoint>/queue` and `POST <endpoint>/prune` are both in the brief's endpoint table
+ * and neither is built, for the same reason: nothing calls them. B5 found no caller for the
+ * former (the POST response already returns `pending`, and the badge shows the local count),
+ * and D6 shipped prune on the CLI and MCP surfaces instead — see the brief's Decisions log.
+ * Neither is an oversight; give one a caller and it can be added in a dozen lines.
  *
  * The client route lives in this middleware rather than a second one, because the promise
  * below — everything under the base path is answered here — is only true if there is exactly
@@ -233,7 +242,10 @@ async function handleSubmit(
 }
 
 function countPending(queuePath: string): number {
-  return readQueue(queuePath).items.filter((item) => item.status === 'pending').length
+  // `pendingOnly` rather than an inline predicate: what counts as pending is one rule, and
+  // it lives with the queue. An inline copy here would be a second place to fix if D5 or a
+  // later status ever changes it.
+  return pendingOnly(readQueue(queuePath).items).length
 }
 
 /**

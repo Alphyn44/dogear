@@ -4,14 +4,20 @@ import { dirname, join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import type { Annotation } from './queue.js'
-import { pendingOnly, queuePathFor, readQueue } from './queue.js'
+import type { StoredAnnotation } from './queue.js'
+import { pendingOnly, queuePathFor, tryReadQueue, withApp } from './queue.js'
+
+/**
+ * Moved from `@dogear/cli`, where this was `readQueue`'s suite before the two readers met in
+ * one module. Every assertion is the same; only the symbol changed, to `tryReadQueue`.
+ * ./tolerance.test.ts is what now guards the relationship between the two.
+ */
 
 let root: string
 let queuePath: string
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'dogear-cli-queue-'))
+  root = mkdtempSync(join(tmpdir(), 'dogear-tolerant-queue-'))
   queuePath = queuePathFor(root)
 })
 
@@ -20,12 +26,12 @@ afterEach(() => {
 })
 
 /** Write raw bytes to the queue path, standing in for a hand-written or corrupted file. */
-function writeQueue(contents: string): void {
+function writeRaw(contents: string): void {
   mkdirSync(dirname(queuePath), { recursive: true })
   writeFileSync(queuePath, contents)
 }
 
-function annotation(overrides: Partial<Annotation> = {}): Annotation {
+function annotation(overrides: Partial<StoredAnnotation> = {}): StoredAnnotation {
   return {
     id: '0199c8f4-3a21-7c5e-b3d9-1f2a4c6e8b07',
     status: 'pending',
@@ -40,24 +46,24 @@ describe('queuePathFor', () => {
   })
 })
 
-describe('readQueue', () => {
+describe('tryReadQueue', () => {
   it('treats a missing file as an empty queue, not a failure', () => {
     // A repo that has never had an annotation is the common case. Reporting it would put a
     // diagnostic on stderr for every prompt typed in every repo with the hook installed.
-    expect(readQueue(queuePath)).toEqual({ ok: true, items: [] })
+    expect(tryReadQueue(queuePath)).toEqual({ ok: true, items: [] })
   })
 
   it('reads the items out of a well-formed queue', () => {
     const item = annotation()
-    writeQueue(JSON.stringify({ version: 1, updatedAt: null, items: [item] }))
+    writeRaw(JSON.stringify({ version: 1, updatedAt: null, items: [item] }))
 
-    expect(readQueue(queuePath)).toEqual({ ok: true, items: [item] })
+    expect(tryReadQueue(queuePath)).toEqual({ ok: true, items: [item] })
   })
 
   it('reads an empty items array as an empty queue', () => {
-    writeQueue(JSON.stringify({ version: 1, updatedAt: null, items: [] }))
+    writeRaw(JSON.stringify({ version: 1, updatedAt: null, items: [] }))
 
-    expect(readQueue(queuePath)).toEqual({ ok: true, items: [] })
+    expect(tryReadQueue(queuePath)).toEqual({ ok: true, items: [] })
   })
 
   it.each([
@@ -70,11 +76,11 @@ describe('readQueue', () => {
     { why: 'the schema version is unknown', contents: '{"version":99,"items":[]}' },
     { why: 'the schema version is missing', contents: '{"items":[]}' },
   ])('degrades to a reason rather than throwing when $why', ({ contents }) => {
-    writeQueue(contents)
+    writeRaw(contents)
 
-    // The whole point of this file: the plugin throws here so its endpoint can answer 500
+    // The whole point of this reader: the plugin throws here so its endpoint can answer 500
     // and leave the bytes alone, but a hook that throws exits non-zero on someone's prompt.
-    const result = readQueue(queuePath)
+    const result = tryReadQueue(queuePath)
 
     expect(result.ok).toBe(false)
     if (result.ok) return
@@ -92,9 +98,9 @@ describe('readQueue', () => {
   ])('drops $why without failing the whole read', ({ item }) => {
     // One malformed entry in a hand-edited file should cost that entry, not the other nine.
     const good = annotation()
-    writeQueue(JSON.stringify({ version: 1, updatedAt: null, items: [item, good] }))
+    writeRaw(JSON.stringify({ version: 1, updatedAt: null, items: [item, good] }))
 
-    expect(readQueue(queuePath)).toEqual({ ok: true, items: [good] })
+    expect(tryReadQueue(queuePath)).toEqual({ ok: true, items: [good] })
   })
 })
 
@@ -123,5 +129,38 @@ describe('pendingOnly', () => {
     const third = annotation({ id: 'c' })
 
     expect(pendingOnly([first, second, third])).toEqual([first, second, third])
+  })
+})
+
+describe('withApp', () => {
+  it('keeps only items from the named workspace package', () => {
+    const admin = annotation({ id: 'a', app: '@acme/admin' })
+    const site = annotation({ id: 'b', app: '@acme/site' })
+
+    expect(withApp([admin, site], '@acme/admin')).toEqual([admin])
+  })
+
+  it('EXCLUDES an item carrying no app rather than including it', () => {
+    // Items written before C4 have no `app` at all, and the brief's wording is "filtered to
+    // one workspace package" — singular. An annotation that never recorded where it came
+    // from cannot be claimed by a package.
+    const anonymous = annotation({ id: 'a' })
+    const admin = annotation({ id: 'b', app: '@acme/admin' })
+
+    expect(withApp([anonymous, admin], '@acme/admin')).toEqual([admin])
+  })
+
+  it.each([
+    { why: 'a case mismatch', app: '@ACME/admin' },
+    { why: 'a bare suffix', app: 'admin' },
+    { why: 'a prefix', app: '@acme' },
+  ])('does not match on $why — the filter is exact', ({ app }) => {
+    expect(withApp([annotation({ app: '@acme/admin' })], app)).toEqual([])
+  })
+
+  it('returns nothing when no item carries an app at all', () => {
+    expect(
+      withApp([annotation({ id: 'a' }), annotation({ id: 'b' })], '@acme/admin'),
+    ).toEqual([])
   })
 })

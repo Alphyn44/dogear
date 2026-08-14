@@ -1,7 +1,8 @@
-import { formatQueue } from './format.js'
-import { findGitRoot } from './git-root.js'
-import { pendingOnly, queuePathFor, readQueue } from './queue.js'
+import { findGitRoot, pendingOnly, queuePathFor, tryReadQueue } from '@dogear/queue'
+
+import { formatQueue } from '@dogear/queue/format'
 import type { Result } from './run.js'
+import { findStale } from './stale.js'
 
 /**
  * `dogear hook` — the `UserPromptSubmit` adapter for Claude Code.
@@ -64,7 +65,10 @@ export function hook(env: HookEnv, cwd: string): Result {
   }
 
   const queuePath = queuePathFor(gitRoot)
-  const queue = readQueue(queuePath)
+  // The TOLERANT reader. The hook only ever reads, so it may swallow a corrupt file — and
+  // must, since it cannot exit non-zero. A writer would use `readQueue` instead; see
+  // `@dogear/queue`'s header for why that distinction is load-bearing.
+  const queue = tryReadQueue(queuePath)
   if (!queue.ok) {
     // The queue is there and unreadable. Say so on stderr and inject nothing: a corrupt
     // file is exactly when the user needs a hint, and exactly when the model must not be
@@ -72,7 +76,12 @@ export function hook(env: HookEnv, cwd: string): Result {
     return { output: '', exitCode: 0, diagnostic: `dogear: ${queue.reason}` }
   }
 
-  const context = formatQueue(pendingOnly(queue.items))
+  // Staleness is computed against the working tree on every prompt, never cached and never
+  // stored — the files under these annotations are exactly what the user is changing between
+  // one prompt and the next. `findStale` reads only the files the queue names, deduplicated,
+  // which is why this stays inside the hook's budget.
+  const pending = pendingOnly(queue.items)
+  const context = formatQueue(pending, { stale: findStale(pending, gitRoot) })
   if (context === '') return { output: '', exitCode: 0 }
 
   return {

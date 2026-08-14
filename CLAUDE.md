@@ -90,7 +90,35 @@ Don't over-explain basics.
 |---|---|
 | `@dogear/core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
 | `@dogear/vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
-| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. Only `hook` is implemented. |
+| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. `hook`, `mcp` and `prune` are implemented. |
+| `@dogear/queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. **Private, source-only, never published** — see below. |
+
+**`@dogear/queue` has no build and is not published.** Its `exports` points straight at
+`src/index.ts`; `@dogear/vite`, `@dogear/cli` and `@dogear/core` list it as a **devDependency**
+and their tsup configs set `noExternal` so it is inlined at build time. Two consequences worth
+knowing: the published install story is still three packages with no new runtime
+dependency, and `npm run typecheck` keeps working with **no prior build** — which it must,
+because CI typechecks before it builds and `stop-verify.sh` typechecks every TypeScript
+turn. A built fourth package would have put `dist/*.d.ts` on that critical path, which is
+the trap `examples/react-app` already documents.
+
+**The formatter lives here too, and it is the one module a browser loads.** `formatQueue`
+renders the `<dogear-queue>` block for all three callers — `dogear hook`, `dogear_pending`, and
+D4's clipboard export in `@dogear/core`. The third is why it moved out of `@dogear/cli`: core
+declares no dependencies and cli is a bin package with no `exports` field, so a shared file
+there was unreachable. It sits behind a **separate `./format` export subpath**, deliberately not
+re-exported from `index.ts`, because the main entry imports `node:fs` and core inlines whatever
+it resolves into `client.js`. So **`packages/queue/src/format.ts` must never import a `node:`
+module** — a violation builds, typechecks and passes every Node-side suite, and surfaces only as
+an overlay that throws on page load. `format.test.ts` guards it with a source rule, in the shape
+`packages/core/src/listeners.test.ts` established.
+
+**Two readers in `@dogear/queue`, and the rule is not stylistic: reads may tolerate, writes
+must refuse.** `readQueue` throws; `tryReadQueue` never does and is *derived* from it.
+Tolerant reads **drop** malformed entries, so writing one back would silently delete a
+hand-broken item — every writer therefore uses `readQueue`. `dogear hook` and
+`dogear_pending` are the only tolerant callers. `tolerance.test.ts` is the guard, replacing
+the cross-package `parity.test.ts` that went vacuous when the copies merged.
 
 The flow: **browser → HTTP POST → `<git-root>/.dogear/queue.json` → MCP server →
 agent.** The bridge is a file, never a socket. Both halves are independently testable
@@ -125,14 +153,25 @@ The brief has the full reasoning; the code is authoritative on mechanism.
 ## Commands
 
 Node `^20.19.0 || >=22.12.0` (Vite's own floor). One `npm install` at the repo root
-resolves all four workspaces.
+resolves all five workspaces.
+
+**`@modelcontextprotocol/sdk` is `@dogear/cli`'s only dependency**, and it is reached
+through a **dynamic** import in `src/mcp.ts` so it never enters the module graph of
+`dogear hook` — which runs on every prompt the user types, under a 10s ceiling with a 2s
+budget asserted in `test-built/hook.test.ts`. That is why the CLI's `tsup.config.ts` sets
+`splitting: true`: without it tsup inlines the dynamic import and hoists the SDK back to a
+top-level import of the file Claude Code spawns every turn. `test-built/mcp.test.ts`
+asserts the entry chunk carries no SDK import, and that the only SDK subpaths anywhere in
+the bundle are the three stdio-side ones — `streamableHttp` or `sse` appearing there would
+mean a network transport had been linked in, which is how the zero-egress rule is enforced
+rather than merely promised.
 
 | Command | What it does |
 |---|---|
 | `npm run verify` | The full gate: `format:check → typecheck → test → build → test:built → typecheck:example → build:example → build:fixtures → check:leak` |
 | `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
-| `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards. Needs a build first |
+| `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client. Needs a build first |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
@@ -166,8 +205,8 @@ and was rejected: it would be a second live entry point a bundler could follow i
 production, which is the hole F1 layer 3 exists to close.
 
 **Three vitest environments, one config.** The DOM suites (`overlay`, `session`, `listeners`,
-`teardown`, `describe`, `init.host-bail`, `badge`, `panel`, `controller`, `preference`) carry a
-`// @vitest-environment happy-dom` docblock; everything else stays `node`. All geometry is pure
+`teardown`, `describe`, `init.host-bail`, `badge`, `panel`, `controller`, `preference`,
+`clipboard`) carry a `// @vitest-environment happy-dom` docblock; everything else stays `node`. All geometry is pure
 functions tested in the node environment, because happy-dom has no layout engine and
 `getBoundingClientRect` there returns zeros. B5's `submit` suite is `node` for the same reason
 — it stubs `fetch` and touches no DOM, which is why the transport is a module of its own.

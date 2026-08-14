@@ -4,9 +4,10 @@ import { dirname, join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import type { StoredAnnotation } from '@dogear/queue'
+import { queuePathFor } from '@dogear/queue'
+
 import { hook } from './hook.js'
-import type { Annotation } from './queue.js'
-import { queuePathFor } from './queue.js'
 
 let root: string
 
@@ -19,7 +20,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-function annotation(overrides: Partial<Annotation> = {}): Annotation {
+function annotation(overrides: Partial<StoredAnnotation> = {}): StoredAnnotation {
   return {
     id: '019fef13-1d76-7000-9fbf-91e24ad5889b',
     status: 'pending',
@@ -30,7 +31,7 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 /** Write the queue file the way a user hand-writing one would. */
-function writeQueue(items: readonly Annotation[]): void {
+function writeQueue(items: readonly StoredAnnotation[]): void {
   writeRaw(JSON.stringify({ version: 1, updatedAt: null, items }, null, 2))
 }
 

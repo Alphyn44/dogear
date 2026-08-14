@@ -233,7 +233,8 @@ Because MCP owns the formatting and the resolve path, the hook stays thin — it
 trigger, not a second implementation. Any future agent that ships a context-injecting
 prompt hook becomes a one-adapter addition rather than a redesign.
 
-**Floor — the clipboard.** `Ctrl+Alt+P` in the overlay copies the formatted queue. No
+**Floor — the clipboard.** `Ctrl+Alt+P` in the overlay copies the formatted queue — the
+batch the tab is holding, formatted by the same renderer the other two tiers use. No
 server, no config, no protocol. Works with a web chat window, an agent nobody's written
 an adapter for, or a colleague on Slack. Annoying by design — it's the thing that always
 works, including when MCP is misconfigured.
@@ -483,8 +484,8 @@ matching Vite's own `/__vite_ping` convention):
 | `POST` | `/__dogear/annotations` | Submit a batch |
 | `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
 | `GET` | `/__dogear/client.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
-| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. Left here as a known loose end rather than deleted, in case D5 or E5 wants it |
-| `POST` | `/__dogear/prune` | Drop resolved items |
+| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. D4 was the last plausible claimant and turned it down — its clipboard copies the in-memory batch, since "works with no server" is one of its acceptance criteria. E5 is the only story left that could want it |
+| `POST` | `/__dogear/prune` | Drop resolved items — **not built.** D6 shipped prune on the CLI and MCP surfaces and deferred this one for want of a caller; see the Decisions log |
 
 ### MCP tools
 
@@ -496,6 +497,18 @@ Exposed by `dogear mcp`. The server resolves its repo by walking up from `cwd` f
 | `dogear_pending` | `{ app?: string }` | `{ count, items }` — pending only, optionally filtered to one workspace package |
 | `dogear_resolve` | `{ ids: string[] }` | `{ resolved, remaining }` |
 | `dogear_prune` | `{}` | `{ pruned }` |
+
+The `Returns` column is the tool's **structured** output. Each tool also returns a text
+block, and for `dogear_pending` that text is the shared formatter's `<dogear-queue>` block
+verbatim — the two are the same answer in two registers, which is what lets the same
+rendering reach the hook, the server, and the clipboard. `app` is matched **exactly**, and
+an item carrying no `app` is excluded when a filter is given.
+
+Counts, since the names alone are ambiguous: **`resolved` is how many items the call
+actually changed from `pending` to `resolved`**, not how many ids were passed — an unknown,
+duplicated, or already-resolved id contributes nothing, which is what makes D2's no-op rule
+observable. `remaining` and `pruned` are likewise counted after the write. Per-id detail
+goes in the text block rather than in a fourth structured field.
 
 ### Agent-facing format
 
@@ -517,13 +530,29 @@ One formatter, shared by the hook, the MCP server, and the clipboard export:
     comment: this needs to be two tabs over
 </dogear-queue>
 
-Items marked ⚠ stale had their text snippet disappear from the named file — the line
-number is probably wrong; locate by selector or text instead. When you have addressed
-an item, call dogear_resolve with its id.
+Items marked ⚠ stale no longer have their text snippet in any file they name — the
+line number is probably wrong; locate by selector or text instead.
+
+When you have addressed an item, call dogear_resolve with its id.
 ```
 
-The clipboard variant appends "…paste this to your agent" instead of the resolve
-instruction, since a pasting user has no MCP server.
+The stale sentence is emitted only when an item in the block actually carries the marker;
+the resolve instruction is always there. Both sit below the block, in that order.
+
+The clipboard variant closes with a different line instead of the resolve instruction:
+
+```
+These were pasted in rather than read from the queue, so there is nothing to resolve
+when you are done.
+```
+
+Amended during D4 — the original wording was "…paste this to your agent", on the reasoning
+that a pasting user has no MCP server. Both halves of that turned out to be wrong. The line
+is read by the *agent*, not the user, and by then the pasting has already happened; and the
+browser cannot know where a paste lands, which may well be a session with `dogear_resolve`
+registered. What is true in every destination is the fact above: the clipboard renders the
+browser's in-memory batch, which never reached `queue.json` and carries no ids, so nothing
+there is resolvable regardless of tooling. See the Decisions log.
 
 ### Config
 
@@ -769,8 +798,13 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 - Falls back to a hidden-textarea copy where `navigator.clipboard` is unavailable.
 
 **D5 — Stale items are obvious and disposable**
-- An item is marked `stale` when its text snippet no longer appears in its named file.
+- An item is marked `stale` when its text snippet appears in **none** of the files it
+  names, compared whitespace- and case-insensitively. Amended during D5 — the original
+  criterion said "its named file", literally, and flagged every healthy item; see the
+  Decisions log.
 - Stale items are still shown, flagged, with an instruction to locate by selector or text.
+- The flag reaches the agent in both registers — the `⚠ stale` marker in the formatted
+  block, and a derived `stale: true` on the item in `dogear_pending`'s structured output.
 - Nothing is ever auto-deleted.
 
 **D6 — Prune**
@@ -1222,6 +1256,163 @@ doesn't, nothing is missing. The hook must never be the only place a behavior li
 **Distribution → global CLI plus local plugin.**
 Machine-level tool, repo-level config — the CodeGraph model. It also absorbs the hook,
 removing a package that would have existed to hold fifty lines.
+
+**The queue file gets its own package, `@dogear/queue` — source-only and never published.
+Settled during D1, overturning an earlier call.**
+`findGitRoot` was duplicated between `@dogear/vite` and `@dogear/cli` behind a parity test,
+and `git-root.ts`'s header recorded why: all three ways to share it — the CLI depending on
+the plugin, the plugin depending on the CLI, or a fourth package — were "worse than a
+fourteen-line duplicate", the last one because this document argued against a package
+holding fifty lines when it folded the hook into the CLI. That header then said the CLI's
+copy should win when D1 landed, which *is* the plugin→CLI edge it had just rejected. It
+contradicted itself, so there was nothing to defer to.
+
+Re-decided on merits, because D1 destroys the premise both rejections rested on. The shared
+surface is no longer fourteen lines of path-walking: it is the atomic writer plus two new
+mutating operations, whose two concurrency rules lose a user's annotations *silently* when
+two implementations disagree. And it has two consumers, not one — the "fifty lines with a
+single consumer" argument does not reach it.
+
+Between the two live options the material cost is near identical: both are private,
+source-only, and inlined by their consumers at build time, so no published artifact gains a
+dependency and the install story stays three packages. What separates them is the effect on
+`@dogear/cli` — folding in would force a bin package to expose `./queue` and `./git-root`
+subpaths that are really internal, and leave every later reader asking why a Vite plugin
+imports a CLI. A dedicated package keeps every dependency arrow pointing downward.
+
+**Source-only is the load-bearing detail.** `exports` points at `src/index.ts` and there is
+no build. CI runs `typecheck` *before* `build`, and `stop-verify.sh` runs it on every
+TypeScript turn, so a package whose types came from `dist/` would make typechecking depend
+on a prior build — the trap `examples/react-app` is already documented as falling into.
+
+**The resolve instruction is delivered twice — the formatter's footer AND the tool
+description — and the duplication is deliberate. Settled during D2.**
+A client may render `structuredContent` and drop the text content block entirely. Inspecting
+a live session found Claude Code doing exactly that: the `<dogear-queue>` block, and with it
+the "call `dogear_resolve` with its id" footer, never reached the model. On the MCP-only
+baseline — which this document calls the baseline experience, not an edge case — the agent
+was therefore never told to resolve anything, and the loop the D epic exists to close stayed
+open.
+
+Tool *descriptions* cannot be dropped that way: they arrive through `tools/list` and sit in
+context for the whole session. So `dogear_pending`'s description names `dogear_resolve` as
+the next step, and `dogear_resolve`'s forbids hand-editing the queue. The hook path delivers
+the footer, the MCP path delivers the description, and neither depends on the other.
+
+Two consequences worth stating. The server was *not* changed to suit one client — declaring
+`outputSchema` and returning both content forms is correct, and the fix adds a delivery route
+rather than removing one. And these sentences are now pinned by tests, because until D2
+nothing asserted their content: the suite checked only that descriptions were longer than
+forty characters, so either could have been deleted in a tidy-up without a single failure.
+
+**Two readers, one module: reads may tolerate, writes must refuse. Settled during D1.**
+The plugin's reader threw on a corrupt queue and the hook's swallowed everything, in two
+packages, guarded by a parity test. Merged, `tryReadQueue` is now *derived* from `readQueue`
+so the two cannot drift on the envelope — and the surviving divergence turns out to be a
+rule rather than a quirk. The tolerant reader **drops** entries that are not
+annotation-shaped, so handing its result to a writer would silently delete a hand-broken
+item and report a successful resolve. Every writer therefore reads strictly; only read-only
+callers may tolerate. `dogear_pending` tolerates and reports the reason as a tool error —
+unlike a hook, an MCP call has an error channel, and telling an agent "nothing pending" for
+a file that would not parse is the one answer that makes it stop looking.
+
+**Staleness is a fragment match across every site, not a substring of one file. Settled
+during D5 by implementing the original criterion and watching it fail.**
+
+"An item is stale when its text snippet no longer appears in its named file" flags *every*
+checkable item in a real queue. Four independent reasons, all found on this repo's own
+example app:
+
+- **The text lives at the call site.** dogear's premise is that the innermost site is the
+  component's own file — so `Button.tsx` holds `{label}` while the string "Overview" is at
+  `App.tsx`, two frames up. Checking only the primary site condemns every component-authored
+  element in a component-based UI, which is the case dogear exists for.
+- **CSS transforms the text.** `innerText` respects `text-transform`, so a source reading
+  `Click log` is captured as `CLICK LOG`.
+- **JSX interpolates.** Source `Paragraph {index + 1}.` renders as `Paragraph 1.`, so no
+  whole-snippet comparison can ever succeed.
+- **Source wraps, snippets do not.** `describe.ts` collapses whitespace before capping; the
+  file it came from is indented and hard-wrapped.
+
+So: normalize both sides (lowercase, collapse whitespace), search **every** file the item
+names, and accept a five-word window rather than the whole snippet for snippets longer than
+that. Checking all the sites is not re-anchoring — the pin is never rewritten, and the
+decision above still stands; it only widens where we look before *flagging*.
+
+The asymmetry is what drives every remaining choice. A **false stale** tells the agent to
+distrust a correct line number on every prompt, which teaches everyone to ignore the marker
+and makes the feature worse than absent. A **false fresh** is the status quo: a wrong line
+number goes unflagged and the item still carries three other anchors. Every ambiguity
+therefore resolves toward fresh — an item with no text, no sites, or nothing readable is
+never flagged, and only a file that is *missing* counts as evidence, because a rename or a
+delete is the case worth catching. A file that exists but cannot be read is "could not
+check".
+
+Heavily-interpolated short strings — `Showing 24 results`, `Deleted 3 of 12 items` — remain
+unmatchable at any window size. That is a floor of the text-snippet anchor rather than a
+tuning problem, and it is the price of not re-anchoring.
+
+**`POST /__dogear/prune` → deferred for want of a caller. Settled during D6.**
+The endpoint table has listed it since the first draft, and D6's notes called it "the third
+caller of the same operation" — but D6's acceptance criteria name only `dogear prune` and
+`dogear_prune`, and no story in any milestone gives the route a caller. The overlay has no
+prune affordance; D4 is clipboard, D5 is a read-time decoration, and Epic E is install. This
+is the same situation B5 found with `GET /__dogear/queue` and resolved the same way: a live
+dev-server route reachable only by curl is a third way to do one thing, and an unused route
+is a maintenance surface that gets no test pressure from real use. Both surfaces that exist
+already satisfy "everything works through MCP", so nothing is missing — only convenience for
+a caller that does not exist. Build it when the overlay grows a "clear resolved" control,
+which is the only thing that would make it a *shorter* path than the two that ship.
+
+**The clipboard copies the in-memory batch, not the queue file. Settled during D4.**
+"Copies the formatted queue" admits two readings, and the acceptance criteria settle it: "works
+with no server". The on-disk reading needs `GET /__dogear/queue` — the route B5 found
+caller-less and never built — plus a live dev server and a round trip, which is three
+dependencies for the tier whose entire claim is that it has none. So the clipboard renders what
+the tab is holding.
+
+The consequence is real and accepted rather than engineered around: a successful Submit empties
+the batch, so `Ctrl+Alt+P` is an **alternative** to Submit, not a companion to it. A user who
+does both delivers the same annotations twice — once as pasted text, once through
+`dogear_pending` — with nothing linking the two. That is visible in the paste itself, which says
+the items were never queued, and choosing both paths is the user's to choose. Making a copy
+*clear* the batch was the alternative and is worse: a clipboard write has no receipt. A 200
+proves the annotations reached disk; `execCommand` can report success on a clipboard the OS then
+refuses, and the in-memory queue is the one thing in dogear that cannot be recovered. A copy is
+therefore a read, and reads do not destroy.
+
+**The formatter moved to `@dogear/queue`, behind its own export subpath. Settled during D4.**
+Three callers now — the hook, the MCP server, and the clipboard — and the third is the browser.
+`@dogear/core` declares no dependencies and `@dogear/cli` is a bin package with no `exports`
+field, so the formatter could not stay where it was. The rejected alternative was a copy in core
+guarded by a drift test, which is the pattern already used for `SENTINEL` and the source
+attributes: that works for a constant, where the test can compare two strings, and does not for
+two hundred lines of rendering, where the test would have to compare behaviour and would only
+ever catch the drift it was written for.
+
+`./format` is a **separate subpath from `.`**, and that is the load-bearing part. The package's
+main entry imports `node:fs`, which a browser bundle must never resolve — so the browser-safe
+module is reachable by a specifier that cannot reach the rest, rather than by a convention
+someone has to remember. `format.ts` re-exports `StoredAnnotation` so the subpath is
+self-sufficient, and its own suite asserts mechanically that it imports nothing from `node:`.
+The failure this prevents is invisible everywhere else: a `node:` import there builds, typechecks
+and passes every Node-side suite, and shows up only as an overlay that throws on page load.
+
+**Drafts carry no id, and the formatter omits it. Settled during D4.**
+Identity is stamped by the server at submit — a UUIDv7 whose time-sortability a browser-minted
+v4 would break — so the items in a clipboard block genuinely have none. The block reads
+`[1] — src/Button.tsx:20`, and the positional number is the reader's handle. Nothing is lost:
+`dogear_resolve` cannot act on items that are not in the queue, which is what the paste footer
+says. The alternative was to send the local `key`, which the queue module already warns will
+eventually be mistaken for the server's id — putting it in the id slot in text an agent reads
+is that mistake, made deliberately.
+
+**`Ctrl+Alt+P` is global, like `Ctrl+Alt+D` and unlike `⌘/Ctrl+Enter`.**
+Submit is guarded on the panel being open, which is what keeps B4's review step unavoidable. The
+clipboard is the tier that has to work when nothing else does, so putting a step in front of it
+would contradict the only thing it claims. It is stopped hard for the same reason the kill switch
+is — an app binding the same chord must not also fire — and it is the one chord that guards on
+`event.repeat`, because neither of the others can fire twice and this one can.
 
 **Cross-repo isolation → free, via same-origin.**
 Each dev server serves its own endpoint and knows its own root, so port collisions across

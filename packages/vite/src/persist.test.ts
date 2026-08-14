@@ -10,12 +10,12 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { queuePathFor, readQueue } from '@dogear/queue'
 import type { ViteDevServer } from 'vite'
 import { createServer } from 'vite'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { dogear } from './index.js'
-import { queuePathFor, readQueue } from './queue.js'
 
 /**
  * A2 end to end: a real Vite dev server, a real port, a real HTTP POST, a real file.

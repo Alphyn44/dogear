@@ -1,0 +1,29 @@
+{
+  "name": "@dogear/queue",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared, unpublished home for the dogear queue: the git-root walk, atomic reads and writes, annotation identity, and the agent-facing formatter.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alphyn44/dogear.git",
+    "directory": "packages/queue"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./format": {
+      "types": "./src/format.ts",
+      "default": "./src/format.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

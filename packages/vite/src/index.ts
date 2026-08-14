@@ -1,3 +1,4 @@
+import { findGitRoot } from '@dogear/queue'
 import type { FilterPattern, Plugin } from 'vite'
 import { createFilter } from 'vite'
 
@@ -10,7 +11,6 @@ import {
   resolveCoreDist,
 } from './client.js'
 import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
-import { findGitRoot } from './git-root.js'
 import { SENTINEL } from './sentinel.js'
 import { stampSource } from './stamp.js'
 

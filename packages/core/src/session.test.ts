@@ -1489,6 +1489,302 @@ describe('B6 — the kill switch', () => {
   })
 })
 
+/**
+ * D4 (#23) — the clipboard fallback.
+ *
+ * ./clipboard.test.ts owns the two copy mechanisms and the shape conversion; the formatter's
+ * own suite owns the rendering. What is left here is the **binding and its consequences** —
+ * what the chord copies, what it deliberately does not touch, and what the badge says
+ * afterwards.
+ *
+ * `navigator.clipboard.writeText` is spied rather than stubbed wholesale, for the reason
+ * ./clipboard.test.ts states: happy-dom implements the API but routes it through
+ * `navigator.permissions`, so the real one would make these tests assert about happy-dom's
+ * permission defaults instead of about dogear.
+ */
+describe('D4 — the clipboard fallback', () => {
+  let writeText: Mock<(text: string) => Promise<void>>
+
+  function chord(init: KeyboardEventInit = {}): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      code: 'KeyP',
+      key: 'p',
+      ctrlKey: true,
+      altKey: true,
+      ...init,
+    })
+    window.dispatchEvent(event)
+    return event
+  }
+
+  /** What most recently reached the clipboard. */
+  async function copied(): Promise<string> {
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalled()
+    })
+    return writeText.mock.calls.at(-1)?.[0] ?? ''
+  }
+
+  beforeEach(() => {
+    writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve())
+    vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(writeText)
+  })
+
+  it('copies the batch as the same block the MCP server renders', async () => {
+    queueComment('too dark')
+    queueComment('wrong copy')
+
+    chord()
+
+    const text = await copied()
+    expect(text).toContain('<dogear-queue count="2">')
+    expect(text).toContain('    comment: too dark')
+    expect(text).toContain('    comment: wrong copy')
+  })
+
+  it('closes with the paste line, never the resolve instruction', async () => {
+    // These items are not in queue.json and carry no ids, so dogear_resolve cannot act on
+    // them whatever tooling the reader has. An agent that has seen the tool elsewhere must
+    // not be told to go inventing ids for it.
+    queueComment('too dark')
+
+    chord()
+
+    const text = await copied()
+    expect(text).toContain('there is nothing to resolve when you are done')
+    expect(text).not.toContain('dogear_resolve')
+  })
+
+  it('renders no id, because the server has not stamped one yet', async () => {
+    // The target here carries no `data-dogear-src`, so it resolves no sites either — the
+    // headline is the bare position, with nothing at all after it.
+    queueComment('too dark')
+
+    chord()
+
+    const text = await copied()
+    expect(text).toContain('[1]\n    ')
+    expect(text).not.toMatch(/\[1] \S/)
+  })
+
+  it('carries the batch note', async () => {
+    queueComment('too dark')
+    badge().click()
+    noteInput().value = '  all on the settings page  '
+
+    chord()
+
+    expect(await copied()).toContain('    note: all on the settings page')
+  })
+
+  describe('read-only', () => {
+    it('leaves the batch exactly where it was', async () => {
+      // A clipboard write has no receipt a 200 would give — `execCommand` can report success
+      // on a clipboard the OS then refuses — and the in-memory queue is the one thing in
+      // dogear that cannot be recovered.
+      queueComment('too dark')
+      queueComment('wrong copy')
+
+      chord()
+      await copied()
+
+      expect(session.queue.count).toBe(2)
+    })
+
+    it('leaves the note and the open panel alone', async () => {
+      queueComment('too dark')
+      badge().click()
+      noteInput().value = 'still here'
+
+      chord()
+      await copied()
+
+      expect(noteInput().value).toBe('still here')
+      expect(panelOpen()).toBe(true)
+    })
+
+    it('posts nothing', async () => {
+      // The whole point of the tier: no server, no protocol. A copy that also submitted would
+      // be a second Submit the user did not press.
+      stubFetch(ok({ written: 1, pending: 1 }))
+      queueComment('too dark')
+
+      chord()
+      await copied()
+
+      expect(fetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the badge', () => {
+    it('confirms the copy, then reverts to the count', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        queueComment('too dark')
+        queueComment('wrong copy')
+
+        chord()
+        await vi.waitFor(() => {
+          expect(badge().textContent).toBe('2 copied')
+        })
+        expect(overlay.mounted).toBe(true)
+
+        vi.advanceTimersByTime(SENT_NOTICE_MS)
+
+        // Still mounted, unlike B5's `N sent` — a copy does not empty the queue, so there is
+        // a count left to show. This is the one place the two notices differ observably.
+        expect(badge().textContent).toBe('2 pending')
+        expect(overlay.mounted).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('says so and logs when the copy fails', async () => {
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+      writeText.mockRejectedValue(new Error('permission denied'))
+      // No execCommand either — happy-dom has none, so the fallback finds nothing to call.
+      queueComment('too dark')
+
+      chord()
+
+      await vi.waitFor(() => {
+        expect(badge().textContent).toBe('copy failed')
+      })
+      expect(logged).toHaveBeenCalled()
+    })
+  })
+
+  describe('an empty batch', () => {
+    it('does not touch the clipboard', async () => {
+      // `formatQueue` returns the empty string for an empty list, and clobbering whatever the
+      // user had copied — in the one case where dogear has nothing to say — is worse.
+      chord()
+
+      await vi.waitFor(() => {
+        expect(badge().textContent).toBe('nothing to copy')
+      })
+      expect(writeText).not.toHaveBeenCalled()
+    })
+
+    it('takes its own announcement away again', async () => {
+      // B7's (#14) third guarantee, on the one path that mounts the host with an empty queue.
+      const before = document.documentElement.outerHTML
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        chord()
+        await vi.waitFor(() => {
+          expect(badge().textContent).toBe('nothing to copy')
+        })
+
+        vi.advanceTimersByTime(SENT_NOTICE_MS)
+
+        expect(overlay.mounted).toBe(false)
+        expect(document.documentElement.outerHTML).toBe(before)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  describe('the binding', () => {
+    it('works from a cold page — this is the tier that always works', async () => {
+      expect(overlay.mounted).toBe(false)
+
+      chord()
+
+      await vi.waitFor(() => {
+        expect(badge().textContent).toBe('nothing to copy')
+      })
+    })
+
+    it('works mid-comment, like the kill switch', async () => {
+      queueComment('too dark')
+      captureAndType('half a thought')
+
+      chord()
+
+      expect(await copied()).toContain('    comment: too dark')
+    })
+
+    it('keeps the keystroke away from the app', () => {
+      expect(chord().defaultPrevented).toBe(true)
+    })
+
+    it('uses code, not key — Alt is a compose modifier on several layouts', async () => {
+      queueComment('too dark')
+
+      chord({ key: 'π' })
+
+      expect(await copied()).toContain('<dogear-queue count="1">')
+    })
+
+    it('ignores an autorepeat, so a held chord copies once', async () => {
+      // The guard the other two chords do not need: submit has `inFlight`, and disable tears
+      // the session down on its first firing.
+      queueComment('too dark')
+
+      chord()
+      await copied()
+      chord({ repeat: true })
+      chord({ repeat: true })
+
+      expect(writeText).toHaveBeenCalledOnce()
+    })
+
+    it.each([
+      { why: 'Ctrl alone', init: { altKey: false } },
+      { why: 'Alt alone', init: { ctrlKey: false } },
+      { why: 'a different letter', init: { code: 'KeyO' } },
+      { why: 'mid-IME composition', init: { isComposing: true } },
+    ])('ignores $why', ({ init }) => {
+      queueComment('too dark')
+
+      chord(init)
+
+      expect(writeText).not.toHaveBeenCalled()
+    })
+  })
+
+  it('copies the text on screen, not the last committed value', async () => {
+    // The chord is global, so it can fire while a row's textarea has focus mid-edit. Same
+    // commit ⌘/Ctrl+Enter makes before submitting, for the same reason.
+    queueComment('too dark')
+    badge().click()
+    rowInput(0).focus()
+    rowInput(0).value = 'far too dark'
+
+    chord()
+
+    expect(await copied()).toContain('    comment: far too dark')
+  })
+
+  it('leaves the document untouched when teardown lands mid-copy', async () => {
+    // The continuation would otherwise announce into a host `destroy()` has removed and
+    // schedule a revert timer nothing is left to clear.
+    const before = document.documentElement.outerHTML
+    let release: () => void = () => {}
+    writeText.mockImplementation(
+      () => new Promise<void>((resolve) => (release = resolve)),
+    )
+
+    queueComment('too dark')
+    chord()
+
+    session.dispose()
+    registry.detachAll()
+    overlay.destroy()
+
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(document.documentElement.outerHTML).toBe(before)
+  })
+})
+
 describe('a configured modifier', () => {
   beforeEach(() => {
     registry.detachAll()
