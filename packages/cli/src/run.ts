@@ -85,7 +85,7 @@ export function usage(): string {
     // E2–E4 land and is not what it does today. The footer below now advertises init as
     // implemented, so the description has to be true of the command as shipped — and this
     // wording stays true as each later step is added, rather than needing an edit per epic.
-    '  init     Set this repo up for dogear (safe to re-run)',
+    '  init     Set this repo up for dogear (safe to re-run; --dry-run changes nothing)',
     '  hook     Emit UserPromptSubmit JSON (your agent runs this, not you)',
     '  mcp      Run the MCP server over stdio',
     '  prune    Drop resolved items from the queue',
@@ -111,7 +111,9 @@ export function run(argv: readonly string[]): Outcome {
   // `dogear init` is standing in the repo they mean. Not covered by a `run(['init'])` test that
   // gets as far as running anything — ./init.test.ts drives init() against temp roots, and
   // ./run.test.ts asserts only that the dispatch produces an Async without awaiting it.
-  if (command === 'init') return init(process.cwd())
+  // The rest of argv goes to the command. ./init.ts validates it — see the note there on why
+  // a per-command flag table does not belong in the file that exists to be short.
+  if (command === 'init') return init(process.cwd(), argv.slice(1))
 
   // Dispatched before the unimplemented fallthrough, and given the environment here rather
   // than reading it inside hook() so that the only code touching process globals is this

@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 
 import { CONFIG_FILE, QUEUE_DIR } from '@dogear/queue'
@@ -33,6 +40,19 @@ let restoreGitConfig: () => void
 beforeEach(() => {
   restoreGitConfig = isolateGitConfig()
   root = createRepo('dogear-scaffold-')
+
+  // A Vite repository, since E2 (#27): detection runs on every invocation and a repo with no
+  // Vite config earns a `note:`, which suppresses `nothing changed` — so a bare temp directory
+  // would quietly stop exercising E1's third criterion. ./detect.test.ts owns the shapes
+  // detection can see; this file needs one that produces a clean report.
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({
+      devDependencies: { vite: '^8.2.1' },
+      dependencies: { react: '^19.2.0' },
+    }),
+  )
+  writeFileSync(join(root, 'vite.config.ts'), '')
 })
 
 afterEach(() => {
@@ -44,6 +64,18 @@ afterEach(() => {
 function header(): string {
   return `dogear: ${root}`
 }
+
+/**
+ * E2's detection lines for the fixture above, indented as the report indents them.
+ *
+ * Spelled out rather than matched loosely, because they now sit between the header and every
+ * change line — a suite that skipped past them would stop noticing if they moved.
+ */
+const FINDINGS = [
+  '  vite:      vite.config.ts (vite ^8.2.1)',
+  '  framework: react ^19.2.0',
+  '  workspace: single package, 1 app',
+]
 
 describe('scaffold() on a fresh repository', () => {
   it('creates .dogear/ and reports it', () => {
@@ -61,12 +93,14 @@ describe('scaffold() on a fresh repository', () => {
     expect(scaffold(root).output.startsWith(header())).toBe(true)
   })
 
-  it('indents changes under the header, in step order', () => {
+  it('indents changes under the header, in step order, below the findings', () => {
     // Order is asserted, not just membership: the config step writes inside the directory
-    // the first step creates, and apply stops at the first failure.
+    // the first step creates, and apply stops at the first failure. Since E2 the findings come
+    // first — #27's second criterion is a claim about *order*, so this is where it is pinned.
     expect(scaffold(root).output).toBe(
       [
         header(),
+        ...FINDINGS,
         `  created ${QUEUE_DIR}/`,
         `  created ${QUEUE_DIR}/${CONFIG_FILE}`,
         '  created .gitignore',
@@ -99,10 +133,16 @@ describe('scaffold() on an already-initialized repository', () => {
   it('reports that nothing changed, and exits 0', () => {
     // Exit 0, not 1. "Already set up" is the state the user asked for; a non-zero exit would
     // make `dogear init && npm run dev` unusable for everyone past the first run.
+    //
+    // The findings are here too, and that is E2's answer to a question #26 did not have to
+    // ask: they describe the repository rather than the run, so they print whether or not
+    // anything happened. `nothing changed` still follows, because it is still true and it is
+    // the only line answering what the user actually asked. Findings do not suppress it; notes
+    // do — see the block below.
     const again = scaffold(root)
 
     expect(again.exitCode).toBe(0)
-    expect(again.output).toBe(`${header()}\n  nothing changed`)
+    expect(again.output).toBe([header(), ...FINDINGS, '  nothing changed'].join('\n'))
   })
 
   it('reports NO change lines the second time', () => {
@@ -209,5 +249,138 @@ describe('scaffold() when a step fails', () => {
     // The empty-changes branch and the failure branch both produce zero applied lines. Reading
     // "nothing changed" after a failed init would be the worst possible summary of it.
     expect(scaffold(root).output).not.toContain('nothing changed')
+  })
+
+  it('still reports what it found, above the failure', () => {
+    // Detection ran before any step planned, so its findings survive a step that could not
+    // apply — and they are exactly what someone diagnosing the failure wants to see.
+    expect(
+      scaffold(root)
+        .output.split('\n')
+        .slice(1, 1 + FINDINGS.length),
+    ).toEqual(FINDINGS)
+  })
+})
+
+describe('scaffold() reporting what it detected', () => {
+  it('says so plainly when there is no vite config, and still sets the repo up', () => {
+    // Reported, not refused. Detection is a guess, and a guess that blocked init would turn a
+    // repository with an unusual config filename into one dogear cannot be installed in.
+    // Everything init writes is inert without Vite, and E3's MCP wiring is not.
+    rmSync(join(root, 'vite.config.ts'))
+
+    const result = scaffold(root)
+
+    expect(result.exitCode).toBe(0)
+    expect(result.output).toContain('vite:      none found')
+    expect(result.output).toContain('note: no vite config found')
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(true)
+  })
+
+  it('still gives a verdict on a re-run of a repo with no vite config', () => {
+    // Detection's remarks do not suppress `nothing changed`, unlike a step's notes. Without
+    // that split, the commonest reason to run init twice is also the case where it never says
+    // whether it did anything — which ../test-built/init.test.ts caught first.
+    rmSync(join(root, 'vite.config.ts'))
+    scaffold(root)
+
+    const again = scaffold(root)
+
+    expect(again.output).toContain('nothing changed')
+    expect(again.output).toContain('note: no vite config found')
+  })
+
+  it('names each app in a monorepo, because their frameworks differ', () => {
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ workspaces: ['packages/*'], devDependencies: { vite: '^8.2.1' } }),
+    )
+    rmSync(join(root, 'vite.config.ts'))
+    for (const [name, dep] of [
+      ['web', { react: '^19.2.0' }],
+      ['admin', { vue: '^3.5.0' }],
+    ] as const) {
+      mkdirSync(join(root, 'packages', name), { recursive: true })
+      writeFileSync(
+        join(root, 'packages', name, 'package.json'),
+        JSON.stringify({ dependencies: dep }),
+      )
+      writeFileSync(join(root, 'packages', name, 'vite.config.ts'), '')
+    }
+
+    const output = scaffold(root).output
+
+    expect(output).toContain('apps:      packages/admin — vue ^3.5.0 (vite.config.ts)')
+    expect(output).toContain('           packages/web — react ^19.2.0 (vite.config.ts)')
+    expect(output).toContain('workspace: npm workspaces, 2 packages, 2 apps')
+  })
+
+  it('warns that a non-JSX app gets the selector floor, and only about that app', () => {
+    // brief:1517 — the transform is JSX-only, so a Vue app's annotations carry no exact source
+    // location. Saying nothing would leave the user to discover that by using it.
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ dependencies: { vue: '^3.5.0' } }),
+    )
+
+    const output = scaffold(root).output
+
+    expect(output).toContain('note: . (vue) — ')
+    expect(output).toContain('JSX-only')
+  })
+
+  it('says nothing about the transform for a React app', () => {
+    expect(scaffold(root).output).not.toContain('JSX-only')
+  })
+})
+
+describe('scaffold() with dryRun', () => {
+  it('writes NOTHING, on a repository where a real run would write three things', () => {
+    // The whole contract. Every `plan()` runs and no `apply()` does, which is only safe
+    // because planning never writes — see the header of ./scaffold.ts.
+    scaffold(root, { dryRun: true })
+
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
+    expect(existsSync(join(root, '.gitignore'))).toBe(false)
+  })
+
+  it('marks itself and puts the changes in the conditional', () => {
+    expect(scaffold(root, { dryRun: true }).output).toBe(
+      [
+        header(),
+        '  dry run — nothing was written',
+        ...FINDINGS,
+        `  would create ${QUEUE_DIR}/`,
+        `  would create ${QUEUE_DIR}/${CONFIG_FILE}`,
+        '  would create .gitignore',
+      ].join('\n'),
+    )
+  })
+
+  it('renders every step’s verb in the imperative, including a step added later', () => {
+    // The guard on ./scaffold.ts's IMPERATIVE table. A step whose summary opens with a verb
+    // the table does not know renders unchanged, and `would created` is a typo that ships —
+    // grammatical, invisible to typecheck, and only ever seen by whoever used the flag.
+    for (const line of scaffold(root, { dryRun: true }).output.split('\n')) {
+      if (line.includes('would ')) expect(line).not.toMatch(/would \w+ed\b/)
+    }
+  })
+
+  it('exits 0 — a dry run that found work to do is not a failure', () => {
+    expect(scaffold(root, { dryRun: true }).exitCode).toBe(0)
+  })
+
+  it('reports nothing changed on an already-initialized repo, same as a real run', () => {
+    scaffold(root)
+
+    expect(scaffold(root, { dryRun: true }).output).toContain('nothing changed')
+  })
+
+  it('leaves the repository in a state where the real run still does the work', () => {
+    // The failure this guards: a dry run that half-applied would make the next real run report
+    // less than it did, and the user would never learn what was skipped.
+    scaffold(root, { dryRun: true })
+
+    expect(scaffold(root).output).toContain(`created ${QUEUE_DIR}/`)
   })
 })

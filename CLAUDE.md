@@ -120,23 +120,37 @@ hand-broken item — every writer therefore uses `readQueue`. `dogear hook` and
 `dogear_pending` are the only tolerant callers. `tolerance.test.ts` is the guard, replacing
 the cross-package `parity.test.ts` that went vacuous when the copies merged.
 
-**`dogear init` is a list of steps, and E2–E5 append to it rather than editing the runner.**
-`packages/cli/src/init.ts` is the adapter (resolve the git root, refuse if there isn't one,
-defer to the implementation through a dynamic `import()` exactly as `mcp.ts` defers to
-`server.ts`); `scaffold.ts` holds the `Step` contract and the runner, and each step lives in a
-module of its own — `queue-dir.ts`, `config.ts`, `gitignore.ts`. A step's `plan(root)`
-**never writes and never throws** — it returns `{ change?, notes? }` or `undefined` — and that
-is what makes both idempotency and E2's report-before-change possible without a second
-traversal. Every `plan()` runs before any `apply()`, which is why not throwing is a rule
-rather than a style note: `config.ts` stats `.dogear/config.json` in the repo where `.dogear`
-is a regular *file* and gets `ENOTDIR`, which `throwIfNoEntry: false` does not suppress.
-Three rules a new step must not break: *idempotency is the absence of a code path*, so `plan`
-returning `undefined` is the whole mechanism and there is no separate `alreadyInitialized()`
-to drift; **check for the state you need, not for the path being occupied** — `existsSync` is
-true for a regular file named `.dogear`, which made init report `nothing changed` over a repo
-that could never be written to, at exit 0; and a **note is not a change** — it is for state
-init can see and must not repair by guessing, and it suppresses `nothing changed` rather than
-joining the change list. `scaffold.test.ts` pins all three.
+**`dogear init` is a detection phase and then a list of steps.** `packages/cli/src/init.ts` is
+the adapter (validate the flags, resolve the git root, refuse if there isn't one, defer to the
+implementation through a dynamic `import()` exactly as `mcp.ts` defers to `server.ts`);
+`scaffold.ts` holds the `Step` contract and the runner, and each step lives in a module of its
+own — `queue-dir.ts`, `config.ts`, `gitignore.ts`. E3 appends a step; it does not edit the
+runner. A step's `plan(root, detection)` **never writes and never throws** — it returns
+`{ change?, notes? }` or `undefined` — and that is what makes both idempotency and `--dry-run`
+possible without a second traversal. Every `plan()` runs before any `apply()`, which is why
+not throwing is a rule rather than a style note: `config.ts` stats `.dogear/config.json` in
+the repo where `.dogear` is a regular *file* and gets `ENOTDIR`, which `throwIfNoEntry: false`
+does not suppress. Three rules a new step must not break: *idempotency is the absence of a
+code path*, so `plan` returning `undefined` is the whole mechanism and there is no separate
+`alreadyInitialized()` to drift; **check for the state you need, not for the path being
+occupied** — `existsSync` is true for a regular file named `.dogear`, which made init report
+`nothing changed` over a repo that could never be written to, at exit 0; and a **note is not a
+change** — it is for state init can see and must not repair by guessing, and it suppresses
+`nothing changed` rather than joining the change list. `scaffold.test.ts` pins all three.
+
+**E2's detection is a phase, not a step, and the distinction is load-bearing.** `detect.ts`
+runs before anything plans, because a step's only voice is `Plan.notes` and notes print *below*
+the change list — detection-as-a-step would report what it found after init had changed things,
+which inverts the acceptance criterion. So its findings get their own labelled section above
+the changes, and the structured `Detection` reaches every `plan()` as a second argument, which
+is how E3 wires what detection saw instead of looking again. Three consequences: `detect.ts`
+**never throws** (it runs before every step, so one unparseable `package.json` would take out
+an init that had nothing to do with it); **detection's remarks do not suppress `nothing
+changed` even though step notes do**, because a repo with no Vite earns one on every run and
+folding them together means the commonest re-run never gets a verdict — `test-built/init.ts`
+caught that, not a unit test; and **`Change.summary` stays past tense**, with `--dry-run`
+converting it through a small verb table in `scaffold.ts` that `scaffold.test.ts` guards, so a
+step added with an unknown verb fails rather than shipping `would created`.
 
 **The `.gitignore` step asks git, and it is the CLI's only subprocess.** Whether
 `.dogear/queue.json` is ignored depends on `.git/info/exclude`, `core.excludesFile`, every

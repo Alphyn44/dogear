@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import type { Detection } from './detect.js'
+
 /**
  * A real git repository in a temp directory, for the suites that need one — E4 (#29).
  *
@@ -25,6 +27,23 @@ import { join } from 'node:path'
  * not exist, which git reads as an empty config, and `GIT_CONFIG_NOSYSTEM` covers the same
  * ground for a git older than 2.32.
  */
+
+/**
+ * What to hand `Step.plan`'s second parameter when the step under test ignores it — E2 (#27).
+ *
+ * Every step so far does ignore it: detection exists for E3's (#28) agent wiring, and until
+ * that lands the argument is required by the type and read by nobody. A shared empty value is
+ * better than `detect(root)` at each call site, which would walk a temp directory to produce a
+ * result the assertion does not depend on — and better than a cast, which would keep compiling
+ * after `Detection` grows a field.
+ *
+ * A step that *does* read it builds its own, in its own suite, where the shape is the point.
+ */
+export const NO_DETECTION: Detection = Object.freeze({
+  workspace: 'single',
+  packages: undefined,
+  apps: Object.freeze([]),
+})
 
 /** Env keys {@link isolateGitConfig} overwrites, so the caller can put them back. */
 const KEYS = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'] as const

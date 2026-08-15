@@ -6,6 +6,7 @@ import { QUEUE_DIR, configPathFor } from '@dogear/queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { configFile } from './config.js'
+import { NO_DETECTION } from './test-repo.js'
 
 /**
  * The `.dogear/config.json` step — E4 (#29).
@@ -30,7 +31,7 @@ afterEach(() => {
 })
 
 function apply(): void {
-  configFile.plan(root)?.change?.apply()
+  configFile.plan(root, NO_DETECTION)?.change?.apply()
 }
 
 function read(): string {
@@ -54,13 +55,13 @@ describe('the config step on a fresh repository', () => {
   })
 
   it('reports the path it created', () => {
-    expect(configFile.plan(root)?.change?.summary).toBe(
+    expect(configFile.plan(root, NO_DETECTION)?.change?.summary).toBe(
       `created ${QUEUE_DIR}/config.json`,
     )
   })
 
   it('reports no notes', () => {
-    expect(configFile.plan(root)?.notes).toBeUndefined()
+    expect(configFile.plan(root, NO_DETECTION)?.notes).toBeUndefined()
   })
 })
 
@@ -68,7 +69,7 @@ describe('the config step on a repository that already has one', () => {
   it('has nothing to do', () => {
     apply()
 
-    expect(configFile.plan(root)).toBeUndefined()
+    expect(configFile.plan(root, NO_DETECTION)).toBeUndefined()
   })
 
   it('leaves a hand-edited config byte-identical', () => {
@@ -110,13 +111,13 @@ describe('the config step when the path is occupied by something else', () => {
     rmSync(join(root, QUEUE_DIR), { recursive: true })
     writeFileSync(join(root, QUEUE_DIR), 'not a directory')
 
-    expect(() => configFile.plan(root)).not.toThrow()
+    expect(() => configFile.plan(root, NO_DETECTION)).not.toThrow()
   })
 
   it('fails on apply when config.json is a directory, naming the way out', () => {
     mkdirSync(configPathFor(root))
 
-    const change = configFile.plan(root)?.change
+    const change = configFile.plan(root, NO_DETECTION)?.change
 
     expect(() => change?.apply()).toThrow(/is not a regular file/)
     expect(() => change?.apply()).toThrow(/Remove it and re-run/)

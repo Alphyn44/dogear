@@ -24,15 +24,21 @@ import type { Outcome } from './run.js'
  * opposite need applies — someone who typed `dogear init` and got nothing deserves to know
  * why. Same reasoning as ./prune.ts and ./mcp.ts; do not harmonise the three with the hook.
  *
- * **The dynamic import is prophylactic rather than load-bearing today.** ./scaffold.ts imports
- * `node:fs` and `node:path` and nothing else, so eagerly importing it would cost `dogear hook`
- * almost nothing right now. It is deferred anyway because E2's detection and E3's config
- * merging are exactly the kind of code that grows, the only alarm is the 2s budget in
- * ../test-built/hook.test.ts, and by the time that fires the seam is expensive to add. It also
- * means the CLI keeps exactly one shape for "command whose implementation loads on demand",
- * which tsup's `splitting: true` already exists to serve.
+ * **The dynamic import stopped being prophylactic at E4, and E2 widened the gap again.**
+ * ./scaffold.ts once imported `node:fs` and `node:path` and nothing else; it now reaches
+ * ./gitignore.ts, which spawns git, and ./detect.ts, which walks the repository. Neither
+ * belongs anywhere near `dogear hook` — it runs on every prompt the user types, under the 2s
+ * budget in ../test-built/hook.test.ts — and this `import()` is the only thing keeping them
+ * out of its module graph. It also means the CLI keeps exactly one shape for "command whose
+ * implementation loads on demand", which tsup's `splitting: true` already exists to serve.
  */
-export function init(cwd: string): Outcome {
+export function init(cwd: string, args: readonly string[] = []): Outcome {
+  // **Flags before the repository check**, so `dogear init --dryrun` outside a repo reports the
+  // typo rather than the missing repo. The two failures are unrelated and the one the user can
+  // fix is the one they mistyped.
+  const flags = readFlags(args)
+  if (flags.ok === false) return { output: flags.error, exitCode: 1 }
+
   // `cwd`, never `CLAUDE_PROJECT_DIR`. That variable exists because Claude Code spawns the
   // hook from the session's directory; a human typing this is standing where they mean.
   const gitRoot = findGitRoot(cwd)
@@ -49,5 +55,43 @@ export function init(cwd: string): Outcome {
   // An `Async` outcome of the byte-producing kind — the opposite of `dogear mcp`, which enters
   // this variant because it must write *nothing*. `write()` is shared with ./cli.ts so both
   // paths obey the rule that an empty output means zero bytes rather than a blank line.
-  return { run: async () => write((await import('./scaffold.js')).scaffold(gitRoot)) }
+  return {
+    run: async () =>
+      write((await import('./scaffold.js')).scaffold(gitRoot, { dryRun: flags.dryRun })),
+  }
+}
+
+/**
+ * `dogear init`'s flags — E2 (#27).
+ *
+ * **An unrecognised argument is a failure, not something to ignore.** `--dry-run` exists
+ * precisely so that a run changes nothing, so silently ignoring `--dryrun` would write to a
+ * repository whose owner had just asked it not to. That asymmetry is the whole argument: an
+ * over-strict parser costs a re-typed command, and a lenient one costs the thing the flag was
+ * for.
+ *
+ * Parsed here rather than in ./run.ts, which reads the command and hands the rest over. E6
+ * (#39) adds `--undo` to this list, and a per-command flag table in the dispatcher would put
+ * every command's argument handling back in the file that exists to be short.
+ */
+function readFlags(
+  args: readonly string[],
+): { ok: true; dryRun: boolean } | { ok: false; error: string } {
+  let dryRun = false
+
+  for (const arg of args) {
+    if (arg === '--dry-run') {
+      dryRun = true
+      continue
+    }
+
+    return {
+      ok: false,
+      error:
+        `dogear init: unrecognised argument '${arg}'. ` +
+        'The only flag is --dry-run, which reports what init would do and changes nothing.',
+    }
+  }
+
+  return { ok: true, dryRun }
 }

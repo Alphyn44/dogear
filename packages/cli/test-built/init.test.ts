@@ -35,11 +35,15 @@ interface Run {
 }
 
 /** Spawn the built binary the way a PATH entry would: `node <path> <command>`, in `cwd`. */
-function runCli(command: string, cwd: string): Promise<Run> {
+function runCli(
+  command: string,
+  cwd: string,
+  args: readonly string[] = [],
+): Promise<Run> {
   return new Promise((resolve, reject) => {
     execFile(
       process.execPath,
-      [CLI, command],
+      [CLI, command, ...args],
       { cwd, timeout: 30_000 },
       (error, stdout, stderr) => {
         if (error && error.killed) {
@@ -148,6 +152,27 @@ describe('the built `dogear init`', () => {
     } finally {
       rmSync(bare, { recursive: true, force: true })
     }
+  })
+
+  it('honours --dry-run, which is the only path where argv survives the shim', async () => {
+    // E2 (#27). Worth a built-binary case rather than only a unit one: everything below the
+    // dispatcher is covered in ../src, and the thing this can break that those cannot is argv
+    // itself — a flag dropped between the shim and `run()` produces a real init from a command
+    // that promised not to write, and the report would still say `dry run`.
+    const run = await runCli('init', root, ['--dry-run'])
+
+    expect(run.exitCode).toBe(0)
+    expect(run.stdout).toContain('dry run')
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
+    expect(existsSync(join(root, '.gitignore'))).toBe(false)
+  })
+
+  it('refuses a mistyped flag rather than writing anyway', async () => {
+    const run = await runCli('init', root, ['--dryrun'])
+
+    expect(run.exitCode).toBe(1)
+    expect(run.stderr).toContain('--dryrun')
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
   })
 
   it('no longer advertises itself as unimplemented', async () => {

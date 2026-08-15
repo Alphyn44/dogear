@@ -84,6 +84,16 @@ describe('run()', () => {
     expect(isAsync(run(['init']))).toBe(true)
   })
 
+  it('forwards the rest of argv to `init`, which is what makes --dry-run reachable', () => {
+    // The dispatcher hands the arguments over and ./init.ts validates them. Asserted through
+    // the rejection because it is the only branch that produces bytes synchronously — a flag
+    // that never arrived would come back as an async outcome instead.
+    const rejected = asResult(run(['init', '--nope']))
+
+    expect(rejected.exitCode).toBe(1)
+    expect(rejected.output).toContain('--nope')
+  })
+
   it('distinguishes an unknown command from an unimplemented one', () => {
     const unknown = asResult(run(['wibble']))
     expect(unknown.exitCode).toBe(1)

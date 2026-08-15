@@ -8,7 +8,13 @@ import type { GitQueries } from './git.js'
 import { isIgnored } from './git.js'
 import { createGitignoreStep, gitignore } from './gitignore.js'
 import type { Plan, Step } from './scaffold.js'
-import { createRepo, isolateGitConfig, removeRepo, trackFile } from './test-repo.js'
+import {
+  NO_DETECTION,
+  createRepo,
+  isolateGitConfig,
+  removeRepo,
+  trackFile,
+} from './test-repo.js'
 
 /**
  * The `.gitignore` step — E4 (#29).
@@ -50,7 +56,7 @@ function read(): string {
 
 /** Plan, apply if there is anything to apply, and hand back what was planned. */
 function runStep(step: Step = gitignore): Plan | undefined {
-  const plan = step.plan(root)
+  const plan = step.plan(root, NO_DETECTION)
   plan?.change?.apply()
   return plan
 }
@@ -228,11 +234,11 @@ describe('the gitignore step when .gitignore is not a regular file', () => {
   it('plans a change rather than throwing during planning', () => {
     // Planning runs for every step before any of them applies, so a throw here takes down
     // the whole report — including the steps that had something useful to say.
-    expect(() => gitignore.plan(root)).not.toThrow()
+    expect(() => gitignore.plan(root, NO_DETECTION)).not.toThrow()
   })
 
   it('fails on apply, naming the path and the way out', () => {
-    const change = gitignore.plan(root)?.change
+    const change = gitignore.plan(root, NO_DETECTION)?.change
 
     expect(() => change?.apply()).toThrow(/\.gitignore exists at/)
     expect(() => change?.apply()).toThrow(/Remove it and re-run/)

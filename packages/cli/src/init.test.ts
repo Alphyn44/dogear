@@ -129,6 +129,51 @@ describe('init()', () => {
     expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
   })
 
+  it('passes --dry-run through, so the repository is untouched', async () => {
+    mkdirSync(join(root, '.git'))
+
+    const { exitCode, stdout } = await runCapturing(init(root, ['--dry-run']))
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('dry run')
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
+  })
+
+  it('REFUSES an unrecognised argument rather than ignoring it', () => {
+    // The asymmetry that decides this: ignoring `--dryrun` writes to a repository whose owner
+    // has just asked it not to, while over-strictness costs a re-typed command. A flag whose
+    // entire purpose is "change nothing" is the worst possible one to silently drop.
+    mkdirSync(join(root, '.git'))
+    const outcome = init(root, ['--dryrun'])
+
+    expect(isAsync(outcome)).toBe(false)
+    if (isAsync(outcome)) return
+
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.output).toContain('--dryrun')
+    expect(outcome.output).toContain('--dry-run')
+  })
+
+  it('changes nothing when it refuses a bad flag', () => {
+    mkdirSync(join(root, '.git'))
+    init(root, ['--dryrun'])
+
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
+  })
+
+  it('checks the flags BEFORE the repository, so a typo is reported as a typo', () => {
+    // No `.git` here. Both things are wrong, and the one the user can fix by retyping is the
+    // one worth naming — reporting the missing repository would send them looking for the
+    // wrong problem.
+    const outcome = init(root, ['--dryrun'])
+
+    expect(isAsync(outcome)).toBe(false)
+    if (isAsync(outcome)) return
+
+    expect(outcome.output).toContain('--dryrun')
+    expect(outcome.output).not.toContain('no git repository')
+  })
+
   it('decides without doing anything — run() is a continuation, not a side effect', () => {
     // Constructing the outcome must not touch the filesystem or load ./scaffold.js. The
     // laziness is what keeps `dogear hook` off this code path entirely; ../test-built's 2s

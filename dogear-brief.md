@@ -637,6 +637,10 @@ cd my-repo && dogear init   # once per repo
 
 Re-running is safe: it diffs against what's there and only reports what changed.
 
+`dogear init --dry-run` runs steps 1–2 and plans the rest, printing the detection result and
+every change it *would* make without writing any of them. That is how step 2's report-before-
+change is reachable from a non-interactive command; see the Decisions log.
+
 ---
 
 ## Keeping it out of production
@@ -828,6 +832,8 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 **E2 — Detection**
 - init identifies Vite, the framework, and the workspace layout without being told.
 - It reports what it found before changing anything.
+- `dogear init --dry-run` reports the findings and every change it would make, and writes
+  nothing. Added during E2 — see the Decisions log.
 
 **E3 — Agent wiring**
 - **Every agent gets the MCP server registered.** That is the baseline path and is never
@@ -1496,6 +1502,36 @@ clipboard is the tier that has to work when nothing else does, so putting a step
 would contradict the only thing it claims. It is stopped hard for the same reason the kill switch
 is — an app binding the same chord must not also fire — and it is the one chord that guards on
 `event.repeat`, because neither of the others can fire twice and this one can.
+
+**Detection → a phase before the steps, plus `--dry-run`. Settled during E2.**
+E1's `Step` seam was written expecting detection to arrive as another entry in the list, and
+that was wrong in a way worth recording. A step's only voice is `Plan.notes`, and notes print
+*below* the change list — so detection-as-a-step would have reported what it found after init
+had already changed things, inverting E2's second criterion. Detection is therefore a phase:
+it runs first, its findings get a labelled section above the changes, and the structured result
+reaches every `plan()` as a second argument, which is what E3 needs to wire what detection saw
+rather than looking again. Steps that ignore the argument declare the narrower signature and
+are unaffected, so E4's three needed no edit.
+
+`--dry-run` is the other half. "Reports before changing" only means something if there is a
+point at which you can decline, and a non-interactive command has none — every byte prints at
+the end either way. The flag supplies it without inventing a prompt layer, which E3 has to
+build anyway for "which agent do you use". Plan-every-step-then-apply already existed for
+report ordering, so the flag is a branch rather than a mechanism.
+
+Two smaller decisions inside it. **Versions are the declared range, verbatim** — `react
+^19.2.0`, never resolved from `node_modules`, which need not exist and would make the report
+depend on whether anyone had run an install. And **detection's remarks do not suppress
+`nothing changed`, though a step's notes still do**: a repository with no Vite config earns a
+remark on *every* run, so folding them together would mean the commonest reason to run init
+twice is also the case where it never gives a verdict. A step note qualifies what init did; a
+remark describes the repository, which is what the findings already do without silencing
+anything.
+
+`pnpm-workspace.yaml` names the layout but its globs are not parsed. Reading them means a YAML
+dependency — the CLI has one dependency and it is the MCP SDK — or a hand-rolled parser that
+will meet YAML it cannot read. The bounded walk finds the apps regardless; only the package
+count is missing, and the report omits the number rather than guessing it.
 
 **Cross-repo isolation → free, via same-origin.**
 Each dev server serves its own endpoint and knows its own root, so port collisions across
