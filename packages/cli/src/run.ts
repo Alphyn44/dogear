@@ -1,4 +1,5 @@
 import { hook } from './hook.js'
+import { init } from './init.js'
 import { mcp } from './mcp.js'
 import { prune } from './prune.js'
 
@@ -13,9 +14,9 @@ import { prune } from './prune.js'
  */
 
 /**
- * TODO(dogear): `hook`, `mcp` and `prune` are implemented. `init` is E1 and `status` is E5.
- * Listing them now is deliberate — an unknown command and an unimplemented one are different
- * failures, and the CLI should be able to say which.
+ * TODO(dogear): `init`, `hook`, `mcp` and `prune` are implemented. `status` is E5. Listing it
+ * now is deliberate — an unknown command and an unimplemented one are different failures, and
+ * the CLI should be able to say which.
  */
 export const COMMANDS = ['init', 'hook', 'mcp', 'prune', 'status'] as const
 
@@ -42,26 +43,35 @@ export interface Result {
 }
 
 /**
- * The other kind of outcome: a command that owns the streams instead of producing bytes.
+ * The other kind of outcome: a command whose bytes cannot be produced synchronously, so it
+ * takes over the streams itself and hands back only an exit code.
  *
- * `dogear mcp` runs until its client disconnects and frames JSON-RPC on stdin and stdout for
- * that whole time, so a single stray byte on stdout desynchronises the client's parser and
- * the server appears to hang. There is therefore nothing for `emit()` to write — not even an
- * empty string — and representing that as a `Result` with `output: ''` would be a lie that
- * ./cli.ts could not tell apart from `dogear hook` on an empty queue.
+ * **Two commands land here for two different reasons**, and the distinction is worth keeping
+ * straight because they behave nothing alike on stdout:
  *
- * Widening the *outcome* rather than making `run()` async keeps every argv decision in this
- * file, which is the whole reason ./cli.ts is three statements long.
+ * - `dogear mcp` **owns the streams for its lifetime.** It frames JSON-RPC on stdin and stdout
+ *   until its client disconnects, so a single stray byte desynchronises the client's parser and
+ *   the server appears to hang. There is nothing for `emit()` to write — not even an empty
+ *   string — and representing that as a `Result` with `output: ''` would be a lie that ./cli.ts
+ *   could not tell apart from `dogear hook` on an empty queue.
+ * - `dogear init` **produces ordinary bytes**, but reaches its implementation through a dynamic
+ *   `import()` — the same deferral ./mcp.ts uses, for the same reason: `dogear hook` runs on
+ *   every prompt the user types and must not pay to load code it never calls. Its bytes still go
+ *   through `emit()` and `write()`; the promise is the import, not the work.
+ *
+ * What they share, and all this type claims, is that `run()` cannot hand ./cli.ts bytes to
+ * write. Widening the *outcome* rather than making `run()` async keeps every argv decision in
+ * this file, which is the whole reason ./cli.ts is short.
  */
-export interface Serve {
-  /** Runs until the client disconnects, resolving with the process exit code. */
-  readonly serve: () => Promise<number>
+export interface Async {
+  /** Owns the streams until it finishes, resolving with the process exit code. */
+  readonly run: () => Promise<number>
 }
 
-export type Outcome = Result | Serve
+export type Outcome = Result | Async
 
-export function isServe(outcome: Outcome): outcome is Serve {
-  return 'serve' in outcome
+export function isAsync(outcome: Outcome): outcome is Async {
+  return 'run' in outcome
 }
 
 export function usage(): string {
@@ -71,13 +81,17 @@ export function usage(): string {
     'Usage: dogear <command>',
     '',
     'Commands:',
-    '  init     Scaffold this repo: config, gitignore, agent wiring',
+    // Deliberately not "config, gitignore, agent wiring", which is what init will do once
+    // E2–E4 land and is not what it does today. The footer below now advertises init as
+    // implemented, so the description has to be true of the command as shipped — and this
+    // wording stays true as each later step is added, rather than needing an edit per epic.
+    '  init     Set this repo up for dogear (safe to re-run)',
     '  hook     Emit UserPromptSubmit JSON (your agent runs this, not you)',
     '  mcp      Run the MCP server over stdio',
     '  prune    Drop resolved items from the queue',
     '  status   What is running and what is pending, across all repos',
     '',
-    'Only `hook`, `mcp` and `prune` are implemented. See https://github.com/Alphyn44/dogear/milestones',
+    'Only `init`, `hook`, `mcp` and `prune` are implemented. See https://github.com/Alphyn44/dogear/milestones',
   ].join('\n')
 }
 
@@ -91,6 +105,13 @@ export function run(argv: readonly string[]): Outcome {
   if (!isCommand(command)) {
     return { output: `dogear: unknown command '${command}'\n\n${usage()}`, exitCode: 1 }
   }
+
+  // `cwd`, never `CLAUDE_PROJECT_DIR`, and for the same reason as `prune` below: that variable
+  // exists because Claude Code spawns the hook from the session's directory, and a human typing
+  // `dogear init` is standing in the repo they mean. Not covered by a `run(['init'])` test that
+  // gets as far as running anything — ./init.test.ts drives init() against temp roots, and
+  // ./run.test.ts asserts only that the dispatch produces an Async without awaiting it.
+  if (command === 'init') return init(process.cwd())
 
   // Dispatched before the unimplemented fallthrough, and given the environment here rather
   // than reading it inside hook() so that the only code touching process globals is this

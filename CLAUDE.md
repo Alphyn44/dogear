@@ -90,7 +90,7 @@ Don't over-explain basics.
 |---|---|
 | `@dogear/core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
 | `@dogear/vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
-| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. `hook`, `mcp` and `prune` are implemented. |
+| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. `init`, `hook`, `mcp` and `prune` are implemented. |
 | `@dogear/queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. **Private, source-only, never published** — see below. |
 
 **`@dogear/queue` has no build and is not published.** Its `exports` points straight at
@@ -119,6 +119,18 @@ Tolerant reads **drop** malformed entries, so writing one back would silently de
 hand-broken item — every writer therefore uses `readQueue`. `dogear hook` and
 `dogear_pending` are the only tolerant callers. `tolerance.test.ts` is the guard, replacing
 the cross-package `parity.test.ts` that went vacuous when the copies merged.
+
+**`dogear init` is a list of steps, and E2–E5 append to it rather than editing the runner.**
+`packages/cli/src/init.ts` is the adapter (resolve the git root, refuse if there isn't one,
+defer to the implementation through a dynamic `import()` exactly as `mcp.ts` defers to
+`server.ts`); `scaffold.ts` holds the `Step` contract and the runner. A step's `plan(root)`
+**never writes** — it returns a `Change` or `undefined` — and that is what makes both
+idempotency and E2's report-before-change possible without a second traversal. Two rules a new
+step must not break: *idempotency is the absence of a code path*, so `plan` returning
+`undefined` is the whole mechanism and there is no separate `alreadyInitialized()` to drift;
+and **check for the state you need, not for the path being occupied** — `existsSync` is true
+for a regular file named `.dogear`, which made init report `nothing changed` over a repo that
+could never be written to, at exit 0. `scaffold.test.ts` pins that case.
 
 The flow: **browser → HTTP POST → `<git-root>/.dogear/queue.json` → MCP server →
 agent.** The bridge is a file, never a socket. Both halves are independently testable

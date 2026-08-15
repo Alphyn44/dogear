@@ -48,3 +48,28 @@ export function emit(result: Result): Emission {
     exitCode,
   }
 }
+
+/**
+ * Put a {@link Result}'s bytes on the real streams, returning the exit code.
+ *
+ * **This is the only function in the CLI that writes to `process.stdout`.** It exists because
+ * E1 gave the byte-producing path a second caller: `dogear init` reaches its implementation
+ * through a dynamic `import()`, so it resolves as an `Async` outcome and has to write its own
+ * output rather than handing bytes back to ./cli.ts. Two copies of the three lines below is
+ * how the empty-string rule gets broken in one of them and nowhere else — which is silent,
+ * because A4's zero-bytes guard only ever spawns `dogear hook`.
+ *
+ * `write('')` is a genuine no-op: zero bytes reach the file descriptor. That is what lets the
+ * empty case live in `emit()` rather than in a branch at each call site, and it is not a
+ * micro-optimisation — Claude Code injects a `UserPromptSubmit` hook's stdout verbatim as
+ * context, so a blank line written for an empty queue is a blank line in front of every prompt
+ * the user types.
+ */
+export function write(result: Result): number {
+  const { stdout, stderr, exitCode } = emit(result)
+
+  process.stdout.write(stdout)
+  process.stderr.write(stderr)
+
+  return exitCode
+}

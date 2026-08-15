@@ -841,6 +841,23 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 - `dogear status` lists registered repos, running dev servers, and pending counts.
 - It works from anywhere, not just inside a repo.
 
+**E6 — Undoing an init**
+- `dogear init --undo` removes what init added to *this* repo and reports what it removed.
+- The agent wiring comes out first and always: an orphaned `UserPromptSubmit` hook fires on
+  every prompt against a path that no longer exists.
+- Pending annotations are never destroyed silently — the queue is the user's data, and
+  removing it is a separate, explicit act.
+- Uninstalling the CLI without running this is survivable: nothing dogear writes may break
+  an agent that no longer has dogear installed.
+
+`init` writes into four places outside `.dogear/` by the time E3 and E4 land — the agent's
+config, an `AGENTS.md` stanza, `.gitignore`, and `~/.dogear/projects.json` — and
+`npm rm -g @dogear/cli` removes none of them. That asymmetry is the story: the install is
+per-machine and the configuration is per-repo, so uninstalling the tool cannot clean up the
+repos, and each repo has to be able to clean up after itself. The hook is the sharp edge
+rather than a tidiness concern, because a `UserPromptSubmit` entry pointing at a deleted
+binary fails on every prompt the user types.
+
 ### Epic F — Safety (cross-cutting)
 
 **F1 — Nothing ships to production**
