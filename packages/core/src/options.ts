@@ -34,7 +34,8 @@ export interface InitOptions {
    * Which key arms the overlay. Default `'alt'`.
    *
    * The brief's Config block (`modifier`) is a `.dogear/config.json` key — E4 (#29) writes
-   * that file, E7 reads it. Plugin options win over the file, so this is the layer that wins
+   * that file, E7 (#40) reads it. Plugin options win over the file, so this is the layer that
+   * wins
    * either way: E7 layers the file *underneath* @dogear/vite's `modifier` option, and
    * neither reaches past this.
    */

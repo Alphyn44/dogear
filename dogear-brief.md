@@ -587,7 +587,7 @@ absent key means "whatever dogear's current default is". Amended during E4 — s
 Decisions log.
 
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
-in `~/.dogear/config.json` and lose to both. E4 (#29) writes the file; **E7** is what
+in `~/.dogear/config.json` and lose to both. E4 (#29) writes the file; **E7 (#40)** is what
 gives it a reader, so nothing consumes any of these keys yet.
 
 `enabled` is the repo-wide form of B6's kill switch, and it sits at the top of that same

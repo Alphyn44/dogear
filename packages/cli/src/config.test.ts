@@ -82,7 +82,7 @@ describe('the config step on a repository that already has one', () => {
 
   it('leaves an unparseable config alone', () => {
     // "Reads may tolerate, writes must refuse" one level up. Rewriting a broken config
-    // destroys the evidence of whatever broke it, and the error belongs to E7's reader,
+    // destroys the evidence of whatever broke it, and the error belongs to E7's (#40) reader,
     // which has a dev server and a developer to tell.
     writeFileSync(configPathFor(root), '{ not json')
 

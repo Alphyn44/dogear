@@ -97,7 +97,7 @@ describe('isAllowedHost — denied', () => {
 })
 
 describe('isAllowedHost — a caller-supplied list', () => {
-  // E7 will pass `hosts` from .dogear/config.json. The contract it inherits is that
+  // E7 (#40) will pass `hosts` from .dogear/config.json. The contract it inherits is that
   // the list REPLACES the defaults: someone who narrows it is narrowing it, not adding to
   // a hidden allowance underneath.
   it('narrowing the list stops allowing what the defaults allowed', () => {

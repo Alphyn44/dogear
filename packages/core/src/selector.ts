@@ -31,7 +31,7 @@
  * the most *intentionally* stable hook on a page — someone chose it and something else
  * depends on it — which is why it outranks everything below an `id` here.
  *
- * Not configurable, on purpose. E4 (#29) introduced `.dogear/config.json`, and E7 is what
+ * Not configurable, on purpose. E4 (#29) introduced `.dogear/config.json`, and E7 (#40) is what
  * gives it a reader; ./host.ts is the pattern to copy if this ever becomes configurable —
  * ship the defaults and the matcher now, let a later ticket pass a second argument.
  */

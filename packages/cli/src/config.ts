@@ -17,7 +17,7 @@ import type { Step } from './scaffold.js'
  * did not edit this file actually wants. See the brief's Decisions log.
  *
  * `version` is the one key worth writing, because it is the only one whose absence is
- * ambiguous: E7's reader needs to tell "a config from a dogear that predates this schema"
+ * ambiguous: E7's (#40) reader needs to tell "a config from a dogear that predates this schema"
  * from "a config that opted into every default".
  *
  * **Any regular file at this path satisfies the step**, whatever is in it — including

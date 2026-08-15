@@ -22,7 +22,7 @@
  * The hosts dogear will run on, and the whole of the answer — there is no second, hidden
  * rule beside this list.
  *
- * The brief's Config block calls this `hosts` and E7 will read it from
+ * The brief's Config block calls this `hosts` and E7 (#40) will read it from
  * `.dogear/config.json`. E4 (#29) writes that file — with `version` and nothing else, so it
  * names no hosts — and nothing here reads it either way: F3 ships the defaults and the
  * matcher, E7 plugs the file in by passing a second argument to {@link isAllowedHost}.
