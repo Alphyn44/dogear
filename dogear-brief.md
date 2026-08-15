@@ -556,7 +556,8 @@ there is resolvable regardless of tooling. See the Decisions log.
 
 ### Config
 
-`<git-root>/.dogear/config.json`, committed, written by `dogear init`:
+`<git-root>/.dogear/config.json`, committed, created by `dogear init`. Every key dogear
+recognises, with the value each one falls back to:
 
 ```json
 {
@@ -580,8 +581,14 @@ there is resolvable regardless of tooling. See the Decisions log.
 }
 ```
 
+**That is the recognised set, not the file init writes.** `dogear init` writes
+`{ "version": 1 }` and stops; every other key is absent until someone sets it, and an
+absent key means "whatever dogear's current default is". Amended during E4 — see the
+Decisions log.
+
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
-in `~/.dogear/config.json` and lose to both.
+in `~/.dogear/config.json` and lose to both. E4 (#29) writes the file; **E7** is what
+gives it a reader, so nothing consumes any of these keys yet.
 
 `enabled` is the repo-wide form of B6's kill switch, and it sits at the top of that same
 precedence chain: `dogear({ enabled: false })` beats the file, which beats the default. It
@@ -836,6 +843,8 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 **E4 — Gitignore and config**
 - `.dogear/queue.json` and `.dogear/*.tmp` are gitignored; `.dogear/config.json` is not.
 - An existing `.gitignore` is appended to, never rewritten.
+- init creates `.dogear/config.json`, holding `version` and nothing else. Amended during
+  E4, which also split the reading half out into E7; see the Decisions log.
 
 **E5 — Cross-repo status**
 - `dogear status` lists registered repos, running dev servers, and pending counts.
@@ -849,6 +858,20 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
   removing it is a separate, explicit act.
 - Uninstalling the CLI without running this is survivable: nothing dogear writes may break
   an agent that no longer has dogear installed.
+
+**E7 — Config precedence**
+- `@dogear/vite` reads `<git-root>/.dogear/config.json` and layers it under its own plugin
+  options: option, then file, then default. A key the file does not set is left to the
+  default, not overwritten with one.
+- `enabled`, `endpoint`, `modifier`, `transform` and `include` are all layered. `app` is
+  not — it is per Vite root, and this file is per repo.
+- `hosts` reaches core's `isAllowedHost`, replacing the defaults rather than extending
+  them.
+- A config that will not parse is reported in the dev server's terminal and the plugin
+  falls back to its options, rather than taking the dev server down.
+
+Split out of E4 during E4, which shipped the file without a reader. The four code comments
+that named E4 for this work now name E7; see the Decisions log.
 
 `init` writes into four places outside `.dogear/` by the time E3 and E4 land — the agent's
 config, an `AGENTS.md` stanza, `.gitignore`, and `~/.dogear/projects.json` — and
@@ -909,6 +932,49 @@ the hook first would mean writing the formatter twice.
 ---
 
 ## Decisions log
+
+**`dogear init` writes `{ "version": 1 }`, not the Config block. Settled during E4.**
+The block above lists every key dogear recognises, and writing it out with today's values
+was the obvious reading of "init writes `.dogear/config.json`". It is wrong in one
+direction that only shows up later: a config file that restates a default *pins* it.
+Change `DEFAULT_HOSTS` or the default modifier in a future release and every repo that
+ever ran `dogear init` keeps the old value forever, having never expressed an opinion
+about it. An absent key means "whatever dogear thinks", which is what a user who did not
+edit the file actually wants, and it is also the only form under which "plugin option beats
+file beats default" has three distinguishable layers. `version` is written because it is the
+one key whose absence is genuinely ambiguous — E7's reader has to tell a config predating a
+schema from a config that opted into every default.
+
+**E4 shipped the config file without a reader; the precedence chain became E7.**
+Four code comments assigned the reading half to E4 by name, and the issue's acceptance
+criteria covered only the `.gitignore` split. Splitting on that seam keeps this ticket
+inside `@dogear/cli`, and keeps `hosts` — the one config key that feeds F3's runtime host
+guard, a production-safety layer — out of a ticket about ignore rules. The cost is a
+release where `.dogear/config.json` exists and nothing consumes it, which is visible and
+harmless; the alternative was one ticket spanning three packages and touching the last
+line of the production defense.
+
+**init asks git whether the queue is ignored; it does not read `.gitignore`. Settled
+during E4.** "Is `.dogear/queue.json` ignored?" depends on `.git/info/exclude`, on the
+user's `core.excludesFile`, on every `.gitignore` between the root and the file, and on
+negation precedence that runs bottom-up within a file and top-down across them. Matching
+lines would be a second, worse gitignore engine whose bugs surface as a queue quietly
+getting committed — and it would append two redundant rules to any repo already using a
+broader pattern, which is what dogear's own repository does. `git check-ignore` is
+definitive and already installed. When it cannot answer at all — no git on `PATH`, a
+worktree whose pointer went stale — init writes the rules anyway: a redundant line costs
+nothing and an unignored queue gets committed. Idempotency in that degraded case rests on
+a narrower check, "have I already written my own block?", which is not the same question.
+
+**A step may report without changing. Settled during E4 by needing it twice.**
+E1's `plan()` returned a `Change` or `undefined`, where a change is a past-tense line
+printed after `apply()` returned. E4 found two things init must say and must not act on: a
+`.gitignore` whose existing rules also swallow `config.json` — appending a negation repairs
+a `.dogear/*` rule and silently fails against `.dogear/`, so it would fix the easy case and
+lie about the hard one — and a `queue.json` already in git's index, where no ignore rule
+has any effect and the fix is a `git rm --cached` only the user can decide to run. Neither
+fits a `Change`, so `plan()` now returns `{ change?, notes? }`. E2's report-before-change
+and E6's "a queue with pending annotations is reported, not deleted" want the same shape.
 
 **Queue schema: overwrite vs. append-with-status → append-with-status.**
 Claude marks items done, stale entries stay visible, history is inspectable. The costs —

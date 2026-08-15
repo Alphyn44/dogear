@@ -66,6 +66,15 @@ import type { Annotation } from './annotation.js'
 /** The directory holding dogear's per-repo state. Committed config, gitignored queue. */
 export const QUEUE_DIR = '.dogear'
 
+/**
+ * The config file's name, on its own.
+ *
+ * Separate from {@link configPathFor} because E4's `.gitignore` step reasons about the
+ * path *relative to the repository* — `.dogear/config.json` is what git is asked about —
+ * and joining an absolute root only to make it relative again would be a round trip.
+ */
+export const CONFIG_FILE = 'config.json'
+
 /** The only queue schema version that exists. */
 export const QUEUE_VERSION = 1
 
@@ -131,6 +140,20 @@ export interface PruneResult {
 /** `<gitRoot>/.dogear/queue.json`. */
 export function queuePathFor(gitRoot: string): string {
   return join(gitRoot, QUEUE_DIR, 'queue.json')
+}
+
+/**
+ * `<gitRoot>/.dogear/config.json` — the committed half of the directory, written by
+ * `dogear init` (E4, #29).
+ *
+ * Nothing in this package reads or writes it; it lives here because two packages that
+ * cannot import each other need the same path. E4's init step writes it from
+ * `@dogear/cli`, and E7's precedence layer reads it from `@dogear/vite` — a constant in
+ * either one would be a literal copied into the other, which is the duplication
+ * `QUEUE_DIR` already exists to prevent.
+ */
+export function configPathFor(gitRoot: string): string {
+  return join(gitRoot, QUEUE_DIR, CONFIG_FILE)
 }
 
 /**

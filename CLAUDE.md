@@ -123,14 +123,31 @@ the cross-package `parity.test.ts` that went vacuous when the copies merged.
 **`dogear init` is a list of steps, and E2–E5 append to it rather than editing the runner.**
 `packages/cli/src/init.ts` is the adapter (resolve the git root, refuse if there isn't one,
 defer to the implementation through a dynamic `import()` exactly as `mcp.ts` defers to
-`server.ts`); `scaffold.ts` holds the `Step` contract and the runner. A step's `plan(root)`
-**never writes** — it returns a `Change` or `undefined` — and that is what makes both
-idempotency and E2's report-before-change possible without a second traversal. Two rules a new
-step must not break: *idempotency is the absence of a code path*, so `plan` returning
-`undefined` is the whole mechanism and there is no separate `alreadyInitialized()` to drift;
-and **check for the state you need, not for the path being occupied** — `existsSync` is true
-for a regular file named `.dogear`, which made init report `nothing changed` over a repo that
-could never be written to, at exit 0. `scaffold.test.ts` pins that case.
+`server.ts`); `scaffold.ts` holds the `Step` contract and the runner, and each step lives in a
+module of its own — `queue-dir.ts`, `config.ts`, `gitignore.ts`. A step's `plan(root)`
+**never writes and never throws** — it returns `{ change?, notes? }` or `undefined` — and that
+is what makes both idempotency and E2's report-before-change possible without a second
+traversal. Every `plan()` runs before any `apply()`, which is why not throwing is a rule
+rather than a style note: `config.ts` stats `.dogear/config.json` in the repo where `.dogear`
+is a regular *file* and gets `ENOTDIR`, which `throwIfNoEntry: false` does not suppress.
+Three rules a new step must not break: *idempotency is the absence of a code path*, so `plan`
+returning `undefined` is the whole mechanism and there is no separate `alreadyInitialized()`
+to drift; **check for the state you need, not for the path being occupied** — `existsSync` is
+true for a regular file named `.dogear`, which made init report `nothing changed` over a repo
+that could never be written to, at exit 0; and a **note is not a change** — it is for state
+init can see and must not repair by guessing, and it suppresses `nothing changed` rather than
+joining the change list. `scaffold.test.ts` pins all three.
+
+**The `.gitignore` step asks git, and it is the CLI's only subprocess.** Whether
+`.dogear/queue.json` is ignored depends on `.git/info/exclude`, `core.excludesFile`, every
+`.gitignore` up the tree, and negation precedence — so `git.ts` shells out to `check-ignore`
+and `ls-files` rather than matching lines, and returns `undefined` for "git could not answer",
+which callers must not collapse into `false`. It is reachable **only from `dogear init`**;
+`init.ts`'s dynamic `import()` of `scaffold.js` is what keeps it out of `dogear hook`'s module
+graph, and that is now load-bearing rather than prophylactic. Suites that touch it build real
+repositories through `test-repo.ts`, which also blanks `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`
+— without that, a developer whose own `~/.gitignore` mentions `.dogear` gets different results
+from the same test.
 
 The flow: **browser → HTTP POST → `<git-root>/.dogear/queue.json` → MCP server →
 agent.** The bridge is a file, never a socket. Both halves are independently testable

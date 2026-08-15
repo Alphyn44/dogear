@@ -1,18 +1,11 @@
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { QUEUE_DIR } from '@dogear/queue'
+import { CONFIG_FILE, QUEUE_DIR } from '@dogear/queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { scaffold } from './scaffold.js'
+import { createRepo, isolateGitConfig, removeRepo, trackFile } from './test-repo.js'
 
 /**
  * What `dogear init` does to a repository, and what it says about it — E1 (#26).
@@ -26,16 +19,25 @@ import { scaffold } from './scaffold.js'
  * re-running "reports only what changed", and the failure mode it guards against is not a
  * crash — it is an init that quietly rewrites something a user edited, or that reports work it
  * did not do. Both are silent, so both are asserted on the filesystem as well as on the text.
+ *
+ * **The temp roots are real repositories since E4 (#29)**, because the gitignore step asks git
+ * whether the queue is ignored and `scaffold()` is only ever handed a git root in the first
+ * place. The individual steps are covered in ./queue-dir.ts's, ./config.ts's and
+ * ./gitignore.ts's own suites; what is asserted here is the runner — ordering, the report, and
+ * what happens when one of them fails.
  */
 
 let root: string
+let restoreGitConfig: () => void
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'dogear-scaffold-'))
+  restoreGitConfig = isolateGitConfig()
+  root = createRepo('dogear-scaffold-')
 })
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true })
+  removeRepo(root)
+  restoreGitConfig()
 })
 
 /** The report's first line, which names the root init actually resolved. */
@@ -59,12 +61,33 @@ describe('scaffold() on a fresh repository', () => {
     expect(scaffold(root).output.startsWith(header())).toBe(true)
   })
 
-  it('indents changes under the header', () => {
-    expect(scaffold(root).output).toBe(`${header()}\n  created ${QUEUE_DIR}/`)
+  it('indents changes under the header, in step order', () => {
+    // Order is asserted, not just membership: the config step writes inside the directory
+    // the first step creates, and apply stops at the first failure.
+    expect(scaffold(root).output).toBe(
+      [
+        header(),
+        `  created ${QUEUE_DIR}/`,
+        `  created ${QUEUE_DIR}/${CONFIG_FILE}`,
+        '  created .gitignore',
+      ].join('\n'),
+    )
   })
 
   it('does not claim nothing changed while also reporting a change', () => {
     expect(scaffold(root).output).not.toContain('nothing changed')
+  })
+
+  it('leaves the queue ignored and the config committable', () => {
+    // E4's two criteria, end to end through the runner rather than through one step.
+    scaffold(root)
+
+    expect(readFileSync(join(root, '.gitignore'), 'utf8')).toContain(
+      `${QUEUE_DIR}/queue.json`,
+    )
+    expect(JSON.parse(readFileSync(join(root, QUEUE_DIR, CONFIG_FILE), 'utf8'))).toEqual({
+      version: 1,
+    })
   })
 })
 
@@ -102,6 +125,37 @@ describe('scaffold() on an already-initialized repository', () => {
 
   it('is stable over repeated runs, not just the second one', () => {
     expect(scaffold(root).output).toBe(scaffold(root).output)
+  })
+})
+
+describe('scaffold() when a step has something to say', () => {
+  beforeEach(() => {
+    // A repo that ran a dev server before it ran init: the queue is in the index, where no
+    // ignore rule can reach it. Staged *first*, in that order, because git refuses to add an
+    // already-ignored path — which is the same sequence a real user hits.
+    mkdirSync(join(root, QUEUE_DIR))
+    writeFileSync(join(root, QUEUE_DIR, 'queue.json'), '{"version":1,"items":[]}')
+    trackFile(root, `${QUEUE_DIR}/queue.json`)
+
+    // Then a full init, so the cases below run against a repo with nothing left to change.
+    scaffold(root)
+  })
+
+  it('prints the note, indented, after the changes', () => {
+    const output = scaffold(root).output
+
+    expect(output).toContain('  note: ')
+    expect(output).toContain('git rm --cached')
+  })
+
+  it('does NOT say nothing changed, because something needs attention', () => {
+    // Nothing did change — every step was satisfied. But a report whose summary line
+    // contradicts its own body is worse than no summary, so notes suppress it.
+    expect(scaffold(root).output).not.toContain('nothing changed')
+  })
+
+  it('still exits 0 — a note is not a failure', () => {
+    expect(scaffold(root).exitCode).toBe(0)
   })
 })
 

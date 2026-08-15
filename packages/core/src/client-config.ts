@@ -16,7 +16,7 @@ import type { InitOptions } from './options.js'
  * identical to the one the plugin builds, so the assignability proof in the plugin's
  * `client.test.ts` compares a real `ClientConfig` against a real `InitOptions` — and B5 (#12)
  * adds `endpoint` by adding a field, with no change to the transport. Per-field parameters
- * would need type coercion for each one here, and ad-hoc encoding rules the moment E4 (#29)
+ * would need type coercion for each one here, and ad-hoc encoding rules the moment E7
  * passes `hosts` through as an array.
  */
 export const CONFIG_PARAM = 'config'

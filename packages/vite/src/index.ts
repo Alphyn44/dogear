@@ -53,14 +53,15 @@ export interface DogearOptions {
    * Base path for dogear's HTTP endpoints. Default `/__dogear`, matching Vite's own
    * `/__vite_ping` convention.
    *
-   * Reading this from `.dogear/config.json` is E4's job; the brief's model is that plugin
-   * options override the file, so this is the layer that wins either way.
+   * Reading this from `.dogear/config.json` is E7's job — E4 (#29) shipped the file, E7
+   * layers it underneath. The brief's model is that plugin options override the file, so
+   * this is the layer that wins either way.
    */
   readonly endpoint?: string
   /**
    * Which key arms the overlay. Default `'alt'`.
    *
-   * Same precedence as {@link DogearOptions.endpoint}: E4 (#29) layers `.dogear/config.json`
+   * Same precedence as {@link DogearOptions.endpoint}: E7 layers `.dogear/config.json`
    * underneath this, and neither reaches past it.
    *
    * `'meta'` is the Windows key on Windows, where the OS claims it on keyup — it works, but
@@ -75,7 +76,7 @@ export interface DogearOptions {
    * do in a Vue or Svelte app. That is the axis this option exists on — it is about source
    * *resolution*, not about whether dogear runs. {@link DogearOptions.enabled} is the latter.
    *
-   * Same precedence as the options above: E4 (#29) layers `.dogear/config.json` underneath,
+   * Same precedence as the options above: E7 layers `.dogear/config.json` underneath,
    * where the brief already names this field.
    */
   readonly transform?: boolean
@@ -103,7 +104,7 @@ export interface DogearOptions {
    * `Button`. Derived rather than configured in the ordinary case — set it when the package
    * has no name, or when its published name is not what you would call the app.
    *
-   * **Unlike the options above, E4 (#29) does not layer `.dogear/config.json` under this
+   * **Unlike the options above, E7 does not layer `.dogear/config.json` under this
    * one.** That file lives at the git root, one per repo, and this value is per Vite root —
    * a monorepo's three servers would all read the same key and tag their annotations
    * identically, which is the exact ambiguity the field exists to remove. The nearest

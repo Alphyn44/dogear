@@ -122,6 +122,19 @@ describe('the built `dogear init`', () => {
     expect(again.stdout).not.toContain('created')
   })
 
+  it('does not append its .gitignore block twice when git cannot answer', async () => {
+    // `.git` above is an empty directory, not a repository, so `git check-ignore` exits 128
+    // and E4's gitignore step falls to its degraded path — which writes the rules rather than
+    // assuming they are there. That makes this the only place the degraded path meets the real
+    // binary, and the failure it guards is a `.gitignore` growing by three lines every run.
+    await runCli('init', root)
+    await runCli('init', root)
+
+    const rules = readFileSync(join(root, '.gitignore'), 'utf8')
+
+    expect(rules.match(new RegExp(`${QUEUE_DIR}/queue\\.json`, 'g'))).toHaveLength(1)
+  })
+
   it('refuses outside a repository, on stderr, with a non-zero exit', async () => {
     const bare = mkdtempSync(join(tmpdir(), 'dogear-init-bare-'))
 

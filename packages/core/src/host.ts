@@ -22,13 +22,13 @@
  * The hosts dogear will run on, and the whole of the answer — there is no second, hidden
  * rule beside this list.
  *
- * The brief's Config block calls this `hosts` and E4 (#29) will read it from
- * `.dogear/config.json`. That file does not exist yet and nothing here reads it: F3 ships
- * the defaults and the matcher, E4 plugs the file in by passing a second argument to
- * {@link isAllowedHost}.
+ * The brief's Config block calls this `hosts` and E7 will read it from
+ * `.dogear/config.json`. E4 (#29) writes that file — with `version` and nothing else, so it
+ * names no hosts — and nothing here reads it either way: F3 ships the defaults and the
+ * matcher, E7 plugs the file in by passing a second argument to {@link isAllowedHost}.
  *
  * Private ranges live *in* the list rather than beside it as an always-on rule. It matters
- * for E4: someone who narrows `hosts` to `["localhost"]` is telling dogear to stop running
+ * for E7: someone who narrows `hosts` to `["localhost"]` is telling dogear to stop running
  * on their LAN address, and a separate hard-coded private-IP allowance would silently
  * ignore them. One list means "what is allowed" has exactly one answer.
  */
@@ -57,7 +57,7 @@ export const DEFAULT_HOSTS: readonly string[] = Object.freeze([
  * Takes a hostname, never a host:port — `location.hostname` is the intended source, and a
  * `example.com:5173` string fails closed because no pattern kind can match it.
  *
- * `hosts` replaces the defaults entirely rather than extending them. That is E4's eventual
+ * `hosts` replaces the defaults entirely rather than extending them. That is E7's eventual
  * contract: the config file's `hosts` array is the list, not an addition to a hidden one.
  */
 export function isAllowedHost(

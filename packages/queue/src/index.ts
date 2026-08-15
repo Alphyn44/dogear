@@ -32,9 +32,11 @@ export type {
   StoredAnnotation,
 } from './queue.js'
 export {
+  CONFIG_FILE,
   QUEUE_DIR,
   QUEUE_VERSION,
   appendToQueue,
+  configPathFor,
   pendingOnly,
   pruneQueue,
   queuePathFor,
