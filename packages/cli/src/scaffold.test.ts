@@ -77,6 +77,28 @@ const FINDINGS = [
   '  workspace: single package, 1 app',
 ]
 
+/**
+ * E8's trailing block for the same fixture, which declares no `@dogear/vite` — unindented,
+ * because the snippet's own leading whitespace is content the user copies.
+ *
+ * Every whole-output assertion carries it. That is the point of spelling it out rather than
+ * trimming it off: this block is the last thing the command prints and the only part of the
+ * output the user is meant to act on, so a change to it should fail the cases that pin the
+ * shape of the whole report.
+ */
+const BLOCK = [
+  '',
+  'add dogear to vite.config.ts:',
+  '',
+  "  import { dogear } from '@dogear/vite'",
+  '',
+  '  export default defineConfig({',
+  '    plugins: [dogear()],',
+  '  })',
+  '',
+  'then, at the repo root: npm i -D @dogear/vite',
+]
+
 describe('scaffold() on a fresh repository', () => {
   it('creates .dogear/ and reports it', () => {
     const result = scaffold(root)
@@ -104,6 +126,7 @@ describe('scaffold() on a fresh repository', () => {
         `  created ${QUEUE_DIR}/`,
         `  created ${QUEUE_DIR}/${CONFIG_FILE}`,
         '  created .gitignore',
+        ...BLOCK,
       ].join('\n'),
     )
   })
@@ -142,7 +165,9 @@ describe('scaffold() on an already-initialized repository', () => {
     const again = scaffold(root)
 
     expect(again.exitCode).toBe(0)
-    expect(again.output).toBe([header(), ...FINDINGS, '  nothing changed'].join('\n'))
+    expect(again.output).toBe(
+      [header(), ...FINDINGS, '  nothing changed', ...BLOCK].join('\n'),
+    )
   })
 
   it('reports NO change lines the second time', () => {
@@ -334,6 +359,91 @@ describe('scaffold() reporting what it detected', () => {
   })
 })
 
+describe('scaffold() telling the user to install the plugin', () => {
+  /** The fixture above has a vite config and no `@dogear/vite`, so the block is expected. */
+  const HEADING = 'add dogear to vite.config.ts:'
+
+  it('prints the snippet and the install command below the report', () => {
+    const lines = scaffold(root).output.split('\n')
+    const at = lines.indexOf(HEADING)
+
+    expect(at).toBeGreaterThan(0)
+    expect(lines.indexOf('  created .gitignore')).toBeLessThan(at)
+  })
+
+  it('separates the block from the report with a blank line', () => {
+    const lines = scaffold(root).output.split('\n')
+
+    expect(lines[lines.indexOf(HEADING) - 1]).toBe('')
+  })
+
+  it('leaves the block OUTSIDE the report’s indent', () => {
+    // Not cosmetic. The two-space indent belongs to the one-line-per-item body, and the snippet
+    // carries an indent of its own that the body's would corrupt — this is text the user copies
+    // into a config file, so the leading whitespace is content.
+    const output = scaffold(root).output
+
+    expect(output).toContain("\n  import { dogear } from '@dogear/vite'")
+    expect(output).not.toContain("\n    import { dogear } from '@dogear/vite'")
+  })
+
+  it('writes nothing to say it — the manifest is untouched', () => {
+    // E8's whole decision. init prints the dependency rather than adding it: no range resolves
+    // while the packages are unpublished, and a manifest edited without a lockfile update fails
+    // the next `npm ci`.
+    const before = readFileSync(join(root, 'package.json'), 'utf8')
+
+    scaffold(root)
+
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(before)
+  })
+
+  it('says nothing once the plugin is declared', () => {
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ devDependencies: { vite: '^8.2.1', '@dogear/vite': '^1.0.0' } }),
+    )
+
+    expect(scaffold(root).output).not.toContain('add dogear to')
+  })
+
+  it('reports a runtime dependency as the leak it is, and does not move it', () => {
+    // The manifest half of what scripts/check-leak.ts catches: a dev-only plugin in
+    // `dependencies` installs in production even when every bundle is clean.
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ dependencies: { '@dogear/vite': '^1.0.0' } }),
+    )
+
+    const output = scaffold(root).output
+
+    expect(output).toContain('note: @dogear/vite is a runtime dependency')
+    expect(output).toContain('devDependencies')
+    // Declared is declared — the import resolves, so it is not also told to install it.
+    expect(output).not.toContain('add dogear to')
+    expect(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))).toEqual({
+      dependencies: { '@dogear/vite': '^1.0.0' },
+    })
+  })
+
+  it('withholds the block when a step failed', () => {
+    // Telling someone to install a plugin into a repository init could not finish setting up
+    // buries the thing they actually need to act on. The re-run prints it.
+    writeFileSync(join(root, QUEUE_DIR), 'not a directory')
+
+    const result = scaffold(root)
+
+    expect(result.exitCode).toBe(1)
+    expect(result.output).not.toContain('add dogear to')
+  })
+
+  it('says nothing at all when the repo has no vite config', () => {
+    rmSync(join(root, 'vite.config.ts'))
+
+    expect(scaffold(root).output).not.toContain('add dogear to')
+  })
+})
+
 describe('scaffold() with dryRun', () => {
   it('writes NOTHING, on a repository where a real run would write three things', () => {
     // The whole contract. Every `plan()` runs and no `apply()` does, which is only safe
@@ -353,6 +463,7 @@ describe('scaffold() with dryRun', () => {
         `  would create ${QUEUE_DIR}/`,
         `  would create ${QUEUE_DIR}/${CONFIG_FILE}`,
         '  would create .gitignore',
+        ...BLOCK,
       ].join('\n'),
     )
   })
@@ -374,6 +485,17 @@ describe('scaffold() with dryRun', () => {
     scaffold(root)
 
     expect(scaffold(root, { dryRun: true }).output).toContain('nothing changed')
+  })
+
+  it('prints the plugin block identically, because it was never a change', () => {
+    // The block is guidance, not work. A dry run has nothing to withhold about it, so the two
+    // outputs differ only by the marker line and the tense of the change lines.
+    const dry = scaffold(root, { dryRun: true }).output
+    const real = scaffold(root).output
+    const block = (output: string): string =>
+      output.slice(output.indexOf('\nadd dogear to'))
+
+    expect(block(dry)).toBe(block(real))
   })
 
   it('leaves the repository in a state where the real run still does the work', () => {

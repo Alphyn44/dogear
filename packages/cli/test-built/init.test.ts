@@ -1,5 +1,12 @@
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -152,6 +159,29 @@ describe('the built `dogear init`', () => {
     } finally {
       rmSync(bare, { recursive: true, force: true })
     }
+  })
+
+  it('prints the plugin snippet against a real Vite repo — E8 (#41)', async () => {
+    // The other cases here run against a repo with no Vite config, so the block never appears
+    // in them. It is the last thing the command prints and the only part the user is meant to
+    // act on, which makes it worth one case through the real binary rather than only through
+    // scaffold()'s return value.
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ devDependencies: { vite: '^8.2.1' } }),
+    )
+    writeFileSync(join(root, 'vite.config.ts'), '')
+
+    const run = await runCli('init', root)
+
+    expect(run.exitCode).toBe(0)
+    expect(run.stdout).toContain('add dogear to vite.config.ts:')
+    expect(run.stdout).toContain("import { dogear } from '@dogear/vite'")
+    expect(run.stdout).toContain('then, at the repo root: npm i -D @dogear/vite')
+    // Printed, never written. The manifest is exactly what the test wrote.
+    expect(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))).toEqual({
+      devDependencies: { vite: '^8.2.1' },
+    })
   })
 
   it('honours --dry-run, which is the only path where argv survives the shim', async () => {

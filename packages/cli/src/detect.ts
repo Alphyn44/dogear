@@ -41,6 +41,20 @@ export type Framework = 'preact' | 'solid' | 'svelte' | 'vue' | 'react'
  */
 export type Workspace = 'npm' | 'yarn' | 'pnpm' | 'single'
 
+/**
+ * Which tool installs things here, from the lockfile at the root.
+ *
+ * **Separate from {@link Workspace} rather than folded into it** — E8 (#41). That type answers
+ * "how are the packages organised", and its `npm`/`yarn` split is a lockfile question wearing a
+ * layout question's clothes. A single-package pnpm repository is the case that forces them
+ * apart: its layout is `single`, which says nothing at all about the manager, and E8 prints an
+ * install command that would be wrong for it.
+ */
+export type Manager = 'npm' | 'yarn' | 'pnpm'
+
+/** Where a package is declared in a manifest, if it is. */
+export type Declaration = 'dev' | 'runtime' | 'absent'
+
 /** One directory with a Vite config in it — an app, as far as init is concerned. */
 export interface DetectedApp {
   /** Repository-relative and forward-slashed. `''` is the repository root itself. */
@@ -51,10 +65,32 @@ export interface DetectedApp {
   /** The declared range, verbatim — `^19.2.0`. `undefined` when nothing declares it. */
   readonly frameworkVersion: string | undefined
   readonly viteVersion: string | undefined
+  /**
+   * Repository-relative directory of the manifest this app's dependencies belong to — the
+   * nearest `package.json` at or above {@link DetectedApp.dir}. `''` is the root, `undefined`
+   * when the repository has no manifest anywhere above the app.
+   *
+   * Not the same as `dir`, and E8 (#41) is why it is reported separately: it prints the
+   * directory to run an install in, and an app scaffolded into a subdirectory of an existing
+   * package would otherwise be told to install somewhere that would grow a stray manifest.
+   * The framework above is read from this same file, so the two can never disagree about which
+   * package an app belongs to.
+   */
+  readonly manifestDir: string | undefined
+  /**
+   * Whether that manifest declares `@dogear/vite`, and in which field — E8 (#41).
+   *
+   * `runtime` is not merely unusual, it is the manifest half of the production leak
+   * `scripts/check-leak.ts` exists to catch: a dev-only plugin in `dependencies` installs in
+   * production even when every bundle is clean. init reports it and does not move it.
+   */
+  readonly plugin: Declaration
 }
 
 export interface Detection {
   readonly workspace: Workspace
+  /** Which tool installs here. `npm` when no lockfile answers — see {@link Manager}. */
+  readonly manager: Manager
   /**
    * How many packages the workspace globs resolved to. `1` for a single-package repository.
    *
@@ -114,9 +150,13 @@ const SKIP = new Set(['node_modules', 'dist', 'build', 'out', 'coverage'])
  */
 const MAX_DEPTH = 3
 
+/** The package `dogear init` tells people to install. */
+const PLUGIN = '@dogear/vite'
+
 export function detect(root: string): Detection {
   const manifest = readManifest(join(root, 'package.json'))
   const workspace = workspaceOf(root, manifest)
+  const manager = managerOf(root)
 
   // Only the `workspaces` array is readable, so only npm and yarn get the guided path. pnpm
   // and single-package repositories fall to the walk, which is also what makes a pnpm repo
@@ -135,7 +175,22 @@ export function detect(root: string): Detection {
     .map((dir) => appAt(root, dir))
     .filter((app): app is DetectedApp => app !== undefined)
 
-  return { workspace, packages: packageDirs?.length, apps }
+  return { workspace, manager, packages: packageDirs?.length, apps }
+}
+
+/**
+ * Which tool installs here, from the lockfile at the root.
+ *
+ * **npm is the fallback, not a detection.** A repository with no lockfile has not installed
+ * anything yet, and there is nothing to read; npm is the floor this project targets and the
+ * command most users can translate. Checked in this order because a repository that migrated
+ * between managers keeps the old lockfile more often than it deletes it, and pnpm's and yarn's
+ * are the ones deliberately adopted.
+ */
+function managerOf(root: string): Manager {
+  if (isFile(join(root, 'pnpm-lock.yaml'))) return 'pnpm'
+  if (isFile(join(root, 'yarn.lock'))) return 'yarn'
+  return 'npm'
 }
 
 /** Which layout, from the root manifest and the lockfiles beside it. */
@@ -272,7 +327,8 @@ function appAt(root: string, dir: string): DetectedApp | undefined {
   // The nearest manifest, not the root's: in a workspace the app's own `package.json` is what
   // declares its framework, and two apps in one repository routinely declare different ones.
   // Walking up from there is what covers an app directory that has no manifest of its own.
-  const manifest = nearestManifest(root, dir)
+  const nearest = nearestManifest(root, dir)
+  const manifest = nearest?.manifest
   const framework = FRAMEWORK_PACKAGES.find(
     ([, pkg]) => versionOf(manifest, pkg) !== undefined,
   )
@@ -284,19 +340,50 @@ function appAt(root: string, dir: string): DetectedApp | undefined {
     frameworkVersion:
       framework === undefined ? undefined : versionOf(manifest, framework[1]),
     viteVersion: versionOf(manifest, 'vite'),
+    manifestDir: nearest?.dir,
+    plugin: declarationOf(manifest, PLUGIN),
   }
 }
 
-/** The first `package.json` at or above `dir`, stopping at the repository root. */
-function nearestManifest(root: string, dir: string): Manifest | undefined {
+/**
+ * The first `package.json` at or above `dir`, with the directory holding it.
+ *
+ * The directory comes back alongside the contents because E8 (#41) has to name it — it prints
+ * the directory to run an install in — and deriving it a second time from the same walk is how
+ * two answers about the same file drift apart.
+ */
+function nearestManifest(
+  root: string,
+  dir: string,
+): { readonly dir: string; readonly manifest: Manifest } | undefined {
   const segments = dir === '' ? [] : dir.split('/')
 
   for (let depth = segments.length; depth >= 0; depth -= 1) {
-    const manifest = readManifest(join(root, ...segments.slice(0, depth), 'package.json'))
-    if (manifest !== undefined) return manifest
+    const at = segments.slice(0, depth)
+    const manifest = readManifest(join(root, ...at, 'package.json'))
+    if (manifest !== undefined) return { dir: at.join('/'), manifest }
   }
 
   return undefined
+}
+
+/** Which dependency map declares `name`, if either does. Runtime wins, as npm resolves it. */
+function declarationOf(manifest: Manifest | undefined, name: string): Declaration {
+  if (isDeclared(manifest?.dependencies, name)) return 'runtime'
+  if (isDeclared(manifest?.devDependencies, name)) return 'dev'
+  return 'absent'
+}
+
+/**
+ * Declared at all — the *presence of the key*, not a usable range.
+ *
+ * Deliberately weaker than {@link versionOf}, which requires a non-empty string. A key whose
+ * value is empty or malformed is still someone having declared the dependency on purpose, and
+ * telling them to install a package their own manifest already names is the wrong correction
+ * to make. `hasOwnProperty` rather than a truthiness check for the same reason.
+ */
+function isDeclared(map: Record<string, unknown> | undefined, name: string): boolean {
+  return map !== undefined && Object.prototype.hasOwnProperty.call(map, name)
 }
 
 /** A dependency's declared range, from either map. Runtime deps win, as npm resolves them. */

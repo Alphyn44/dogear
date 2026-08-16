@@ -631,8 +631,9 @@ cd my-repo && dogear init   # once per repo
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
 5. **Appends to `.gitignore`** — `.dogear/queue.json` and `.dogear/*.tmp`, not the whole
    directory, since config is meant to be committed.
-6. **Adds `@dogear/vite` to devDependencies** and prints the two-line `vite.config`
-   change rather than editing it — config files are too varied to rewrite safely.
+6. **Prints the plugin install and the two-line `vite.config` change.** It writes neither.
+   Config files are too varied to rewrite safely, and the manifest is printed rather than
+   edited for reasons of its own — see the Decisions log. Amended during E8.
 7. **Registers the repo** in `~/.dogear/projects.json`.
 
 Re-running is safe: it diffs against what's there and only reports what changed.
@@ -878,6 +879,17 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 
 Split out of E4 during E4, which shipped the file without a reader. The four code comments
 that named E4 for this work now name E7; see the Decisions log.
+
+**E8 — Plugin install and the vite.config change**
+- Where an app has no `@dogear/vite`, init prints the dependency to install and the
+  `vite.config` change to make. It writes neither.
+- The install command matches the repository's package manager, and names the package the
+  dependency belongs to — which in a monorepo is not always the app's own directory.
+- An app that already declares the plugin gets nothing. A repo with no Vite app gets nothing.
+- `@dogear/vite` in `dependencies` rather than `devDependencies` is reported, not moved.
+
+Filed during E2, which found that install step 6 was in no story at all. Written as printing
+rather than writing after the same ticket's grill; see the Decisions log.
 
 `init` writes into four places outside `.dogear/` by the time E3 and E4 land — the agent's
 config, an `AGENTS.md` stanza, `.gitignore`, and `~/.dogear/projects.json` — and
@@ -1502,6 +1514,27 @@ clipboard is the tier that has to work when nothing else does, so putting a step
 would contradict the only thing it claims. It is stopped hard for the same reason the kill switch
 is — an app binding the same chord must not also fire — and it is the one chord that guards on
 `event.repeat`, because neither of the others can fire twice and this one can.
+
+**Plugin install → printed, not written. Settled during E8.**
+Install step 6 said init *adds* `@dogear/vite` to devDependencies. Three things make writing it
+wrong, and only the first is temporary.
+
+Both dogear packages are unpublished, so there is no range init can write that `npm install`
+resolves — `^0.0.0` names a version the registry does not have, and `*` or `latest` are odd
+things to commit into someone else's repository. A manifest edited without a matching lockfile
+update fails `npm ci` on the next machine that runs it, which is a breakage init caused in a
+repository it claimed to be setting up. And the edit accomplishes nothing on its own: the
+config's `import` still fails until someone runs an install, so the command has to be run
+either way.
+
+`npm i -D @dogear/vite` needs no version-derivation logic in the CLI, cannot desync a lockfile,
+and is correct the day the packages publish. It also makes the step symmetric with the decision
+already beside it: init prints the `vite.config` change rather than editing it, and now prints
+the dependency rather than writing it, for adjacent reasons.
+
+The consequence worth recording is structural: this step has no `Change` at all. It is a runner
+phase beside E2's detection remarks rather than an entry in the `Step` list, and E6's teardown
+has nothing of it to reverse.
 
 **Detection → a phase before the steps, plus `--dry-run`. Settled during E2.**
 E1's `Step` seam was written expecting detection to arrive as another entry in the list, and

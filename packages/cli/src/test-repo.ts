@@ -41,6 +41,7 @@ import type { Detection } from './detect.js'
  */
 export const NO_DETECTION: Detection = Object.freeze({
   workspace: 'single',
+  manager: 'npm',
   packages: undefined,
   apps: Object.freeze([]),
 })

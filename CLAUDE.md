@@ -152,6 +152,18 @@ caught that, not a unit test; and **`Change.summary` stays past tense**, with `-
 converting it through a small verb table in `scaffold.ts` that `scaffold.test.ts` guards, so a
 step added with an unknown verb fails rather than shipping `would created`.
 
+**E8 added a second runner phase, and `dogear init` writes nothing for it.** `guidance.ts`
+prints the `vite.config` change and the install command for every app that does not declare
+`@dogear/vite`; it edits neither the config nor the manifest. The manifest half is the part
+that looks like a shortcut and is not: no range init could write resolves while the packages
+are unpublished, a manifest edited without a lockfile update fails the next `npm ci`, and the
+edit does nothing anyway because the config's `import` fails until someone installs. So this
+step has no `Change`, which is what makes it a phase beside `remarks()` rather than a `Step`,
+and E6 inherits no teardown from it. Its block is appended **outside** the report's two-space
+indent — the snippet's own leading whitespace is content the user copies, and the body's indent
+would corrupt it. The install command follows `Detection.manager` (from the root lockfile) and
+names `DetectedApp.manifestDir`, which is not always the app's own directory.
+
 **The `.gitignore` step asks git, and it is the CLI's only subprocess.** Whether
 `.dogear/queue.json` is ignored depends on `.git/info/exclude`, `core.excludesFile`, every
 `.gitignore` up the tree, and negation precedence — so `git.ts` shells out to `check-ignore`

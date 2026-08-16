@@ -2,6 +2,7 @@ import { configFile } from './config.js'
 import type { Detection, DetectedApp } from './detect.js'
 import { detect } from './detect.js'
 import { gitignore } from './gitignore.js'
+import { guidance } from './guidance.js'
 import { queueDirectory } from './queue-dir.js'
 import type { Result } from './run.js'
 
@@ -161,6 +162,9 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
   // Kept apart from the step notes all the way to the report, and not for ordering: only step
   // notes suppress `nothing changed`. See {@link report}.
   const found = remarks(detection)
+  // E8 (#41)'s trailing block — what init is telling the user to do rather than doing. Beside
+  // `remarks` for the same reason it is not a step: nothing plans it and nothing applies it.
+  const next = guidance(detection)
   const notes = plans.flatMap((plan) => plan.notes ?? [])
   const applied: string[] = []
 
@@ -192,6 +196,10 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
           applied,
           notes,
           found,
+          // Withheld on a failure, and this is the only place it is. The block tells the user
+          // to install a plugin into a repository init could not finish setting up; what they
+          // should do next is fix what failed and re-run, and the re-run prints it.
+          next: [],
           failure: `failed: ${messageOf(error)}`,
         }),
         exitCode: 1,
@@ -208,6 +216,7 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
       applied,
       notes,
       found,
+      next,
       dryRun: options.dryRun === true,
     }),
     exitCode: 0,
@@ -247,13 +256,14 @@ function report(run: {
   readonly applied: readonly string[]
   readonly notes: readonly string[]
   readonly found: readonly string[]
+  readonly next: readonly string[]
   readonly dryRun?: boolean
   readonly failure?: string
 }): string {
-  const { root, findings, applied, notes, found, dryRun, failure } = run
+  const { root, findings, applied, notes, found, next, dryRun, failure } = run
   const unremarkable = applied.length === 0 && notes.length === 0 && failure === undefined
 
-  return [
+  const body = [
     `dogear: ${root}`,
     // Above the findings, not below them: it changes what every line after it means, and a
     // caveat printed after the thing it qualifies has already been misread.
@@ -262,9 +272,13 @@ function report(run: {
     ...(unremarkable ? ['nothing changed'] : applied),
     ...(failure === undefined ? [] : [failure]),
     ...[...notes, ...found].map((note) => `note: ${note}`),
-  ]
-    .map((line, index) => (index === 0 ? line : `  ${line}`))
-    .join('\n')
+  ].map((line, index) => (index === 0 ? line : `  ${line}`))
+
+  // E8's (#41) block is appended *outside* the indent, and that is not cosmetic: the two-space
+  // indent belongs to the report's one-line-per-item body, and a code snippet the user is meant
+  // to copy has an indent of its own that the body's would silently corrupt. It carries its own
+  // leading blank line, so an empty block adds nothing at all.
+  return [...body, ...next].join('\n')
 }
 
 function messageOf(error: unknown): string {
@@ -383,6 +397,12 @@ function remarks(detection: Detection): readonly string[] {
   const floored = detection.apps.filter(
     (app) => app.framework === 'vue' || app.framework === 'svelte',
   )
+
+  return [...jsxOnly(floored), ...runtimeDependency(detection.apps)]
+}
+
+/** brief:1517 — the transform is JSX-only, so these apps get the selector floor and no more. */
+function jsxOnly(floored: readonly DetectedApp[]): readonly string[] {
   if (floored.length === 0) return []
 
   const named = floored
@@ -394,6 +414,35 @@ function remarks(detection: Detection): readonly string[] {
     `${named} — dogear's source transform is JSX-only, so annotations there fall back to ` +
       'the CSS-selector and text floor.',
   ]
+}
+
+/**
+ * `@dogear/vite` in `dependencies` rather than `devDependencies` — E8 (#41).
+ *
+ * **Reported, never moved.** This is the manifest half of the leak `scripts/check-leak.ts`
+ * exists to catch: a dev-only plugin in `dependencies` installs in production even when every
+ * bundle is clean, so it is worth saying. Moving it is a different act — an edit to a choice
+ * the user made, whose reason init cannot see — and it is the same line E4's gitignore step
+ * already declines to cross with `!.dogear/config.json`.
+ */
+function runtimeDependency(apps: readonly DetectedApp[]): readonly string[] {
+  const wrong = apps.filter((app) => app.plugin === 'runtime')
+  if (wrong.length === 0) return []
+
+  const named = [...new Set(wrong.map((app) => manifestOf(app)))]
+    .slice(0, APP_CAP)
+    .join(', ')
+
+  return [
+    `@dogear/vite is a runtime dependency in ${named}. It is dev-only — move it to ` +
+      'devDependencies so it cannot install in production.',
+  ]
+}
+
+/** The package a `runtime` declaration is actually in, which may not be the app's directory. */
+function manifestOf(app: DetectedApp): string {
+  const dir = app.manifestDir
+  return dir === undefined || dir === '' ? 'the root package.json' : `${dir}/package.json`
 }
 
 /** `framework: react ^19.2.0`, padded so the values align. */

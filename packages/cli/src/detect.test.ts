@@ -60,6 +60,8 @@ describe('detect() on a single-package repository', () => {
         framework: 'react',
         frameworkVersion: '^19.2.0',
         viteVersion: '^8.2.1',
+        manifestDir: '',
+        plugin: 'absent',
       },
     ])
   })
@@ -78,6 +80,8 @@ describe('detect() on a single-package repository', () => {
         framework: undefined,
         frameworkVersion: undefined,
         viteVersion: '^8.2.1',
+        manifestDir: '',
+        plugin: 'absent',
       },
     ])
   })
@@ -114,6 +118,128 @@ describe('detect() on a single-package repository', () => {
 
     expect(workspace).toBe('single')
     expect(apps).toEqual([])
+  })
+})
+
+describe('detect() and the package manager', () => {
+  beforeEach(() => {
+    manifest('package.json', {})
+    file('vite.config.ts', '')
+  })
+
+  it.each([
+    ['pnpm-lock.yaml', 'pnpm'],
+    ['yarn.lock', 'yarn'],
+    ['package-lock.json', 'npm'],
+  ])('reads %s as %s', (lockfile, manager) => {
+    file(lockfile, '')
+
+    expect(detect(root).manager).toBe(manager)
+  })
+
+  it('answers npm when nothing has been installed yet', () => {
+    // A fallback rather than a detection. There is no lockfile to read in a repository that has
+    // never installed, and npm is the floor this project targets.
+    expect(detect(root).manager).toBe('npm')
+  })
+
+  it('reports the manager of a SINGLE-package pnpm repo, which the layout cannot', () => {
+    // The case that forces `manager` and `workspace` apart. This repo's layout is `single`,
+    // which says nothing about the manager at all — and E8 would print `npm i -D` at a pnpm
+    // user if it had to read the manager off the layout field.
+    file('pnpm-lock.yaml', '')
+
+    expect(detect(root).workspace).toBe('single')
+    expect(detect(root).manager).toBe('pnpm')
+  })
+
+  it('prefers pnpm over a yarn.lock left behind by a migration', () => {
+    file('yarn.lock', '')
+    file('pnpm-lock.yaml', '')
+
+    expect(detect(root).manager).toBe('pnpm')
+  })
+})
+
+describe('detect() and whether the plugin is already declared', () => {
+  it.each([
+    ['devDependencies', 'dev'],
+    ['dependencies', 'runtime'],
+  ] as const)('reports @dogear/vite in %s as %s', (field, plugin) => {
+    manifest('package.json', { [field]: { '@dogear/vite': '^1.0.0' } })
+    file('vite.config.ts', '')
+
+    expect(detect(root).apps[0]?.plugin).toBe(plugin)
+  })
+
+  it('reports absent when nothing declares it', () => {
+    manifest('package.json', { devDependencies: { vite: '^8.2.1' } })
+    file('vite.config.ts', '')
+
+    expect(detect(root).apps[0]?.plugin).toBe('absent')
+  })
+
+  it('counts a declared key with an empty range as declared', () => {
+    // Weaker than the version read on purpose. A key with a broken value is still someone
+    // having declared the dependency, and telling them to install what their own manifest
+    // names is the wrong correction to make.
+    manifest('package.json', { devDependencies: { '@dogear/vite': '' } })
+    file('vite.config.ts', '')
+
+    expect(detect(root).apps[0]?.plugin).toBe('dev')
+  })
+
+  it('reads each app’s own manifest, so one wired app does not cover for another', () => {
+    manifest('package.json', { workspaces: ['packages/*'] })
+    manifest('packages/wired/package.json', {
+      devDependencies: { '@dogear/vite': '^1.0.0' },
+    })
+    manifest('packages/bare/package.json', {})
+    file('packages/wired/vite.config.ts', '')
+    file('packages/bare/vite.config.ts', '')
+
+    const byDir = Object.fromEntries(
+      detect(root).apps.map((app) => [app.dir, app.plugin]),
+    )
+
+    expect(byDir).toEqual({ 'packages/wired': 'dev', 'packages/bare': 'absent' })
+  })
+})
+
+describe('detect() and which package owns an app', () => {
+  it('names the app’s own directory when it has a manifest', () => {
+    manifest('package.json', {})
+    manifest('apps/web/package.json', {})
+    file('apps/web/vite.config.ts', '')
+
+    expect(detect(root).apps[0]?.manifestDir).toBe('apps/web')
+  })
+
+  it('names the directory one level up when the app has none of its own', () => {
+    // The install command has to point here, not at the app: an install in `apps/web/client`
+    // would grow a stray package.json in a directory that deliberately had none.
+    manifest('package.json', {})
+    manifest('apps/web/package.json', { dependencies: { react: '^19.2.0' } })
+    file('apps/web/client/vite.config.ts', '')
+
+    const nested = detect(root).apps.find((app) => app.dir === 'apps/web/client')
+
+    expect(nested?.manifestDir).toBe('apps/web')
+    // Same file the framework came from — the two answers cannot disagree about the package.
+    expect(nested?.framework).toBe('react')
+  })
+
+  it('names the root as an empty string, not as a dot', () => {
+    manifest('package.json', {})
+    file('vite.config.ts', '')
+
+    expect(detect(root).apps[0]?.manifestDir).toBe('')
+  })
+
+  it('is undefined when the repository has no manifest at all', () => {
+    file('vite.config.ts', '')
+
+    expect(detect(root).apps[0]?.manifestDir).toBeUndefined()
   })
 })
 
@@ -184,6 +310,8 @@ describe('detect() on a workspace', () => {
         framework: 'react',
         frameworkVersion: '^19.2.0',
         viteVersion: '^8.2.1',
+        manifestDir: 'examples/web',
+        plugin: 'absent',
       },
     ])
   })
