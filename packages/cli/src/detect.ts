@@ -10,8 +10,9 @@ import { join, sep } from 'node:path'
  * acceptance criterion is that init reports what it found *before* it changes anything, so a
  * detection step would have satisfied the letter of the first criterion and inverted the
  * second. Detection therefore runs ahead of planning, gets its own section in the report, and
- * hands the result to every `plan()` as a second argument — which is also what E3 (#28) needs,
- * since it has to know what it is wiring rather than re-deriving it.
+ * hands the result to every `plan()` as a second argument. E3 (#28) reads it earlier still —
+ * ../src/scaffold.ts reconciles it with the flags into a `Wiring` before any step is built,
+ * because a step cannot say what it would do until it knows which agent it is wiring.
  *
  * **Nothing here throws, and the rule is stricter than `plan()`'s.** A step that throws while
  * planning turns one repository's problem into a stack trace; this runs before every step, so
@@ -21,8 +22,10 @@ import { join, sep } from 'node:path'
  * broken manifest somewhere in a working tree is an ordinary thing to find.
  *
  * **Nothing here writes, and nothing here guesses on the user's behalf.** Detection reports;
- * `.gitignore`, the config file and (by E3) the agent wiring are what act. A wrong guess costs
- * a line of output, which is the whole reason it is safe to guess at all.
+ * `.gitignore`, the config file and E3's agent wiring are what act. A wrong guess costs a line
+ * of output, which is the whole reason it is safe to guess at all — and since E3 that guess
+ * decides what gets written to the user's agent configuration, which is what `--agent` and
+ * `--dry-run` exist to keep answerable.
  *
  * **Versions are the declared range, verbatim** — `react ^19.2.0`, never `19.2.1` resolved out
  * of `node_modules`. The manifest is what the repository says about itself and it is there
@@ -54,6 +57,27 @@ export type Manager = 'npm' | 'yarn' | 'pnpm'
 
 /** Where a package is declared in a manifest, if it is. */
 export type Declaration = 'dev' | 'runtime' | 'absent'
+
+/**
+ * A coding agent `dogear init` knows how to wire — E3 (#28).
+ *
+ * The three that register an MCP server through a **project-local JSON file**, which is what
+ * makes them one mechanism rather than three. Codex is the notable absence: its registration
+ * lives in `~/.codex/config.toml`, which is global, outside the repository, and TOML — a file
+ * E6's per-repo undo could not reach and a format the CLI has no parser for. The brief's
+ * "Still open" already flags the global-config question as needing thought of its own.
+ */
+export type Agent = 'claude' | 'cursor' | 'vscode'
+
+/** An agent this repository shows signs of using, and what gave it away. */
+export interface DetectedAgent {
+  readonly agent: Agent
+  /** The marker that proved it — repository-relative and forward-slashed. */
+  readonly marker: string
+}
+
+/** Whether `@dogear/cli` is reachable from inside the repository. */
+export type Cli = 'local' | 'absent'
 
 /** One directory with a Vite config in it — an app, as far as init is concerned. */
 export interface DetectedApp {
@@ -103,6 +127,26 @@ export interface Detection {
    */
   readonly packages: number | undefined
   readonly apps: readonly DetectedApp[]
+  /**
+   * Agents this repository shows signs of using — E3 (#28), in marker order.
+   *
+   * **Empty is an ordinary answer, not a failure.** A fresh clone has no `.claude/` and no
+   * `.cursor/`, and E3 still registers the MCP server there: `.mcp.json` at the root is the
+   * closest thing to a portable default, and a baseline path that skipped the commonest
+   * fresh-clone case would not be a baseline. What this list changes is the *extra* files —
+   * Cursor's and VS Code's — which are written only where something says they are wanted.
+   */
+  readonly agents: readonly DetectedAgent[]
+  /**
+   * Whether `@dogear/cli` is installed in, or declared by, this repository — E3 (#28).
+   *
+   * The agent configs `dogear init` writes name `node_modules/@dogear/cli/dist/cli.js`, which
+   * is repo-relative so that the file stays correct for everyone who clones. That path is
+   * written whatever this says; `absent` earns a `Plan.note` telling the user to install it,
+   * because the alternative — resolving the *global* install and writing an absolute path into
+   * a committed file — is broken for every other machine the moment it lands.
+   */
+  readonly cli: Cli
 }
 
 /** Every filename Vite itself will load a config from. */
@@ -153,6 +197,44 @@ const MAX_DEPTH = 3
 /** The package `dogear init` tells people to install. */
 const PLUGIN = '@dogear/vite'
 
+/** The package whose `dist/cli.js` every config init writes points at. */
+const CLI = '@dogear/cli'
+
+/**
+ * Where a local `@dogear/cli` puts the file every agent config init writes points at.
+ *
+ * **Repo-relative, and never the resolved global install** — E3 (#28). These configs are
+ * committed, so an absolute path out of one developer's npm prefix is broken for everyone else
+ * the moment it lands. Written whether or not the package is installed yet; see
+ * {@link Detection.cli} for what init says when it is not.
+ *
+ * **`node <path>`, never `dogear`.** A global npm bin on Windows is a `.cmd` shim, and the exec
+ * form these configs use cannot run one. Same rule as the `UserPromptSubmit` hook, from the
+ * brief's Delivery section.
+ */
+export const CLI_ENTRY = 'node_modules/@dogear/cli/dist/cli.js'
+
+/**
+ * What proves an agent is in use here — E3 (#28), first match wins per agent.
+ *
+ * **Directories, mostly, and deliberately loose.** These answer "is this tool used in this
+ * repository", not "is this tool configured for MCP" — the second question is what init is
+ * about to fix, so detecting on it would mean only ever wiring what was already wired.
+ *
+ * The imprecision is real and worth naming: `.vscode/` exists in a great many repositories
+ * whose owners have never used an agent, so a `.vscode/mcp.json` may land somewhere it is
+ * simply inert. That is the cost of having no better signal, and it is bounded — the file is
+ * small, repo-local, ignored by everything that does not read it, and removed by `--undo`.
+ * `--agent` is the escape hatch for anyone who wants it not to happen.
+ */
+const MARKERS: readonly (readonly [Agent, string, 'dir' | 'file'])[] = [
+  ['claude', '.claude', 'dir'],
+  ['claude', '.mcp.json', 'file'],
+  ['claude', 'CLAUDE.md', 'file'],
+  ['cursor', '.cursor', 'dir'],
+  ['vscode', '.vscode', 'dir'],
+]
+
 export function detect(root: string): Detection {
   const manifest = readManifest(join(root, 'package.json'))
   const workspace = workspaceOf(root, manifest)
@@ -175,7 +257,49 @@ export function detect(root: string): Detection {
     .map((dir) => appAt(root, dir))
     .filter((app): app is DetectedApp => app !== undefined)
 
-  return { workspace, manager, packages: packageDirs?.length, apps }
+  return {
+    workspace,
+    manager,
+    packages: packageDirs?.length,
+    apps,
+    agents: agentsIn(root),
+    cli: cliIn(root, manifest),
+  }
+}
+
+/**
+ * Which agents this repository shows signs of using — E3 (#28).
+ *
+ * One entry per agent, carrying the *first* marker that matched, so the report can say what it
+ * saw rather than merely what it concluded. A repository that has both `.claude/` and
+ * `CLAUDE.md` is reported once, on the directory.
+ */
+function agentsIn(root: string): readonly DetectedAgent[] {
+  const found: DetectedAgent[] = []
+
+  for (const [agent, marker, kind] of MARKERS) {
+    if (found.some((entry) => entry.agent === agent)) continue
+
+    const path = join(root, marker)
+    const present = kind === 'dir' ? isDirectory(path) : isFile(path)
+    if (present) found.push({ agent, marker: kind === 'dir' ? `${marker}/` : marker })
+  }
+
+  return found
+}
+
+/**
+ * Is `@dogear/cli` reachable from inside this repository?
+ *
+ * **Two questions, either of which is a yes**, and they are not redundant. The file on disk is
+ * the state that makes the written config work *today*; the manifest declaration is the state
+ * that makes it work after the next `npm ci` on a machine that has not installed yet. A
+ * repository that declares it but has not installed is mid-clone, not misconfigured, and does
+ * not need telling.
+ */
+function cliIn(root: string, manifest: Manifest | undefined): Cli {
+  if (isFile(join(root, ...CLI_ENTRY.split('/')))) return 'local'
+  return declarationOf(manifest, CLI) === 'absent' ? 'absent' : 'local'
 }
 
 /**
@@ -422,6 +546,14 @@ function readManifest(path: string): Manifest | undefined {
 function isFile(path: string): boolean {
   try {
     return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
   } catch {
     return false
   }

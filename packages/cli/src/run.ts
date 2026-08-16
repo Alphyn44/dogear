@@ -86,6 +86,8 @@ export function usage(): string {
     // implemented, so the description has to be true of the command as shipped — and this
     // wording stays true as each later step is added, rather than needing an edit per epic.
     '  init     Set this repo up for dogear (safe to re-run; --dry-run changes nothing)',
+    '             --agent=claude|cursor|vscode|none  wire these instead of what is detected',
+    '             --no-hook                          skip Claude Code’s prompt hook',
     '  hook     Emit UserPromptSubmit JSON (your agent runs this, not you)',
     '  mcp      Run the MCP server over stdio',
     '  prune    Drop resolved items from the queue',

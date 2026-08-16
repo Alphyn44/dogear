@@ -11,8 +11,15 @@ import { join } from 'node:path'
 import { CONFIG_FILE, QUEUE_DIR } from '@dogear/queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { scaffold } from './scaffold.js'
-import { createRepo, isolateGitConfig, removeRepo, trackFile } from './test-repo.js'
+import type { Agent, Cli, Detection } from './detect.js'
+import { resolveWiring, scaffold } from './scaffold.js'
+import {
+  createRepo,
+  isolateGitConfig,
+  NO_DETECTION,
+  removeRepo,
+  trackFile,
+} from './test-repo.js'
 
 /**
  * What `dogear init` does to a repository, and what it says about it — E1 (#26).
@@ -48,7 +55,10 @@ beforeEach(() => {
   writeFileSync(
     join(root, 'package.json'),
     JSON.stringify({
-      devDependencies: { vite: '^8.2.1' },
+      // `@dogear/cli` since E3 (#28), for the same reason `vite` is here: without it every
+      // report below carries the "not installed here" note, and the whole-output assertions
+      // stop being about ordering. The absent case has a case of its own further down.
+      devDependencies: { vite: '^8.2.1', '@dogear/cli': '^0.1.0' },
       dependencies: { react: '^19.2.0' },
     }),
   )
@@ -71,10 +81,29 @@ function header(): string {
  * Spelled out rather than matched loosely, because they now sit between the header and every
  * change line — a suite that skipped past them would stop noticing if they moved.
  */
-const FINDINGS = [
+const VITE_FINDINGS = [
   '  vite:      vite.config.ts (vite ^8.2.1)',
   '  framework: react ^19.2.0',
   '  workspace: single package, 1 app',
+]
+
+/**
+ * The findings, including E3's (#28) agent line.
+ *
+ * **It is a parameter because the answer legitimately changes between runs.** A fresh temp repo
+ * has no agent marker, so the first init reports `none detected` and wires `.mcp.json` anyway —
+ * the portable default. That run creates `.claude/settings.json`, so the *second* init detects
+ * Claude Code. Both are correct, and a constant would have hidden the transition.
+ */
+function findings(agent = 'none detected'): readonly string[] {
+  return [...VITE_FINDINGS, `  agent:     ${agent}`]
+}
+
+/** E3's three change lines, between the config file and `.gitignore`. */
+const WIRING = [
+  '  registered dogear in .mcp.json',
+  '  created AGENTS.md',
+  '  created .claude/settings.json',
 ]
 
 /**
@@ -122,9 +151,12 @@ describe('scaffold() on a fresh repository', () => {
     expect(scaffold(root).output).toBe(
       [
         header(),
-        ...FINDINGS,
+        ...findings(),
         `  created ${QUEUE_DIR}/`,
         `  created ${QUEUE_DIR}/${CONFIG_FILE}`,
+        // E3's three, in the brief's Delivery order: the MCP baseline, then the stanza that
+        // gets it pulled, then the hook that is the tier on top.
+        ...WIRING,
         '  created .gitignore',
         ...BLOCK,
       ].join('\n'),
@@ -166,7 +198,15 @@ describe('scaffold() on an already-initialized repository', () => {
 
     expect(again.exitCode).toBe(0)
     expect(again.output).toBe(
-      [header(), ...FINDINGS, '  nothing changed', ...BLOCK].join('\n'),
+      // `claude code`, where the first run said `none detected` — the settings file init
+      // itself wrote is now a marker. Every one of E3's three steps is silent here, which is
+      // the third criterion holding across a step list that doubled in E3.
+      [
+        header(),
+        ...findings('claude code (.claude/)'),
+        '  nothing changed',
+        ...BLOCK,
+      ].join('\n'),
     )
   })
 
@@ -279,11 +319,13 @@ describe('scaffold() when a step fails', () => {
   it('still reports what it found, above the failure', () => {
     // Detection ran before any step planned, so its findings survive a step that could not
     // apply — and they are exactly what someone diagnosing the failure wants to see.
+    const expected = findings()
+
     expect(
       scaffold(root)
         .output.split('\n')
-        .slice(1, 1 + FINDINGS.length),
-    ).toEqual(FINDINGS)
+        .slice(1, 1 + expected.length),
+    ).toEqual(expected)
   })
 })
 
@@ -452,6 +494,12 @@ describe('scaffold() with dryRun', () => {
 
     expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
     expect(existsSync(join(root, '.gitignore'))).toBe(false)
+    // E3's three write outside `.dogear/`, which is exactly why they are worth naming here:
+    // `--dry-run` is the only thing standing between a wrong agent guess and an edit to the
+    // user's agent configuration.
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+    expect(existsSync(join(root, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(join(root, '.claude'))).toBe(false)
   })
 
   it('marks itself and puts the changes in the conditional', () => {
@@ -459,9 +507,12 @@ describe('scaffold() with dryRun', () => {
       [
         header(),
         '  dry run — nothing was written',
-        ...FINDINGS,
+        ...findings(),
         `  would create ${QUEUE_DIR}/`,
         `  would create ${QUEUE_DIR}/${CONFIG_FILE}`,
+        '  would register dogear in .mcp.json',
+        '  would create AGENTS.md',
+        '  would create .claude/settings.json',
         '  would create .gitignore',
         ...BLOCK,
       ].join('\n'),
@@ -504,5 +555,115 @@ describe('scaffold() with dryRun', () => {
     scaffold(root, { dryRun: true })
 
     expect(scaffold(root).output).toContain(`created ${QUEUE_DIR}/`)
+  })
+})
+
+describe('resolveWiring() reconciling flags with detection — E3 (#28)', () => {
+  const detection = (agents: readonly Agent[], cli: Cli = 'local'): Detection => ({
+    ...NO_DETECTION,
+    agents: agents.map((agent) => ({ agent, marker: `.${agent}/` })),
+    cli,
+  })
+
+  it('uses what detection found when no flag was given', () => {
+    expect(resolveWiring(detection(['cursor', 'vscode']), {}).agents).toEqual([
+      'cursor',
+      'vscode',
+    ])
+  })
+
+  it('falls back to claude when detection found nothing', () => {
+    // Not a guess about the user's tooling — `.mcp.json` at the root is the portable default,
+    // and a baseline path that skipped the fresh-clone case would not be a baseline.
+    expect(resolveWiring(detection([]), {}).agents).toEqual(['claude'])
+  })
+
+  it('replaces detection rather than adding to it', () => {
+    // The reason the flag replaces: subtraction. A repo with a `.cursor/` the user does not
+    // want touched has no other way to say so.
+    expect(resolveWiring(detection(['cursor']), { agents: ['claude'] }).agents).toEqual([
+      'claude',
+    ])
+  })
+
+  it('honours an explicit empty selection, which is --agent=none', () => {
+    // The case that makes `undefined` and `[]` different types of answer all the way down.
+    expect(resolveWiring(detection(['claude']), { agents: [] }).agents).toEqual([])
+  })
+
+  it('defaults the hook on and lets --no-hook turn it off', () => {
+    expect(resolveWiring(detection([]), {}).hook).toBe(true)
+    expect(resolveWiring(detection([]), { hook: false }).hook).toBe(false)
+  })
+
+  it('carries detection’s view of the local CLI through untouched', () => {
+    expect(resolveWiring(detection([], 'absent'), {}).cli).toBe('absent')
+  })
+})
+
+describe('scaffold() wiring an agent — E3 (#28)', () => {
+  it('registers the MCP server, which is the baseline and never skipped', () => {
+    scaffold(root)
+
+    expect(
+      JSON.parse(readFileSync(join(root, '.mcp.json'), 'utf8')) as unknown,
+    ).toMatchObject({
+      mcpServers: {
+        dogear: {
+          command: 'node',
+          args: ['node_modules/@dogear/cli/dist/cli.js', 'mcp'],
+        },
+      },
+    })
+  })
+
+  it('leaves a fully working install when the hook is declined', () => {
+    // #28's third criterion. MCP carries the whole feature set; the hook only removes the need
+    // to ask for it, so declining must cost the asking and nothing else.
+    const result = scaffold(root, { hook: false })
+
+    expect(result.exitCode).toBe(0)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(true)
+    expect(existsSync(join(root, 'AGENTS.md'))).toBe(true)
+    expect(existsSync(join(root, '.claude'))).toBe(false)
+    expect(result.output).not.toContain('prompt hook')
+  })
+
+  it('wires only what --agent named', () => {
+    scaffold(root, { agents: ['cursor'] })
+
+    expect(existsSync(join(root, '.cursor', 'mcp.json'))).toBe(true)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+    // No Claude Code among the agents, so no hook — without needing --no-hook as well.
+    expect(existsSync(join(root, '.claude'))).toBe(false)
+  })
+
+  it('wires nothing at all for --agent=none, and still sets up .dogear/', () => {
+    const result = scaffold(root, { agents: [] })
+
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(true)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+    expect(existsSync(join(root, 'AGENTS.md'))).toBe(false)
+    expect(result.exitCode).toBe(0)
+  })
+
+  it('notes a missing local CLI, since the path it wrote will not resolve yet', () => {
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ devDependencies: { vite: '^8.2.1' } }),
+    )
+
+    expect(scaffold(root).output).toContain('npm i -D @dogear/cli')
+  })
+
+  it('reports the agent it detected above everything it changed', () => {
+    // E2's ordering criterion, extended to the finding E3 added: the agent line is the single
+    // input driving every change below it, so it has to be readable before them.
+    const output = scaffold(root, { dryRun: true }).output
+    const lines = output.split('\n')
+
+    expect(lines.findIndex((line) => line.includes('agent:'))).toBeLessThan(
+      lines.findIndex((line) => line.includes('would register')),
+    )
   })
 })

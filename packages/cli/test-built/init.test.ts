@@ -205,6 +205,112 @@ describe('the built `dogear init`', () => {
     expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
   })
 
+  it('wires the agent end to end, through the real binary — E3 (#28)', async () => {
+    const run = await runCli('init', root)
+
+    expect(run.exitCode).toBe(0)
+
+    // The MCP registration is the baseline and the one thing that must always land.
+    const registered = JSON.parse(readFileSync(join(root, '.mcp.json'), 'utf8')) as {
+      mcpServers: { dogear: { command: string; args: readonly string[] } }
+    }
+    expect(registered.mcpServers.dogear.command).toBe('node')
+    expect(registered.mcpServers.dogear.args).toEqual([
+      'node_modules/@dogear/cli/dist/cli.js',
+      'mcp',
+    ])
+
+    // MCP is pull, so the stanza is what makes it get pulled.
+    expect(readFileSync(join(root, 'AGENTS.md'), 'utf8')).toContain('dogear_pending')
+
+    // And the hook, written as `node <path>` because a global npm bin on Windows is a `.cmd`
+    // shim the exec form cannot run. This is the assertion that would catch a "simplification"
+    // to `command: "dogear"` — which passes every unit test and fails on one platform.
+    const settings = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+    expect(settings).toContain('"command": "node"')
+    expect(settings).toContain(
+      '${CLAUDE_PROJECT_DIR}/node_modules/@dogear/cli/dist/cli.js',
+    )
+    expect(settings).not.toContain('"command": "dogear"')
+  })
+
+  it('is idempotent across processes for the agent wiring too', async () => {
+    // Separate from the general idempotency case above because these three steps read files
+    // they also write — the shape most likely to grow a second copy of itself per run, which
+    // is exactly what E4's gitignore step did before its `written()` guard.
+    await runCli('init', root)
+    const again = await runCli('init', root)
+
+    expect(again.stdout).toContain('nothing changed')
+    expect(
+      readFileSync(join(root, 'AGENTS.md'), 'utf8').match(/<!-- dogear:start -->/g),
+    ).toHaveLength(1)
+  })
+
+  it('merges into a settings.json that is already there, leaving it otherwise byte-identical', async () => {
+    // The criterion in its own words: "existing hooks survive". Written hand-formatted, with a
+    // one-line hook object, because that is the shape a re-serialising merge would silently
+    // reflow — and reflowing the user's agent configuration is the failure this ticket's
+    // whole approach exists to avoid.
+    const before = [
+      '{',
+      '  "permissions": { "allow": ["Read"] },',
+      '  "hooks": {',
+      '    "UserPromptSubmit": [',
+      '      { "hooks": [{ "type": "command", "command": "bash \\"mine.sh\\"" }] }',
+      '    ]',
+      '  }',
+      '}',
+      '',
+    ].join('\n')
+    mkdirSync(join(root, '.claude'))
+    writeFileSync(join(root, '.claude', 'settings.json'), before, 'utf8')
+
+    const run = await runCli('init', root)
+
+    expect(run.exitCode).toBe(0)
+    expect(run.stdout).toContain('merged the prompt hook into .claude/settings.json')
+
+    const after = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+
+    expect(after).toContain('  "permissions": { "allow": ["Read"] },')
+    expect(after).toContain(
+      '      { "hooks": [{ "type": "command", "command": "bash \\"mine.sh\\"" }] },',
+    )
+    expect(
+      (JSON.parse(after) as { hooks: { UserPromptSubmit: readonly unknown[] } }).hooks
+        .UserPromptSubmit,
+    ).toHaveLength(2)
+  })
+
+  it('leaves a working install when --no-hook declines the upgrade', async () => {
+    const run = await runCli('init', root, ['--no-hook'])
+
+    expect(run.exitCode).toBe(0)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(true)
+    expect(existsSync(join(root, 'AGENTS.md'))).toBe(true)
+    expect(existsSync(join(root, '.claude'))).toBe(false)
+  })
+
+  it('honours --agent through the shim, the same way --dry-run is honoured', async () => {
+    const run = await runCli('init', root, ['--agent=cursor'])
+
+    expect(run.exitCode).toBe(0)
+    expect(existsSync(join(root, '.cursor', 'mcp.json'))).toBe(true)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+  })
+
+  it('writes no agent config at all under --dry-run', async () => {
+    // E3's steps write outside `.dogear/` — into the user's agent configuration — which makes
+    // this the case where the flag matters most.
+    const run = await runCli('init', root, ['--dry-run'])
+
+    expect(run.stdout).toContain('would register dogear in .mcp.json')
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+    expect(existsSync(join(root, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(join(root, '.claude'))).toBe(false)
+  })
+
   it('no longer advertises itself as unimplemented', async () => {
     // The usage footer is the first thing a new global install shows. Until E1 it named only
     // `hook`, `mcp` and `prune`, and a footer that lies about what is built is worse than no

@@ -161,6 +161,59 @@ describe('init()', () => {
     expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
   })
 
+  it('names every flag it accepts when it refuses one it does not', () => {
+    // The message is the only documentation a user reads at the moment they need it, so it has
+    // to stay current as flags are added — E3 (#28) added two.
+    mkdirSync(join(root, '.git'))
+    const outcome = init(root, ['--nope'])
+
+    expect(isAsync(outcome)).toBe(false)
+    if (isAsync(outcome)) return
+
+    for (const flag of ['--dry-run', '--agent=', '--no-hook']) {
+      expect(outcome.output).toContain(flag)
+    }
+  })
+
+  it('REFUSES an unknown --agent value, naming the ones that work', () => {
+    // Same asymmetry as `--dryrun`: `--agent=claude-code` silently ignored would wire whatever
+    // detection guessed, into a repository whose owner had just said otherwise.
+    mkdirSync(join(root, '.git'))
+    const outcome = init(root, ['--agent=claude-code'])
+
+    expect(isAsync(outcome)).toBe(false)
+    if (isAsync(outcome)) return
+
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.output).toContain('claude-code')
+    expect(outcome.output).toContain('cursor')
+  })
+
+  it('accepts --agent, repeated, and --no-hook', async () => {
+    mkdirSync(join(root, '.git'))
+
+    const { exitCode, stdout } = await runCapturing(
+      init(root, ['--agent=cursor', '--agent=vscode', '--no-hook', '--dry-run']),
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('.cursor/mcp.json')
+    expect(stdout).toContain('.vscode/mcp.json')
+    // --no-hook, and no Claude Code among the agents either.
+    expect(stdout).not.toContain('.claude/settings.json')
+  })
+
+  it('lets --agent=none wire nothing while init still sets the repo up', async () => {
+    mkdirSync(join(root, '.git'))
+
+    const { exitCode, stdout } = await runCapturing(init(root, ['--agent=none']))
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain(QUEUE_DIR)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+    expect(existsSync(join(root, 'AGENTS.md'))).toBe(false)
+  })
+
   it('checks the flags BEFORE the repository, so a typo is reported as a typo', () => {
     // No `.git` here. Both things are wrong, and the one the user can fix by retyping is the
     // one worth naming — reporting the missing repository would send them looking for the

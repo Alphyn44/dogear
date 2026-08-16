@@ -1,9 +1,12 @@
 import { configFile } from './config.js'
-import type { Detection, DetectedApp } from './detect.js'
+import type { Agent, Cli, Detection, DetectedApp } from './detect.js'
 import { detect } from './detect.js'
 import { gitignore } from './gitignore.js'
 import { guidance } from './guidance.js'
+import { createHookStep } from './hook-config.js'
+import { createMcpStep } from './mcp-config.js'
 import { queueDirectory } from './queue-dir.js'
+import { createRulesStep } from './rules.js'
 import type { Result } from './run.js'
 
 /**
@@ -18,9 +21,9 @@ import type { Result } from './run.js'
  * ---
  *
  * **The `Step` seam is the actual deliverable of E1**, and the reason #26 blocks four other
- * issues. E4 (#29) added the config file and the gitignore rules; E3 (#28) adds agent wiring —
- * each an entry appended to {@link STEPS}, in a module of its own, not a change to the runner.
- * Three properties make that work, and none of them survives casual editing:
+ * issues. E4 (#29) added the config file and the gitignore rules; E3 (#28) added agent wiring —
+ * each an entry in {@link stepsFor}, in a module of its own, not a change to the runner. Three
+ * properties make that work, and none of them survives casual editing:
  *
  * 1. **`plan()` never writes.** It inspects and returns a description of what it *would* do.
  *    This is what E2's `--dry-run` is built on: plan every step, print the lot, apply nothing.
@@ -35,11 +38,15 @@ import type { Result } from './run.js'
  *    is the third acceptance criterion, rather than a plan of what might.
  *
  * **Apply stops at the first failure.** The alternative — carry on and collect errors — buys a
- * little more done per invocation and costs the property that matters more: by E3, a step that
- * merges `.claude/settings.json` runs after a step that created the directory it writes into,
- * and cascading failures from one root cause are much harder to read than the root cause
- * alone. What did land is still reported, so a re-run picks up exactly where this one stopped.
- * That is the same idempotency as above doing a second job.
+ * little more done per invocation and costs the property that matters more: cascading failures
+ * from one root cause are much harder to read than the root cause alone, and by E3 a run has
+ * six steps to cascade through. What did land is still reported, so a re-run picks up exactly
+ * where this one stopped. That is the same idempotency as above doing a second job.
+ *
+ * E3's ordering leans on it in one direction worth naming: the MCP registration is the baseline
+ * and comes before the prompt hook, so a failure part-way leaves the half that carries the
+ * whole feature set done. Each of E3's steps creates its own parent directory, so none of them
+ * depends on an earlier one having run.
  *
  * **Every `plan()` runs before any `apply()`** — which is what `--dry-run` needs, and which
  * makes "planning never throws" a hard rule rather than a style note. A step inspects a
@@ -55,10 +62,18 @@ import type { Result } from './run.js'
  * is `Plan.notes`, and notes print *below* the change list — so detection-as-a-step would have
  * reported what it found after init had already changed things, which is the inversion of
  * #27's second acceptance criterion. ./detect.ts runs first, its findings get a section of
- * their own above the changes, and the result reaches every `plan()` as a second argument so
- * E3 can wire what detection saw rather than looking again. A step that ignores that argument
- * simply declares `plan: (root) => …` and is unaffected, which is why E4's three steps needed
- * no edit.
+ * their own above the changes, and the result reaches every `plan()` as a second argument. A
+ * step that ignores that argument simply declares `plan: (root) => …` and is unaffected, which
+ * is why E4's three steps needed no edit.
+ *
+ * **E3 (#28) wanted it one level earlier than that**, and the correction is worth keeping too.
+ * This header predicted E3 would read `plan()`'s second argument; it reads it not at all. Its
+ * three steps need detection **reconciled with `--agent` and `--no-hook`** before they can say
+ * what they would do, and folding a flag into `Detection` would make the `agent:` findings line
+ * report a preference as an observation. So they are built per run from a {@link Wiring} — see
+ * {@link resolveWiring} and {@link stepsFor}. The second argument still earns its place: it is
+ * what lets a step read the repository without a second traversal, which E5 or E6 may want even
+ * though E3 did not.
  *
  * **E4 widened `plan()` to return notes as well as a change**, and the reason is that some of
  * what init has to say is not something it did. A `.gitignore` that already excludes
@@ -123,17 +138,96 @@ export interface ScaffoldOptions {
    * would produce, so a detection that guessed wrong is visible before anything is written.
    */
   readonly dryRun?: boolean
+  /**
+   * `--agent`, if it was given at all — E3 (#28).
+   *
+   * **Replaces what detection found rather than adding to it.** Repeat the flag for several.
+   * An empty array is `--agent=none` and is not the same as `undefined`: the first says wire
+   * nothing, the second says nobody expressed a preference, so use the markers.
+   *
+   * Subtraction is why it replaces. A user whose repository has a `.cursor/` they do not want
+   * touched has no way to say so under a union, and a second flag to express it would be a
+   * worse interface than one flag that means what it says.
+   */
+  readonly agents?: readonly Agent[]
+  /**
+   * `--no-hook` — E3 (#28). Defaults to true where Claude Code is among the agents.
+   *
+   * Declining leaves a **fully working install**, which is the acceptance criterion and also
+   * the architecture: MCP carries the whole feature set and the hook only removes the need to
+   * ask for it.
+   */
+  readonly hook?: boolean
 }
 
 /**
- * Run in order. E3 appends agent wiring; detection is not here, it is a phase — see the header.
+ * What `dogear init` resolved to wire, once flags and detection have been reconciled — E3 (#28).
+ *
+ * Passed to the three agent steps at construction rather than reaching them through `plan()`'s
+ * `detection` argument, and the distinction is not cosmetic: `Detection` is *what is true of
+ * the repository*, and folding a flag into it would make the `agent:` findings line report a
+ * preference as an observation. The steps are built per run — see {@link stepsFor} — which is
+ * the same factory shape ./gitignore.ts already uses for its injected `GitQueries`.
+ */
+export interface Wiring {
+  /** Resolved targets, in marker order. Empty means wire nothing. */
+  readonly agents: readonly Agent[]
+  /** Whether to write Claude Code's prompt hook. */
+  readonly hook: boolean
+  /** Whether `@dogear/cli` resolves from inside the repo, for the registration's note. */
+  readonly cli: Cli
+}
+
+/**
+ * Flags over detection, with one default that is not a detection at all.
+ *
+ * **A repository with no marker still gets `.mcp.json`.** `mcpServers` at the repository root
+ * is the closest thing to a portable default — Claude Code reads it, and so does a growing set
+ * of other clients — and "every agent gets the MCP server registered" cannot be the baseline
+ * path if the commonest case, a fresh clone nobody has opened in an editor yet, gets nothing at
+ * all. The `agent:` findings line still says `none detected`, so the report never claims to
+ * have seen something it did not.
+ *
+ * `--agent=none` is the way to mean *nothing*, and it survives this: an explicit empty array is
+ * honoured, only an absent one defaults.
+ */
+export function resolveWiring(detection: Detection, options: ScaffoldOptions): Wiring {
+  const detected = detection.agents.map((entry) => entry.agent)
+  const chosen =
+    options.agents ?? (detected.length === 0 ? ['claude' as const] : detected)
+
+  return {
+    agents: chosen,
+    hook: options.hook ?? true,
+    cli: detection.cli,
+  }
+}
+
+/**
+ * Run in order. Detection is not here, it is a phase — see the header.
  *
  * The directory comes first because ./config.ts writes a file inside it and `apply` stops at
  * the first failure — a config step that ran first would fail with `ENOENT` on a fresh repo
- * and report that instead of creating anything. `.gitignore` is independent of both and goes
- * last, which is also the order the brief's install sequence describes.
+ * and report that instead of creating anything. `.gitignore` is independent of everything and
+ * goes last, which is also the order the brief's install sequence describes.
+ *
+ * **E3's three sit between them, built per run rather than declared as constants**, because
+ * they need the resolved {@link Wiring} and a module-level constant could not have it. Their
+ * own order is the brief's Delivery ordering made literal: the MCP registration is the baseline
+ * and comes first, the stanza that makes a pull-based server actually get pulled comes next,
+ * and the prompt hook — the tier on top, and the only one `--no-hook` removes — comes last. A
+ * failure part-way therefore leaves the more important half done.
  */
-const STEPS: readonly Step[] = [queueDirectory, configFile, gitignore]
+function stepsFor(wiring: Wiring): readonly Step[] {
+  return [
+    queueDirectory,
+    configFile,
+    createMcpStep(wiring),
+    createRulesStep(wiring),
+    createHookStep(wiring),
+    gitignore,
+  ]
+}
 
 /**
  * Bring `root` up to date, and report what that took.
@@ -153,11 +247,15 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
   const detection = detect(root)
   const findings = describe(detection)
 
+  // Flags reconciled against detection before anything plans — E3 (#28). The three agent steps
+  // are constructed from the result, so what they do is fixed before the first `plan()` runs.
+  const wiring = resolveWiring(detection, options)
+
   // Every step plans before any step applies. See the header — this is what `--dry-run` is
   // built on, and why `plan()` may not throw.
-  const plans = STEPS.map((step) => step.plan(root, detection)).filter(
-    (plan): plan is Plan => plan !== undefined,
-  )
+  const plans = stepsFor(wiring)
+    .map((step) => step.plan(root, detection))
+    .filter((plan): plan is Plan => plan !== undefined)
 
   // Kept apart from the step notes all the way to the report, and not for ordering: only step
   // notes suppress `nothing changed`. See {@link report}.
@@ -338,7 +436,32 @@ function describe(detection: Detection): readonly string[] {
   return [
     ...(apps.length <= 1 ? single(apps[0]) : many(apps)),
     label('workspace', `${layout}, ${plural(apps.length, 'app')}`),
+    label('agent', agents(detection)),
   ]
+}
+
+/** Display names, so the report says `claude code` rather than the internal `claude`. */
+const AGENT_NAMES: Record<Agent, string> = {
+  claude: 'claude code',
+  cursor: 'cursor',
+  vscode: 'vs code',
+}
+
+/**
+ * What detection made of the repository's tooling — E3 (#28).
+ *
+ * **Names the marker, not just the conclusion.** Every change this ticket makes follows from
+ * this one line, and a `--dry-run` whose whole purpose is to let a wrong guess be caught before
+ * it is written has to show its working. `none detected` is an ordinary answer rather than a
+ * warning: `.mcp.json` is still written, because it is the portable default — see
+ * {@link resolveWiring}.
+ */
+function agents(detection: Detection): string {
+  if (detection.agents.length === 0) return 'none detected'
+
+  return detection.agents
+    .map((entry) => `${AGENT_NAMES[entry.agent]} (${entry.marker})`)
+    .join(', ')
 }
 
 /** No app, or exactly one: the config and the framework each get a line of their own. */

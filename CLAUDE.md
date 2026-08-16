@@ -124,8 +124,9 @@ the cross-package `parity.test.ts` that went vacuous when the copies merged.
 the adapter (validate the flags, resolve the git root, refuse if there isn't one, defer to the
 implementation through a dynamic `import()` exactly as `mcp.ts` defers to `server.ts`);
 `scaffold.ts` holds the `Step` contract and the runner, and each step lives in a module of its
-own — `queue-dir.ts`, `config.ts`, `gitignore.ts`. E3 appends a step; it does not edit the
-runner. A step's `plan(root, detection)` **never writes and never throws** — it returns
+own — `queue-dir.ts`, `config.ts`, `gitignore.ts`, and E3's `mcp-config.ts`, `rules.ts` and
+`hook-config.ts`. A new step is an entry in `stepsFor`; it does not edit the runner. A step's
+`plan(root, detection)` **never writes and never throws** — it returns
 `{ change?, notes? }` or `undefined` — and that is what makes both idempotency and `--dry-run`
 possible without a second traversal. Every `plan()` runs before any `apply()`, which is why
 not throwing is a rule rather than a style note: `config.ts` stats `.dogear/config.json` in
@@ -142,8 +143,8 @@ change** — it is for state init can see and must not repair by guessing, and i
 runs before anything plans, because a step's only voice is `Plan.notes` and notes print *below*
 the change list — detection-as-a-step would report what it found after init had changed things,
 which inverts the acceptance criterion. So its findings get their own labelled section above
-the changes, and the structured `Detection` reaches every `plan()` as a second argument, which
-is how E3 wires what detection saw instead of looking again. Three consequences: `detect.ts`
+the changes, and the structured `Detection` reaches every `plan()` as a second argument. Three
+consequences: `detect.ts`
 **never throws** (it runs before every step, so one unparseable `package.json` would take out
 an init that had nothing to do with it); **detection's remarks do not suppress `nothing
 changed` even though step notes do**, because a repo with no Vite earns one on every run and
@@ -151,6 +152,34 @@ folding them together means the commonest re-run never gets a verdict — `test-
 caught that, not a unit test; and **`Change.summary` stays past tense**, with `--dry-run`
 converting it through a small verb table in `scaffold.ts` that `scaffold.test.ts` guards, so a
 step added with an unknown verb fails rather than shipping `would created`.
+
+**E3's three steps are built per run, and none of them re-serialises the user's JSON.**
+`mcp-config.ts`, `rules.ts` and `hook-config.ts` are *factories* taking a resolved `Wiring`
+(`resolveWiring` in `scaffold.ts` reconciles `--agent`/`--no-hook` against detection), which is
+why `STEPS` became `stepsFor(wiring)` — the same shape `gitignore.ts` already used for its
+injected `GitQueries`. They read `plan()`'s `detection` argument not at all: folding a flag into
+`Detection` would make the `agent:` findings line report a preference as an observation. Their
+order is the brief's Delivery ordering made literal — MCP baseline, then the stanza that gets a
+pull-based server pulled, then the hook — so a failure part-way leaves the half that carries the
+whole feature set done.
+
+**`json-insert.ts` is the reason this ticket is not a one-liner, and its rules are load-bearing.**
+JSON has no file-level append, so adding an entry means inserting before the *enclosing* closing
+bracket; `insertAt(source, path, snippet)` does that and leaves every other byte identical.
+Three rules: the scanner **tracks string literals**, because a `}` inside `"command": "bash \"…\""`
+is not a closing brace; the spliced text is **parsed before it is returned**, so a caller can
+never write a config that breaks the user's agent; and `undefined` is an **ordinary answer** —
+an absent path or a JSONC file with comments declines, and the step turns that into a `Plan.note`
+naming what to add by hand. Do not "simplify" this to parse-and-stringify: this repo's own
+`.claude/settings.json` writes hook objects on one line, and re-serialising reflows all 250 of
+them. `json-insert.test.ts` pins the byte preservation, including against a replica of that file.
+
+**Everything E3 writes points at `node <path>`, never `dogear`** — a global npm bin on Windows is
+a `.cmd` shim the exec form cannot run. The MCP configs use the repo-relative
+`node_modules/@dogear/cli/dist/cli.js` (an absolute global path would be committed and broken for
+everyone else who clones; `Detection.cli` earns a note when it is not installed yet), and the hook
+uses `${CLAUDE_PROJECT_DIR}/…` because a hook's working directory is the session's, not the
+repo's. `test-built/init.test.ts` asserts both.
 
 **E8 added a second runner phase, and `dogear init` writes nothing for it.** `guidance.ts`
 prints the `vite.config` change and the install command for every app that does not declare

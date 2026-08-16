@@ -470,3 +470,87 @@ describe('detect() when the repository is broken', () => {
     expect(detect(root).apps).toEqual([])
   })
 })
+
+describe('detect() and which agent is in use — E3 (#28)', () => {
+  const markers: readonly { readonly marker: string; readonly agent: string }[] = [
+    { marker: '.claude', agent: 'claude' },
+    { marker: '.cursor', agent: 'cursor' },
+    { marker: '.vscode', agent: 'vscode' },
+  ]
+
+  it.each(markers)('reads $marker/ as $agent', ({ marker, agent }) => {
+    mkdirSync(join(root, marker))
+
+    expect(detect(root).agents).toEqual([{ agent, marker: `${marker}/` }])
+  })
+
+  it('reads a bare .mcp.json as Claude Code', () => {
+    file('.mcp.json', '{}')
+
+    expect(detect(root).agents).toEqual([{ agent: 'claude', marker: '.mcp.json' }])
+  })
+
+  it('reads CLAUDE.md as Claude Code', () => {
+    file('CLAUDE.md', '# rules\n')
+
+    expect(detect(root).agents).toEqual([{ agent: 'claude', marker: 'CLAUDE.md' }])
+  })
+
+  it('reports an agent once, on the first marker that matched', () => {
+    mkdirSync(join(root, '.claude'))
+    file('.mcp.json', '{}')
+    file('CLAUDE.md', '')
+
+    expect(detect(root).agents).toEqual([{ agent: 'claude', marker: '.claude/' }])
+  })
+
+  it('reports several agents in marker order', () => {
+    mkdirSync(join(root, '.vscode'))
+    mkdirSync(join(root, '.cursor'))
+
+    expect(detect(root).agents.map((entry) => entry.agent)).toEqual(['cursor', 'vscode'])
+  })
+
+  it('finds none in an empty repository, which is an ordinary answer', () => {
+    expect(detect(root).agents).toEqual([])
+  })
+
+  it('does not read a regular file named .claude as a marker', () => {
+    // The `existsSync` trap again, from the direction that matters here: a *file* called
+    // `.claude` is not a Claude Code installation, and treating it as one would have init try
+    // to write `.claude/settings.json` underneath it.
+    file('.claude', 'not a directory')
+
+    expect(detect(root).agents).toEqual([])
+  })
+})
+
+describe('detect() and whether the CLI resolves locally — E3 (#28)', () => {
+  it('reads an installed dist/cli.js as local', () => {
+    file('node_modules/@dogear/cli/dist/cli.js', '')
+
+    expect(detect(root).cli).toBe('local')
+  })
+
+  it('reads a declaration as local even before anything is installed', () => {
+    // A repository mid-clone is not misconfigured. The written path resolves after the next
+    // install, so there is nothing to tell the user about.
+    manifest('package.json', { devDependencies: { '@dogear/cli': '^0.1.0' } })
+
+    expect(detect(root).cli).toBe('local')
+  })
+
+  it('reads a runtime declaration as local too', () => {
+    // Unusual placement for a dev tool, but it still resolves — which is the only question
+    // this field answers. E8's remark is what has opinions about the field it sits in.
+    manifest('package.json', { dependencies: { '@dogear/cli': '^0.1.0' } })
+
+    expect(detect(root).cli).toBe('local')
+  })
+
+  it('reads neither as absent', () => {
+    manifest('package.json', { devDependencies: { vite: '^8.2.1' } })
+
+    expect(detect(root).cli).toBe('absent')
+  })
+})

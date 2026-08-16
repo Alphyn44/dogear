@@ -31,19 +31,21 @@ import type { Detection } from './detect.js'
 /**
  * What to hand `Step.plan`'s second parameter when the step under test ignores it — E2 (#27).
  *
- * Every step so far does ignore it: detection exists for E3's (#28) agent wiring, and until
- * that lands the argument is required by the type and read by nobody. A shared empty value is
- * better than `detect(root)` at each call site, which would walk a temp directory to produce a
- * result the assertion does not depend on — and better than a cast, which would keep compiling
- * after `Detection` grows a field.
- *
- * A step that *does* read it builds its own, in its own suite, where the shape is the point.
+ * E4's three steps ignore it entirely. E3's (#28) three read it, and they build their own —
+ * in their own suites, where the shape is the point. A shared empty value is better than
+ * `detect(root)` at each call site, which would walk a temp directory to produce a result the
+ * assertion does not depend on, and better than a cast, which would keep compiling after
+ * `Detection` grows a field. It is spelled out in full for that last reason: every new field
+ * has to be answered here, which is how a suite that should have been updated fails to compile
+ * instead of silently testing the old shape.
  */
 export const NO_DETECTION: Detection = Object.freeze({
   workspace: 'single',
   manager: 'npm',
   packages: undefined,
   apps: Object.freeze([]),
+  agents: Object.freeze([]),
+  cli: 'local',
 })
 
 /** Env keys {@link isolateGitConfig} overwrites, so the caller can put them back. */

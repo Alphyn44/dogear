@@ -620,14 +620,19 @@ npm i -g @dogear/cli        # once per machine
 cd my-repo && dogear init   # once per repo
 ```
 
-`dogear init` is interactive and idempotent. It:
+`dogear init` is non-interactive and idempotent. It:
 
 1. **Finds the git root.** Refuses to run outside a repo — the queue location depends
    on it.
-2. **Detects the setup** — Vite config, framework, workspace layout, how many apps.
-3. **Asks which agent you use** and wires it. Claude Code gets the hook merged into
-   `.claude/settings.json` (merged, never clobbered) plus the MCP server registered.
-   Anything else gets the MCP server registration and an `AGENTS.md` stanza.
+2. **Detects the setup** — Vite config, framework, workspace layout, how many apps,
+   and which agent the repo shows signs of using.
+3. **Wires that agent.** Every agent gets the MCP server registered — `.mcp.json`,
+   `.cursor/mcp.json` or `.vscode/mcp.json` — plus an `AGENTS.md` stanza, since MCP is
+   pull and needs the nudge. Claude Code additionally gets the hook merged into
+   `.claude/settings.json` (merged, never clobbered); `--no-hook` declines it and leaves
+   a fully working install. `--agent=<name>` overrides detection. Amended during E3,
+   which replaced "asks which agent you use" with detection plus flags — see the
+   Decisions log.
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
 5. **Appends to `.gitignore`** — `.dogear/queue.json` and `.dogear/*.tmp`, not the whole
    directory, since config is meant to be committed.
@@ -838,14 +843,17 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 
 **E3 — Agent wiring**
 - **Every agent gets the MCP server registered.** That is the baseline path and is never
-  skipped.
+  skipped. Claude Code, Cursor and VS Code, each through its own project-local config.
 - init writes an `AGENTS.md` / rules stanza telling the agent to check pending
   annotations, since MCP is pull and needs the nudge.
-- init then asks whether to add the prompt hook, offered only where the chosen agent
-  supports one. Declining leaves a fully working install.
-- Claude Code's hook is merged into `.claude/settings.json` — existing hooks survive.
+- The prompt hook is offered only where the chosen agent supports one, and `--no-hook`
+  declines it. Declining leaves a fully working install. Amended during E3 from "init
+  then asks" — see the Decisions log.
+- Claude Code's hook is merged into `.claude/settings.json` — existing hooks survive,
+  and no line init did not write is reformatted.
 - The hook is written as `node <path> hook`, never `dogear hook`, so it works on Windows.
-- Where a local `@dogear/cli` exists, the path is repo-relative and portable.
+- The path is repo-relative and portable whether or not `@dogear/cli` is installed yet;
+  a missing local install is reported, not worked around.
 
 **E4 — Gitignore and config**
 - `.dogear/queue.json` and `.dogear/*.tmp` are gitignored; `.dogear/config.json` is not.
@@ -1536,6 +1544,54 @@ The consequence worth recording is structural: this step has no `Change` at all.
 phase beside E2's detection remarks rather than an entry in the `Step` list, and E6's teardown
 has nothing of it to reverse.
 
+**`dogear init` is not interactive, and never was. Settled during E3.**
+This document said "init is interactive" and that step 3 *asks* which agent you use; E2's entry
+above went further and predicted E3 would build the prompt layer. Reconciling that against the
+code is what E3 actually started with, and the code had already answered: `init()` returns a
+string and an exit code, `emit()` is the only thing in the CLI that touches `process.stdout`,
+`plan()` may not write or throw, and every `plan()` runs before any `apply()`. A prompt fits
+nowhere in that. It cannot live in `plan()`, and asking between plan and apply invalidates what
+was planned — which is the one ordering `--dry-run` depends on.
+
+So detection guesses and flags override: `--agent=<name>`, repeatable, and `--no-hook`. Three
+things fall out of it. `--dry-run` stops being a substitute for a decline point and becomes the
+decline point, which is the role E2 built it for. The command stays assertable byte-for-byte in
+the fast suite, which is how `test-built/init.test.ts` can pin what lands in a real repository.
+And `--agent` can *subtract* — it replaces what detection found rather than adding to it, which
+is the only way to say "I know there is a `.cursor/` here, leave it alone". A prompt could not
+have expressed that without asking twice.
+
+The cost is a guess that can be wrong, and it is bounded on both sides: the `agent:` findings
+line says what was detected and what marker proved it, above every change, and `--dry-run`
+prints the lot before anything is written.
+
+**Agent configs are edited in place, never re-serialised. Settled during E3.**
+Adding an entry to `.claude/settings.json` or `.mcp.json` obviously means `JSON.parse` → mutate
+→ `JSON.stringify(…, null, 2)`, and that is wrong here for a concrete reason rather than a
+stylistic one. This repository's own `.claude/settings.json` writes hook objects like
+`{ "type": "command", "command": "bash \"…\"" }` on one line; re-serialising explodes every one
+of them onto four. The user asked for a hook and got a 250-line diff to the file they configure
+their agent with.
+
+JSON has no file-level append — a second top-level value is not a document — but inserting
+before the *enclosing* closing bracket is available, and that is what init does: find the
+container, place the entry, leave every other byte alone. Three shapes cover it, and they are
+the same primitive with a different path: no `hooks` key, a `hooks` key without the event, or
+an existing `UserPromptSubmit` array to join. The third is what "existing hooks survive" means.
+
+Two rules make it safe rather than merely careful. The scanner tracks string literals, so a `}`
+inside a shell command is not a closing brace. And the spliced text is parsed before it reaches
+disk — if it will not parse, init writes nothing and prints what to add instead. A config with
+comments in it lands on that path, which is the graceful degradation rather than a gap: a
+commented `.vscode/mcp.json` is an ordinary thing to find, and the right answer is to tell the
+user, not to reformat a file they hand-wrote. Verified against the real 250-line settings.json
+in this repo: zero lines lost or reformatted.
+
+The alternative considered and rejected was E8's: print it, never write it. It is the safest
+option and it costs the ticket — in most Claude Code repos `.claude/settings.json` already
+exists, so the hook would never actually be wired, and "merged into `.claude/settings.json`"
+would have become "printed for you to paste".
+
 **Detection → a phase before the steps, plus `--dry-run`. Settled during E2.**
 E1's `Step` seam was written expecting detection to arrive as another entry in the list, and
 that was wrong in a way worth recording. A step's only voice is `Plan.notes`, and notes print
@@ -1548,9 +1604,10 @@ are unaffected, so E4's three needed no edit.
 
 `--dry-run` is the other half. "Reports before changing" only means something if there is a
 point at which you can decline, and a non-interactive command has none — every byte prints at
-the end either way. The flag supplies it without inventing a prompt layer, which E3 has to
-build anyway for "which agent do you use". Plan-every-step-then-apply already existed for
-report ordering, so the flag is a branch rather than a mechanism.
+the end either way. The flag supplies it without inventing a prompt layer. This entry expected
+E3 to build one anyway for "which agent do you use"; it did not, and the flag turned out to be
+the whole answer rather than a stopgap — see E3's entry below. Plan-every-step-then-apply
+already existed for report ordering, so the flag is a branch rather than a mechanism.
 
 Two smaller decisions inside it. **Versions are the declared range, verbatim** — `react
 ^19.2.0`, never resolved from `node_modules`, which need not exist and would make the report

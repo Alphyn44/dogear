@@ -30,8 +30,18 @@ function app(overrides: Partial<DetectedApp> = {}): DetectedApp {
   }
 }
 
+// `agents` and `cli` are E3's (#28) and guidance() reads neither — it prints the plugin
+// install, which is a question about the Vite apps. Spelled out rather than cast so that a
+// future field has to be answered here too.
 function detection(apps: readonly DetectedApp[], manager: Manager = 'npm'): Detection {
-  return { workspace: 'npm', manager, packages: apps.length, apps }
+  return {
+    workspace: 'npm',
+    manager,
+    packages: apps.length,
+    apps,
+    agents: [],
+    cli: 'local',
+  }
 }
 
 describe('guidance() when an app is not wired', () => {

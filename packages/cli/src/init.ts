@@ -1,5 +1,6 @@
 import { findGitRoot } from '@dogear/queue'
 
+import type { Agent } from './detect.js'
 import { write } from './emit.js'
 import type { Outcome } from './run.js'
 
@@ -57,9 +58,20 @@ export function init(cwd: string, args: readonly string[] = []): Outcome {
   // paths obey the rule that an empty output means zero bytes rather than a blank line.
   return {
     run: async () =>
-      write((await import('./scaffold.js')).scaffold(gitRoot, { dryRun: flags.dryRun })),
+      write(
+        (await import('./scaffold.js')).scaffold(gitRoot, {
+          dryRun: flags.dryRun,
+          agents: flags.agents,
+          hook: flags.hook,
+        }),
+      ),
   }
 }
+
+/** The `--agent` values, and what each resolves to. `none` is the empty selection. */
+const AGENTS = ['claude', 'cursor', 'vscode', 'none'] as const
+
+type AgentFlag = (typeof AGENTS)[number]
 
 /**
  * `dogear init`'s flags — E2 (#27).
@@ -73,11 +85,31 @@ export function init(cwd: string, args: readonly string[] = []): Outcome {
  * Parsed here rather than in ./run.ts, which reads the command and hands the rest over. E6
  * (#39) adds `--undo` to this list, and a per-command flag table in the dispatcher would put
  * every command's argument handling back in the file that exists to be short.
+ *
+ * **E3 (#28) added `--agent` and `--no-hook`, and they are what the brief's "init is
+ * interactive" turned into.** The brief describes init *asking* which agent you use; the
+ * command is non-interactive to its foundations — `plan()` may not write, every `plan()` runs
+ * before any `apply()`, and `--dry-run` exists precisely because there is no point at which a
+ * user can decline. A prompt fits nowhere in that, so detection guesses and these override it.
+ * See the brief's Decisions log.
+ *
+ * **Only `import type` from ./detect.js.** It erases at compile time, so this file's module
+ * graph is unchanged and `dogear hook` still loads none of the init implementation — which is
+ * the property the dynamic `import()` above exists to protect.
  */
 function readFlags(
   args: readonly string[],
-): { ok: true; dryRun: boolean } | { ok: false; error: string } {
+):
+  | { ok: true; dryRun: boolean; agents: readonly Agent[] | undefined; hook: boolean }
+  | { ok: false; error: string } {
   let dryRun = false
+  let hook = true
+
+  // `undefined` until `--agent` is seen even once. E3 (#28): the flag *replaces* detection, so
+  // "not given" and "given as none" have to stay distinguishable all the way to
+  // `resolveWiring` — collapsing them into an empty array would make a plain `dogear init`
+  // wire nothing at all.
+  let agents: Agent[] | undefined
 
   for (const arg of args) {
     if (arg === '--dry-run') {
@@ -85,13 +117,44 @@ function readFlags(
       continue
     }
 
+    if (arg === '--no-hook') {
+      hook = false
+      continue
+    }
+
+    if (arg.startsWith('--agent=')) {
+      const value = arg.slice('--agent='.length)
+
+      if (!isAgentFlag(value)) {
+        return {
+          ok: false,
+          error:
+            `dogear init: unknown agent '${value}'. ` +
+            `Valid values are ${AGENTS.join(', ')}.`,
+        }
+      }
+
+      agents ??= []
+      // `none` selects nothing and is not additive — repeating the flag around it would be a
+      // contradiction the user cannot have meant, so the last word wins over the list so far.
+      if (value === 'none') agents = []
+      else if (!agents.includes(value)) agents.push(value)
+
+      continue
+    }
+
     return {
       ok: false,
       error:
         `dogear init: unrecognised argument '${arg}'. ` +
-        'The only flag is --dry-run, which reports what init would do and changes nothing.',
+        'Flags are --dry-run (report and change nothing), --agent=<name> (repeatable; ' +
+        `${AGENTS.join('|')}) and --no-hook (skip Claude Code's prompt hook).`,
     }
   }
 
-  return { ok: true, dryRun }
+  return { ok: true, dryRun, agents, hook }
+}
+
+function isAgentFlag(value: string): value is AgentFlag {
+  return (AGENTS as readonly string[]).includes(value)
 }
