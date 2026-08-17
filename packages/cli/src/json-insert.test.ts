@@ -133,6 +133,15 @@ describe('insertAt() placing a member', () => {
       expands: true,
     },
     {
+      name: 'into a file that opens with a byte order mark',
+      // `JSON.parse` throws on a leading BOM, so both the scan and the verification have to
+      // account for it — and it has to still be there afterwards. Windows editors write these.
+      source: '﻿{\n  "a": 1\n}\n',
+      path: [],
+      snippet: '"b": 2',
+      expected: { a: 1, b: 2 },
+    },
+    {
       name: 'into a deeply nested path',
       source: '{\n  "a": {\n    "b": {\n      "c": {}\n    }\n  }\n}\n',
       path: ['a', 'b', 'c'],
@@ -143,11 +152,13 @@ describe('insertAt() placing a member', () => {
   ]
 
   it.each(cases)('$name', ({ source, path, snippet, expected, expands }) => {
-    const result = insertAt(source, path, snippet)
+    const result = insertAt(source, path, snippet) as string
 
     expect(result).toBeDefined()
-    expect(JSON.parse(result as string)).toEqual(expected)
-    if (expands !== true) expect(preservesLines(source, result as string)).toBe(true)
+    expect(JSON.parse(result.replace(/^﻿/, ''))).toEqual(expected)
+    if (expands !== true) expect(preservesLines(source, result)).toBe(true)
+    // Whatever the file opened with, it still opens with.
+    expect(result.startsWith('﻿')).toBe(source.startsWith('﻿'))
   })
 })
 

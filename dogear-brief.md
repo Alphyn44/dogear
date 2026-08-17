@@ -1587,6 +1587,16 @@ commented `.vscode/mcp.json` is an ordinary thing to find, and the right answer 
 user, not to reformat a file they hand-wrote. Verified against the real 250-line settings.json
 in this repo: zero lines lost or reformatted.
 
+Two things the format matrix turned up that neither rule covers, both found by writing the tests
+rather than by reasoning about them. **A key that is present but wrongly typed has to decline**:
+`{"hooks": "x"}` parses, so a merge that only asks "is this an object?" inserts a second `"hooks"`
+key — and `JSON.parse` accepts duplicates and keeps the last, so the parse check waves it through
+and the user's value is silently shadowed. Init cannot tell a typo it should route around from
+data it would be destroying, so it declines and says so. And **the byte order mark has to be
+tolerated**: `JSON.parse` throws on a leading one, several Windows editors write them, and
+without special handling a perfectly valid `settings.json` is reported as unreadable. It is
+stripped for the parse only, never from what is written back.
+
 The alternative considered and rejected was E8's: print it, never write it. It is the safest
 option and it costs the ticket — in most Claude Code repos `.claude/settings.json` already
 exists, so the hook would never actually be wired, and "merged into `.claude/settings.json`"

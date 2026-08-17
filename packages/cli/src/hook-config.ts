@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import { CLI_ENTRY } from './detect.js'
-import { insertAt } from './json-insert.js'
+import { insertAt, stripBom } from './json-insert.js'
 import type { Plan, Step, Wiring } from './scaffold.js'
 
 /**
@@ -128,12 +128,19 @@ export function createHookStep(wiring: Wiring): Step {
  *
  * The third is the one that matters — it is what "existing hooks survive" means, because the
  * entry joins the array rather than replacing it.
+ *
+ * **A key that is present but holds the wrong kind of value declines, and that is not
+ * fussiness.** `{"hooks": "x"}` is valid JSON, so it parses, and a merge that only asked "is
+ * this an object?" would insert a *second* `"hooks"` key beside it. `JSON.parse` accepts
+ * duplicates and keeps the last — so the result sails through the guard inside `insertAt` and
+ * leaves the user with a settings file silently shadowing what they wrote. Init cannot tell a
+ * typo it should route around from data it would be destroying, so it says so and writes
+ * nothing. ./malformed.test.ts is the guard, and it found this rather than predicting it.
  */
 function merge(source: string, parsed: Parsed): string | undefined {
   const entry = JSON.stringify(ENTRY, null, 2)
-  const hooks = parsed.hooks
 
-  if (!isObject(hooks)) {
+  if (!has(parsed, 'hooks')) {
     return insertAt(
       source,
       [],
@@ -141,11 +148,29 @@ function merge(source: string, parsed: Parsed): string | undefined {
     )
   }
 
-  if (!Array.isArray(hooks[EVENT])) {
+  // Present but not an object — decline. See the note above `merge`: inserting beside it makes
+  // a duplicate key, and a duplicate key parses.
+  const hooks = parsed.hooks
+  if (!isObject(hooks)) return undefined
+
+  if (!has(hooks, EVENT)) {
     return insertAt(source, ['hooks'], `"${EVENT}": [\n  ${indent(entry)}\n]`)
   }
 
-  return insertAt(source, ['hooks', EVENT], entry)
+  return Array.isArray(hooks[EVENT])
+    ? insertAt(source, ['hooks', EVENT], entry)
+    : undefined
+}
+
+/**
+ * Is the key there at all, whatever it holds?
+ *
+ * `hasOwnProperty` rather than a check against `undefined`, matching ./detect.ts's `isDeclared`:
+ * the question is whether the *user's file* has the key, and `null` is a key that is present.
+ * Getting this wrong is exactly what produces the duplicate.
+ */
+function has(value: Parsed, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
 }
 
 /** Push the lines after the first in by one level. */
@@ -218,10 +243,17 @@ function unplaceable(): string {
 
 type Parsed = Record<string, unknown>
 
+/**
+ * The file as an object, or `undefined` for anything that is not one.
+ *
+ * `stripBom` because several Windows editors write one and `JSON.parse` throws on it — a
+ * settings file that is entirely valid would otherwise be reported as unreadable. The BOM stays
+ * in the text that gets spliced and written; only the parse sees it removed.
+ */
 function parse(source: string): Parsed | undefined {
   let value: unknown
   try {
-    value = JSON.parse(source)
+    value = JSON.parse(stripBom(source))
   } catch {
     return undefined
   }

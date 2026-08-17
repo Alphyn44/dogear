@@ -61,13 +61,28 @@ export function insertAt(
   // Rule 2. Everything above is text manipulation over a format with real syntax, and the only
   // honest way to claim the output is still JSON is to ask a parser. A caller that gets text
   // back has a guarantee; one that gets `undefined` has a fallback.
-  try {
-    JSON.parse(spliced)
-  } catch {
-    return undefined
-  }
+  return parseable(spliced) ? spliced : undefined
+}
 
-  return spliced
+/**
+ * Does this parse, ignoring a leading byte order mark?
+ *
+ * The BOM is stripped for the *check* and kept in the returned text, which is the whole point:
+ * a file that opened with one still opens with one afterwards. Callers parse the same way — see
+ * ./mcp-config.ts and ./hook-config.ts — so a BOM never reaches `JSON.parse`, which throws on it.
+ */
+export function parseable(source: string): boolean {
+  try {
+    JSON.parse(stripBom(source))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** A leading `﻿` removed, and nothing else touched. */
+export function stripBom(source: string): string {
+  return source.charCodeAt(0) === 0xfeff ? source.slice(1) : source
 }
 
 /** A container's interior: where its members start and where its closing bracket sits. */
@@ -137,8 +152,20 @@ function lastNonSpace(source: string, from: number, to: number): number {
   return from - 1
 }
 
+/**
+ * Whitespace, for the purposes of the structural scan — plus the byte order mark.
+ *
+ * `﻿` is not whitespace to a JSON parser (`JSON.parse` throws on a leading one), but it is
+ * exactly what several Windows editors put in front of a `.claude/settings.json`, and it is
+ * structurally inert: a BOM anywhere it could legitimately appear is either before the opening
+ * bracket or inside a string literal, and literals are skipped whole. Treating it as space here
+ * is what lets {@link insertAt} find the container at all — see {@link parseable}, which is the
+ * other half.
+ */
 function isSpace(code: number): boolean {
-  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d
+  return (
+    code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d || code === 0xfeff
+  )
 }
 
 /**

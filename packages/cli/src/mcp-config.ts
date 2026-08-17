@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 
 import type { Agent } from './detect.js'
 import { CLI_ENTRY } from './detect.js'
-import { insertAt } from './json-insert.js'
+import { insertAt, stripBom } from './json-insert.js'
 import type { Plan, Step, Wiring } from './scaffold.js'
 
 /**
@@ -145,13 +145,27 @@ function merge(source: string, parsed: Parsed, target: Target): string | undefin
   // found in the file, so a snippet that arrived pre-indented would come out doubly so.
   const entry = `${JSON.stringify(NAME)}: ${JSON.stringify(SERVER, null, 2)}`
 
+  if (!has(parsed, target.container)) {
+    return insertAt(
+      source,
+      [],
+      `${JSON.stringify(target.container)}: {\n  ${indent(entry)}\n}`,
+    )
+  }
+
+  // Present but not an object — `{"mcpServers": null}` and friends. Declining rather than
+  // inserting beside it, because a second `"mcpServers"` key *parses*: `JSON.parse` keeps the
+  // last duplicate, so the guard inside `insertAt` cannot catch it and the user's own value
+  // would be silently shadowed. ./hook-config.ts has the same trap and the same answer, and
+  // ./malformed.test.ts covers both.
   return isObject(parsed[target.container])
     ? insertAt(source, [target.container], entry)
-    : insertAt(
-        source,
-        [],
-        `${JSON.stringify(target.container)}: {\n  ${indent(entry)}\n}`,
-      )
+    : undefined
+}
+
+/** Is the key there at all, whatever it holds? `null` is present; absent is absent. */
+function has(value: Parsed, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
 }
 
 /** Push a multi-line snippet in by one level, for the lines after the first. */
@@ -239,11 +253,17 @@ function targetFor(file: string): Target {
 
 type Parsed = Record<string, unknown>
 
-/** A parsed object, or `undefined` for anything this cannot edit — including a root array. */
+/**
+ * A parsed object, or `undefined` for anything this cannot edit — including a root array.
+ *
+ * `stripBom` for the reason ./hook-config.ts gives: a Windows editor's byte order mark makes
+ * `JSON.parse` throw on a file that is otherwise perfectly valid. It is removed for the parse
+ * and kept in the text that gets written.
+ */
 function parse(source: string): Parsed | undefined {
   let value: unknown
   try {
-    value = JSON.parse(source)
+    value = JSON.parse(stripBom(source))
   } catch {
     return undefined
   }

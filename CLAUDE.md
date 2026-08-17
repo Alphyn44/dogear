@@ -174,6 +174,21 @@ naming what to add by hand. Do not "simplify" this to parse-and-stringify: this 
 `.claude/settings.json` writes hook objects on one line, and re-serialising reflows all 250 of
 them. `json-insert.test.ts` pins the byte preservation, including against a replica of that file.
 
+**A key that is present but wrongly typed must decline, and the parse check will not catch it
+for you.** `{"hooks": "x"}` parses, so a merge that only asks `isObject` inserts a *second*
+`"hooks"` key — and `JSON.parse` accepts duplicates, keeping the last, so the guard inside
+`insertAt` waves it through and the user's own value is silently shadowed. Both steps therefore
+ask `hasOwnProperty` first and return `undefined` when the key exists with the wrong type.
+`malformed.test.ts` is the guard; it found this rather than predicting it.
+
+**The BOM is tolerated on read and preserved on write.** `JSON.parse` throws on a leading `﻿`,
+which several Windows editors write, so both steps parse through `stripBom` and `isSpace` in the
+scanner treats it as whitespace — otherwise a perfectly valid `settings.json` gets reported as
+unreadable. It is never stripped from what lands on disk. `formats.test.ts` runs both steps
+across the whole matrix — two-space, four-space, tabs, CRLF, minified, BOM, no trailing newline,
+value-on-the-next-line, empty object — asserting valid JSON, byte preservation and idempotency
+for each, plus that CRLF files gain no lone `\n`.
+
 **Everything E3 writes points at `node <path>`, never `dogear`** — a global npm bin on Windows is
 a `.cmd` shim the exec form cannot run. The MCP configs use the repo-relative
 `node_modules/@dogear/cli/dist/cli.js` (an absolute global path would be committed and broken for
