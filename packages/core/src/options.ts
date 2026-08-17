@@ -11,6 +11,8 @@
  * (test files sit outside the build tsconfig) and fails on drift.
  */
 
+import { DEFAULT_HOSTS } from './host.js'
+
 /**
  * The key held to arm dogear.
  *
@@ -61,9 +63,31 @@ export interface InitOptions {
    * per-origin choice. This one is the project's, and it wins — see the brief.
    */
   readonly enabled?: boolean
+  /**
+   * F3's allow-list — the hosts dogear will run on. Default {@link DEFAULT_HOSTS}.
+   *
+   * **It replaces the defaults rather than extending them**, which is the contract ./host.ts
+   * has always documented and E7 (#40) is what finally supplies it: `.dogear/config.json`'s
+   * `hosts` key, layered by @dogear/vite and serialised onto the config parameter. An empty
+   * array is honoured as "nowhere" rather than read as absent.
+   *
+   * Unlike every other field here, this one has no plugin option above it. It is repo-wide
+   * safety configuration and belongs in the repo-wide committed file; @dogear/vite omits the
+   * key entirely when that file does not set one, so the fallback below is what runs in the
+   * ordinary case.
+   */
+  readonly hosts?: readonly string[]
 }
 
-/** {@link InitOptions} with every default applied. What core actually reads. */
+/**
+ * {@link InitOptions} with every default applied. What core actually reads.
+ *
+ * **`hosts` is deliberately not here**, though it is on `InitOptions`. This type is what
+ * `createSession` receives, and every field on it is one the session reads; the allow-list is
+ * consumed once, by the host guard, before a session exists at all. {@link resolveHosts} is
+ * its resolver for that reason — a field threaded through a consumer that ignores it would
+ * make this type stop meaning what its name says.
+ */
 export interface ResolvedOptions {
   readonly modifier: Modifier
   readonly endpoint: string
@@ -124,4 +148,31 @@ export function resolveOptions(options: InitOptions | undefined): ResolvedOption
     // unexpectedly absent looks like it is broken.
     enabled: enabled !== false,
   }
+}
+
+/**
+ * F3's allow-list for this page — E7 (#40).
+ *
+ * Separate from {@link resolveOptions} because it is consumed at a different moment by a
+ * different caller: `init()` hands it straight to the host guard and then never refers to it
+ * again, while everything `resolveOptions` returns travels on into the session.
+ *
+ * **All-or-nothing, and silent either way.** Every other resolution in this file falls back
+ * per-field; this one rejects a malformed list wholesale, because half of a safety list is
+ * not a safety list — dropping the bad entries would silently *widen* whatever the author was
+ * narrowing. Silent because the one page that can reach this code is a page where every
+ * structural layer already failed, and a console line there would announce a dev tool on the
+ * one page it must be invisible on (see ./host.ts). Reporting belongs to @dogear/vite, which
+ * reads the file in a terminal, drops bad entries where it can name them, and sends only what
+ * survived — so anything malformed *here* was hand-written onto the query parameter.
+ *
+ * An empty array is well-formed and survives as itself: "nowhere" is a thing
+ * `.dogear/config.json` is allowed to say, and reading it as absence would override someone
+ * who meant it.
+ */
+export function resolveHosts(options: InitOptions | undefined): readonly string[] {
+  const hosts = options?.hosts
+  return Array.isArray(hosts) && hosts.every((host) => typeof host === 'string')
+    ? hosts
+    : DEFAULT_HOSTS
 }

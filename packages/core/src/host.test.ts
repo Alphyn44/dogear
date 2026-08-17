@@ -182,6 +182,42 @@ describe('isCurrentHostAllowed', () => {
     vi.stubGlobal('location', {})
     expect(isCurrentHostAllowed()).toBe(false)
   })
+
+  /**
+   * E7 (#40) — the argument that carries `.dogear/config.json`'s `hosts` to this guard.
+   *
+   * The list *replaces* the defaults, so it has to be provable in both directions: it can
+   * deny a host the defaults allow, and allow one the defaults deny. A test for only the
+   * first would pass for an implementation that intersected the two lists.
+   */
+  it('denies a host the defaults allow, when a narrower list is supplied', () => {
+    vi.stubGlobal('location', { hostname: '192.168.1.42' })
+
+    expect(isCurrentHostAllowed()).toBe(true)
+    expect(isCurrentHostAllowed(['localhost'])).toBe(false)
+  })
+
+  it('allows a host the defaults deny, when the list says so', () => {
+    vi.stubGlobal('location', { hostname: 'staging.acme.com' })
+
+    expect(isCurrentHostAllowed()).toBe(false)
+    expect(isCurrentHostAllowed(['staging.acme.com'])).toBe(true)
+  })
+
+  it('denies everything for an empty list, which is a thing a config may say', () => {
+    vi.stubGlobal('location', { hostname: 'localhost' })
+
+    expect(isCurrentHostAllowed([])).toBe(false)
+  })
+
+  it('falls back to the defaults for an omitted list', () => {
+    // `undefined` reaches `isAllowedHost`'s own default parameter rather than a second copy
+    // of the fallback here, which is why passing it explicitly must behave identically.
+    vi.stubGlobal('location', { hostname: 'localhost' })
+
+    expect(isCurrentHostAllowed(undefined)).toBe(true)
+    expect(isCurrentHostAllowed()).toBe(true)
+  })
 })
 
 describe('the noop build (F1, layer 3)', () => {

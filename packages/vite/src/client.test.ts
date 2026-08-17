@@ -81,6 +81,57 @@ describe('the endpoint contract with @dogear/core', () => {
   })
 })
 
+/**
+ * E7's (#40) half of the contract — `hosts` from `.dogear/config.json` to F3's guard.
+ *
+ * The `InitOptions` annotation below is the real assertion, as it is for `modifier`: if the
+ * two hand-written copies of the type ever disagree about `hosts`, this file stops compiling
+ * and `npm run typecheck` fails.
+ */
+describe('the hosts contract with @dogear/core', () => {
+  it('serialises a list core would accept', () => {
+    const config: InitOptions = buildClientConfig({
+      endpoint: '/__dogear',
+      hosts: ['localhost', '*.test'],
+    })
+
+    expect(config.hosts).toEqual(['localhost', '*.test'])
+  })
+
+  it('leaves the key off entirely when no list was configured', () => {
+    // **Absent, not equal to the defaults.** Sending @dogear/vite's copy of DEFAULT_HOSTS
+    // would pin it: a plugin one version behind @dogear/core would keep overriding core's
+    // list with a stale one it never chose — the same failure the brief's E4 entry rejects
+    // for writing defaults into the config file. Omitted means "core decides".
+    expect(buildClientConfig({ endpoint: '/__dogear' })).not.toHaveProperty('hosts')
+  })
+
+  it('round-trips a list through the URL into core', () => {
+    const src = clientScriptSrc('/__dogear', {
+      modifier: 'alt',
+      endpoint: '/__dogear',
+      hosts: ['localhost', '10.0.0.0/8'],
+    })
+
+    expect(readConfig(`http://localhost:5173${src}`).hosts).toEqual([
+      'localhost',
+      '10.0.0.0/8',
+    ])
+  })
+
+  it('round-trips an empty list, which is a thing a config may say', () => {
+    // `[]` has to survive the wire distinguishably from absence, or "dogear runs nowhere"
+    // would silently become "dogear runs on the defaults".
+    const src = clientScriptSrc('/__dogear', {
+      modifier: 'alt',
+      endpoint: '/__dogear',
+      hosts: [],
+    })
+
+    expect(readConfig(`http://localhost:5173${src}`).hosts).toEqual([])
+  })
+})
+
 describe('clientScriptSrc', () => {
   it('points at the served bundle under the configured endpoint', () => {
     expect(

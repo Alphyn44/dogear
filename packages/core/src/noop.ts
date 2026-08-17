@@ -46,8 +46,14 @@ export function isAllowedHost(_hostname: string, _hosts?: readonly string[]): bo
   return false
 }
 
-/** Counterpart to `isCurrentHostAllowed` in ./index.ts. Always denies. */
-export function isCurrentHostAllowed(): boolean {
+/**
+ * Counterpart to `isCurrentHostAllowed` in ./index.ts. Always denies.
+ *
+ * The parameter is mirrored for the reason spelled out under `init` below: TypeScript would
+ * accept the shorter signature, and then `isCurrentHostAllowed(hosts)` would compile against
+ * the dev build and fail against the production one. E7 (#40) added it.
+ */
+export function isCurrentHostAllowed(_hosts?: readonly string[]): boolean {
   return false
 }
 

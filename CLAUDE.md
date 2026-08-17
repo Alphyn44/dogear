@@ -208,6 +208,46 @@ indent — the snippet's own leading whitespace is content the user copies, and 
 would corrupt it. The install command follows `Detection.manager` (from the root lockfile) and
 names `DetectedApp.manifestDir`, which is not always the app's own directory.
 
+**E7 gave `.dogear/config.json` its reader, and the layering is three lines of `??` guarding
+one rule.** `packages/vite/src/config-file.ts` returns *only the keys that survived
+validation*, and `configureServer` layers them as `option ?? file ?? default`. `??` rather
+than `||` is load-bearing — it falls through on `undefined` alone, so a literal `enabled:
+false` or `transform: false` option still beats the file, and a key the file omits reaches the
+**default** instead of a value the layering invented. `Object.keys()` on the result is also
+the confirmation line's content, which is why a rejected key is *dropped* rather than
+repaired: absent is a state the whole chain already handles. Four ordering facts matter.
+`findGitRoot` moved **above** the option resolution, because the file is found from the git
+root; the `options.enabled === false` check stayed **above that**, because a plugin option is
+dispositive by precedence and a disabled project must not be stoppable by a config it will
+never read; the file is read **once**, like `gitRoot` and `app`, so editing it needs a dev
+server restart that the confirmation line says out loud; and `app` is **not** layered — it is
+per Vite root while this file is per repo, which is the ambiguity C4 added the field to remove.
+
+**Reads may tolerate, writes must refuse — and this file is a read, so nothing in it throws.**
+A bad `dogear({ modifier: 'banana' })` still throws in `validateModifier`; the same value in
+`config.json` earns a warning and is dropped. The audiences differ: a `vite.config.ts` is the
+author's own code, while `config.json` is *committed*, so one person's typo would otherwise
+break every clone's `npm run dev`. The endpoint is validated by **calling `normaliseEndpoint`
+inside a `try`** rather than by restating its rules — an earlier draft accepted any non-empty
+string and let `"endpoint": "/"` throw out of the plugin a few lines later, which
+`index.test.ts` caught. That same function now also rejects a protocol-relative `//host` and
+anything carrying `?` or `#`: since F4 the endpoint becomes the injected `<script>`'s `src`,
+so `//evil.com` would have fetched core from a third-party host.
+
+**`hosts` is the one key with no plugin option, and it is omitted from the wire rather than
+defaulted onto it.** It is F3's allow-list — repo-wide safety configuration, so the repo-wide
+committed file is where it belongs. `ClientConfig.hosts` is absent unless the file set one,
+because serialising `@dogear/vite`'s copy of `DEFAULT_HOSTS` would *pin* it: a plugin a
+version behind `@dogear/core` would keep overriding core's list on behalf of a project that
+never chose one. In core it is resolved by **`resolveHosts`, deliberately not by
+`resolveOptions`** — `ResolvedOptions` is `createSession`'s parameter and every field on it is
+one the session reads, while the list is consumed once by the guard before a session exists.
+That split is also what let `init()`'s host check stay literally its first line. `resolveHosts`
+is **all-or-nothing** where every other resolution is per-field: a malformed array falls back
+to the defaults, because filtering would silently re-widen a list its author was narrowing.
+`[]` is well-formed and honoured as "nowhere". `noop.ts` mirrors the new
+`isCurrentHostAllowed(hosts?)` arity for the reason its own comment gives.
+
 **The `.gitignore` step asks git, and it is the CLI's only subprocess.** Whether
 `.dogear/queue.json` is ignored depends on `.git/info/exclude`, `core.excludesFile`, every
 `.gitignore` up the tree, and negation precedence — so `git.ts` shells out to `check-ignore`
@@ -305,7 +345,11 @@ production, which is the hole F1 layer 3 exists to close.
 
 **Three vitest environments, one config.** The DOM suites (`overlay`, `session`, `listeners`,
 `teardown`, `describe`, `init.host-bail`, `badge`, `panel`, `controller`, `preference`,
-`clipboard`) carry a `// @vitest-environment happy-dom` docblock; everything else stays `node`. All geometry is pure
+`clipboard`) carry a `// @vitest-environment happy-dom` docblock; everything else stays `node`.
+`packages/vite/src/index.test.ts` shares **one** temp git root across the whole file, created
+in `beforeAll` — so a test needing a `.dogear/config.json` writes it through the `withConfig`
+scope, never a bare `writeFileSync`. A leaked config would be read by every test after it and
+they would keep passing, silently running against a configuration they never asked for. All geometry is pure
 functions tested in the node environment, because happy-dom has no layout engine and
 `getBoundingClientRect` there returns zeros. B5's `submit` suite is `node` for the same reason
 — it stubs `fetch` and touches no DOM, which is why the transport is a module of its own.

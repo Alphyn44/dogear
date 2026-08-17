@@ -59,3 +59,58 @@ describe('init on a host that is not local', () => {
     },
   )
 })
+
+/**
+ * E7 (#40) — `hosts` reaching this guard from `.dogear/config.json`.
+ *
+ * This file's hostname is what makes it the right place: `shop.example.com` is denied by
+ * `DEFAULT_HOSTS`, so a list that *allows* it proves the supplied array replaced the defaults
+ * rather than being intersected with them. The narrowing direction is covered in
+ * ./host.test.ts, which can stub any hostname it likes.
+ */
+describe('init with a configured host list', () => {
+  /**
+   * How many listeners `init` attached — the observable difference between running and
+   * bailing, since the overlay mounts its host lazily and `outerHTML` is unchanged either way.
+   *
+   * Spied **per target**, never on `EventTarget.prototype`: happy-dom defines
+   * `addEventListener` as an own property on both `window` and `document`, and vitest installs
+   * its own `window.addEventListener` wrapper besides, so a prototype spy records none of the
+   * window-level listeners — which is nearly all of them. It fails in the worst way, reading
+   * zero whether dogear ran or not, so every bail assertion would pass vacuously. Same reason
+   * ./teardown.test.ts and ./controller.test.ts spy this way.
+   */
+  function listenersAttachedBy(start: () => () => void): number {
+    const onWindow = vi.spyOn(window, 'addEventListener')
+    const onDocument = vi.spyOn(document, 'addEventListener')
+
+    const stop = start()
+    const count = onWindow.mock.calls.length + onDocument.mock.calls.length
+    stop()
+
+    return count
+  }
+
+  it('starts on a host the defaults deny, when the list allows it', () => {
+    // `shop.example.com` is denied by DEFAULT_HOSTS, so this passing proves the supplied list
+    // *replaced* the defaults rather than being intersected with them.
+    expect(
+      listenersAttachedBy(() => init({ hosts: ['shop.example.com'] })),
+    ).toBeGreaterThan(0)
+  })
+
+  it('still bails when the list does not name this host', () => {
+    // Paired with the assertion above so a vacuous zero cannot hide: the same measurement
+    // returns a positive number one test earlier.
+    expect(listenersAttachedBy(() => init({ hosts: ['localhost'] }))).toBe(0)
+  })
+
+  it('bails on a malformed list rather than trusting half of it', () => {
+    // `resolveHosts` rejects wholesale and falls back to DEFAULT_HOSTS, which deny this page.
+    // A per-entry filter would have kept 'shop.example.com' and started dogear on a deployed
+    // site — the failure direction that actually matters for a safety layer.
+    const hosts = ['shop.example.com', 7] as unknown as readonly string[]
+
+    expect(listenersAttachedBy(() => init({ hosts }))).toBe(0)
+  })
+})

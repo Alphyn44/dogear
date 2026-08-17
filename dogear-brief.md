@@ -567,6 +567,7 @@ recognises, with the value each one falls back to:
   "endpoint": "/__dogear",
   "transform": true,
   "include": ["**/*.tsx", "**/*.jsx"],
+  "exclude": ["**/node_modules/**"],
   "hosts": [
     "localhost",
     "*.localhost",
@@ -577,7 +578,7 @@ recognises, with the value each one falls back to:
     "172.16.0.0/12",
     "192.168.0.0/16"
   ],
-  "agent": "claude-code"
+  "agent": "claude"
 }
 ```
 
@@ -586,9 +587,23 @@ recognises, with the value each one falls back to:
 absent key means "whatever dogear's current default is". Amended during E4 — see the
 Decisions log.
 
+`exclude` was added to the set during E7, which found it was a plugin option with no
+config key: a file that can widen `include` but cannot adjust the skip list is a
+half-configurable filter, and the commonest reason to touch `include` is also a reason
+to touch `exclude`. Like `include`, setting it *replaces* the default rather than
+extending it.
+
+`agent` still has no reader — it is a `dogear init` concern, and E3 shipped the choice as
+the `--agent` flag instead. Its value was corrected from `claude-code` to `claude` during
+E7 to match the values that flag actually accepts (`claude|cursor|vscode|none`); nothing
+reads the key either way, and giving it one needs its own story.
+
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
-in `~/.dogear/config.json` and lose to both. E4 (#29) writes the file; **E7 (#40)** is what
-gives it a reader, so nothing consumes any of these keys yet.
+in `~/.dogear/config.json` and lose to both — still unbuilt, and out of E7's scope.
+E4 (#29) writes the file; **E7 (#40)** gave it a reader in `@dogear/vite`.
+
+**A bad value in this file is warned about and dropped, never thrown on**, and that is
+the opposite of how the same value behaves as a plugin option. See the Decisions log.
 
 `enabled` is the repo-wide form of B6's kill switch, and it sits at the top of that same
 precedence chain: `dogear({ enabled: false })` beats the file, which beats the default. It
@@ -878,12 +893,14 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 - `@dogear/vite` reads `<git-root>/.dogear/config.json` and layers it under its own plugin
   options: option, then file, then default. A key the file does not set is left to the
   default, not overwritten with one.
-- `enabled`, `endpoint`, `modifier`, `transform` and `include` are all layered. `app` is
-  not — it is per Vite root, and this file is per repo.
+- `enabled`, `endpoint`, `modifier`, `transform`, `include` and `exclude` are all layered.
+  `app` is not — it is per Vite root, and this file is per repo. `exclude` was added to the
+  recognised set during E7; see the Config section.
 - `hosts` reaches core's `isAllowedHost`, replacing the defaults rather than extending
-  them.
+  them. It is omitted from the wire entirely when the file does not set one.
 - A config that will not parse is reported in the dev server's terminal and the plugin
-  falls back to its options, rather than taking the dev server down.
+  falls back to its options, rather than taking the dev server down. So is a key that
+  parses but holds the wrong kind of value — see the Decisions log.
 
 Split out of E4 during E4, which shipped the file without a reader. The four code comments
 that named E4 for this work now name E7; see the Decisions log.
@@ -979,6 +996,60 @@ guard, a production-safety layer — out of a ticket about ignore rules. The cos
 release where `.dogear/config.json` exists and nothing consumes it, which is visible and
 harmless; the alternative was one ticket spanning three packages and touching the last
 line of the production defense.
+
+**A bad value in `.dogear/config.json` is warned about and dropped; the same value as a
+plugin option still throws. Settled during E7.** `dogear({ modifier: 'banana' })` throws at
+config time, and that stays right: `vite.config.ts` is the author's own code, in the file
+they are editing, and a typo should be named loudly in the terminal in front of them. The
+config file is a different artifact with a different audience — it is *committed*, so
+whoever broke it is often not whoever is running the dev server, and one person's typo must
+not stop everyone else's `npm run dev`. It is also user data that `dogear init` deliberately
+never validates on the way in, so this reader is the first thing that will ever tell anyone
+their config is wrong; the useful thing for it to do is say so and carry on.
+
+Dropping rather than repairing is the other half. A rejected key is simply absent, so the
+`??` chain falls through to the plugin option or the default exactly as if it had never been
+written — which is what keeps "an unset key falls to the default rather than being
+overwritten with one" true for broken keys as well as missing ones. Guessing what a value
+was meant to be would make the precedence chain unpredictable in the one case where someone
+is already confused.
+
+The endpoint is the exception that proves the shape: it is validated by *calling*
+`normaliseEndpoint` inside a `try`, not by restating its rules. An earlier draft accepted any
+non-empty string, and `"endpoint": "/"` then threw out of the plugin a few lines later —
+a dev server killed by a data file, which is the failure this whole rule exists to prevent.
+`packages/vite/src/index.test.ts` found it rather than predicting it.
+
+**`hosts` is omitted from the wire when the config file does not set one. Settled during
+E7.** The plugin could resolve `hosts` to `DEFAULT_HOSTS` and always serialise the array;
+instead the key is absent unless the file supplied it, and `@dogear/core` applies its own
+defaults. The reason is the one E4 already recorded for not writing defaults into the config
+file: a restated default *pins* it. `@dogear/vite` and `@dogear/core` version independently,
+so a plugin one release behind would keep overriding core's list with a stale copy on behalf
+of a project that never expressed an opinion about it. Omission is the only form under which
+the two halves can move separately.
+
+It also keeps `[]` meaningful. An empty array has to survive the wire distinguishably from
+absence, or "dogear runs nowhere" silently becomes "dogear runs on the defaults" — so `[]` is
+honoured as itself, and `enabled: false` remains the clearer way to say the same thing.
+
+Core resolves the list **all-or-nothing**, unlike every other field it resolves per-field: a
+malformed array falls back to the defaults rather than to the strings inside it, because half
+of a safety list is not a safety list and filtering would silently *widen* whatever the author
+was narrowing. The per-entry dropping happens in `@dogear/vite`, which reads the file in a
+terminal and can name what it dropped. Core is silent, for F3's usual reason.
+
+**`normaliseEndpoint` rejects protocol-relative paths, queries and fragments. Settled during
+E7.** It already refused the site root; it accepted `//evil.com`, which is a protocol-relative
+URL — and since F4 the endpoint is not only where the middleware mounts but the `src` of the
+injected `<script>`, so a dev page would have fetched dogear's bundle from a third-party host.
+That contradicts "zero network egress" outright. A `?` or `#` fails the other way round, by
+colliding with the config parameter the same URL carries.
+
+The hole predates E7 and was reachable only from `vite.config.ts`, which was never a trust
+boundary — it is executable code loaded by the same process. E7 is what makes a *data file*
+able to set the field, which is a new shape of the same problem, and the rule lives in the one
+function every endpoint flows through so that both layers are covered by it.
 
 **init asks git whether the queue is ignored; it does not read `.gitignore`. Settled
 during E4.** "Is `.dogear/queue.json` ignored?" depends on `.git/info/exclude`, on the
