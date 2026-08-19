@@ -966,6 +966,46 @@ binary fails on every prompt the user types.
 **F3 — Runtime hostname bail**
 - Core refuses to initialize on a non-local hostname even if every other layer failed.
 
+### Epic G — Release (M5)
+
+Everything above makes dogear work in *this* repository. This epic is what makes it
+installable in someone else's, and none of it was tracked while the features were being
+built — which is why it is filed as an epic rather than left as a release checklist.
+
+**G1 — The repository reads as a product**
+- `README.md` describes what dogear does, how to install it and how to use it, and no longer
+  says the product is not built yet.
+- An MIT `LICENSE` file exists at the root, matching the `license` field all three manifests
+  already declare.
+- Each published package carries its own `README.md`, because npm renders that file — and
+  only that file — on the package page.
+
+**G2 — The packages are publishable**
+- `@dogear/core`, `@dogear/vite` and `@dogear/cli` drop `private: true` and carry a real
+  version. `@dogear/queue` keeps both — it is source-only and inlined, and publishing it
+  would add a runtime dependency the three-package install story does not have.
+- `npm pack` on each produces a tarball containing `dist/` and no tests or fixtures.
+- Nothing else about the manifests changes: `repository.directory`, `files` and `license`
+  were written correctly when each package was created.
+
+**G3 — The install path is exercised end to end, before anyone else runs it**
+- A global install from a packed tarball puts `dogear` on PATH, and `dogear init` sets up a
+  repository that was never part of this workspace.
+- The plugin installs into that repository, its dev server serves the overlay, a click
+  reaches `.dogear/queue.json`, and an agent reads it back through MCP.
+- Verified on a repository dogear has never seen — a fresh Vite app, not `examples/react-app`,
+  which resolves the workspace copies and therefore proves nothing about an install.
+
+This is the one user journey nobody has run start to finish, and it is the first one a new
+user hits. It is deliberately ordered before G4: a tarball can be installed locally, so
+publishing is not a prerequisite for finding out whether the install works.
+
+**G4 — Publishing from CI, with provenance**
+- A tagged release publishes all three packages from GitHub Actions.
+- Publishing uses OIDC trusted publishing — no stored credential, and provenance
+  attestations emitted automatically. See Repo and publishing for why this is not optional.
+- The first publish of each scoped package uses `--access public`.
+
 ### Non-functional requirements
 
 - **Browsers:** Firefox, Chrome, Safari. Firefox is the point — it's what an extension
@@ -987,8 +1027,9 @@ Increasing order of how much can go wrong.
 | **M1** | Overlay | B1–B7 | Modifier-click, hover outline, comment box, in-memory queue, POST on submit. Ships with selector + text only, and is **already useful** — an agent can often find a component from a distinctive class or text. |
 | **M2** | Localization | C1–C5 | The attribute transform. Deterministic, synchronous, unit-testable against fixture files. |
 | **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
-| **M4** | Install and init | E1–E5 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
-| — | Safety | F1–F3 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
+| **M4** | Install and init | E1–E8 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
+| **M5** | Release | G1–G4 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages are private and unpublished until now, so `npm i -D @dogear/vite` resolves to nothing and the install path M4 prints instructions for has never been run by anyone. |
+| — | Safety | F1–F4 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
 
 Two deliberate orderings worth noting:
 

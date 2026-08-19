@@ -12,8 +12,8 @@ TITLE      "<story ID> — <short title>", e.g. "C1 — Attribute transform".
            Work with no brief story just gets a plain title.
 
 LABELS     One epic label: epic:pipe | epic:pointing | epic:localization |
-           epic:delivery | epic:init | epic:safety
-MILESTONE  M0–M4.
+           epic:delivery | epic:init | epic:safety | epic:release
+MILESTONE  M0–M5.
 DEPENDS    Real GitHub issue dependencies, not prose. Only where the work
            genuinely cannot begin — the milestone already carries build order,
            and a loose edge blocks closing an issue that isn't really blocked.
