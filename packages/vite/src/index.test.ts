@@ -7,6 +7,7 @@ import { normalizePath } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { readConfig } from '../../core/src/client-config.js'
+import { UNBUILT_CORE_WARNING } from './client.js'
 import { dogear } from './index.js'
 import { SENTINEL } from './sentinel.js'
 import { SOURCE_ATTRIBUTE } from './stamp.js'
@@ -51,7 +52,15 @@ function fakeServer(serverRoot: string, log: ServerLog): ViteDevServer {
     config: {
       root: serverRoot,
       logger: {
-        warn: (message: string) => log.warnings.push(message),
+        // Dropped rather than recorded: whether `@dogear/core` has been built is
+        // environmental, not something any case here is about. `npm test` is deliberately
+        // build-independent, so this warning is absent on a machine that has run
+        // `npm run build` and present in CI, which runs the suites first — and an
+        // assertion that the plugin warned about nothing would pass locally and fail
+        // there. ./client.test.ts skips its own case for the same reason.
+        warn: (message: string) => {
+          if (message !== UNBUILT_CORE_WARNING) log.warnings.push(message)
+        },
         info: (message: string) => log.infos.push(message),
       },
     },

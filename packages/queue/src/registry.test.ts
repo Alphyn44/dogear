@@ -9,6 +9,7 @@ import {
   deregisterProject,
   deregisterServer,
   isProcessAlive,
+  normaliseKey,
   readRegistry,
   registerProject,
   registerServer,
@@ -78,29 +79,62 @@ describe('registryHome / registryPath', () => {
   })
 })
 
-describe('registryKey', () => {
+/**
+ * The rules, on paths that are already absolute — so they run on Linux and macOS too.
+ *
+ * A drive letter only survives `resolve()` on Windows; everywhere else `c:` is an ordinary
+ * relative segment and the cwd gets prepended, which makes every assertion below false when
+ * routed through `registryKey`. dogear is written on Windows and merged by Linux CI, so
+ * asserting these against `registryKey` would mean the invariant the function exists for was
+ * never checked by the machine holding the gate. See ./registry.ts.
+ */
+describe('normaliseKey', () => {
   it('upper-cases a drive letter, so one repo cannot become two entries', () => {
     // The failure this whole function exists for: `dogear init` from a shell and a Vite
     // server spawned by npm report the same repository with different drive-letter case.
-    expect(registryKey('c:/Code Projects/dogear')).toBe(
-      registryKey('C:/Code Projects/dogear'),
+    expect(normaliseKey('c:/Code Projects/dogear')).toBe(
+      normaliseKey('C:/Code Projects/dogear'),
     )
   })
 
   it('agrees across separators', () => {
-    expect(registryKey('c:\\Code Projects\\dogear')).toBe(
-      registryKey('c:/Code Projects/dogear'),
+    expect(normaliseKey('c:\\Code Projects\\dogear')).toBe(
+      normaliseKey('c:/Code Projects/dogear'),
     )
-  })
-
-  it('produces forward slashes', () => {
-    expect(registryKey(home)).not.toContain('\\')
   })
 
   it('leaves the rest of the path case alone', () => {
     // Directory names are the user's and are displayed back. Lower-casing the whole path
     // would make `dogear status` misspell them.
-    expect(registryKey('c:/Code Projects/DoGeAr')).toContain('DoGeAr')
+    expect(normaliseKey('c:/Code Projects/DoGeAr')).toContain('DoGeAr')
+  })
+
+  it('leaves a POSIX path alone but for its separators', () => {
+    // The anchored pattern cannot fire without a drive letter, which is every path on Linux
+    // and macOS — including one whose first segment happens to be a single letter.
+    expect(normaliseKey('/home/tyler/code/dogear')).toBe('/home/tyler/code/dogear')
+    expect(normaliseKey('/c/code/dogear')).toBe('/c/code/dogear')
+  })
+})
+
+describe('registryKey', () => {
+  // Windows-only by construction: see ./registry.ts. `normaliseKey` above carries the rules
+  // on every platform; this is the one case that has to go through `resolve`.
+  it.runIf(process.platform === 'win32')(
+    'collapses a drive letter through resolve()',
+    () => {
+      expect(registryKey('c:/Code Projects/dogear')).toBe(
+        registryKey('C:/Code Projects/dogear'),
+      )
+    },
+  )
+
+  it('produces forward slashes', () => {
+    expect(registryKey(home)).not.toContain('\\')
+  })
+
+  it('resolves a relative path, so the cwd cannot fork one repo into two', () => {
+    expect(registryKey('.')).toBe(normaliseKey(resolve('.')))
   })
 
   it('distinguishes genuinely different repositories', () => {

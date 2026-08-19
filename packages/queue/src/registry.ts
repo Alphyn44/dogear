@@ -185,7 +185,26 @@ export function registryPath(env: RegistryEnv = process.env): string {
  * which is exactly the state `dogear status` has to survive and report.
  */
 export function registryKey(root: string): string {
-  const forward = resolve(root).replaceAll('\\', '/')
+  return normaliseKey(resolve(root))
+}
+
+/**
+ * {@link registryKey}'s rules, applied to a path that is already absolute.
+ *
+ * Split out so the rules are testable on **every** platform. `resolve()` treats `c:` as a
+ * drive only on Windows — on Linux and macOS it is an ordinary relative segment appended to
+ * the cwd, so the two spellings genuinely *are* two different directories there and no
+ * assertion about them can hold. That is Node's platform behaviour rather than ours, and
+ * dogear is developed on Windows while CI runs on Linux: going through `resolve` would leave
+ * the one failure this function exists for unexercised by the machine that gates the merge.
+ * The rules below are pure string work and behave identically on all three platforms, so
+ * they are checked everywhere and only the end-to-end case is Windows-gated.
+ *
+ * A path carrying no drive letter is untouched but for its separators, which is every path on
+ * Linux and macOS: the pattern is anchored, and `resolve()` there always yields a leading `/`.
+ */
+export function normaliseKey(absolute: string): string {
+  const forward = absolute.replaceAll('\\', '/')
 
   return forward.replace(/^[a-z]:/, (drive) => drive.toUpperCase())
 }

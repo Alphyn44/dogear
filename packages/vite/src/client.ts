@@ -112,6 +112,21 @@ const resolveFrom = createRequire(import.meta.url)
  * exposes a manifest, not code, so `@dogear/core` still resolves to the noop for every
  * consumer under every condition but `development`.
  */
+/**
+ * What the *terminal* gets when {@link resolveCoreDist} finds nothing — the twin of
+ * `MISSING_BUNDLE_STUB`, which says the same thing in the browser console.
+ *
+ * A named constant rather than an inline string because the tests have to recognise it.
+ * Whether core's `dist/` exists is environmental — `npm test` is deliberately
+ * build-independent, so it is present on a developer's machine after a build and absent in
+ * CI, which runs the suites before `npm run build`. Every harness asserting "the plugin
+ * warned about nothing" therefore has to drop precisely this message, and matching on a
+ * copied substring would let the two drift apart silently.
+ */
+export const UNBUILT_CORE_WARNING =
+  '[dogear] @dogear/core has not been built, so the overlay will not load. ' +
+  'Run `npm run build -w @dogear/core`.'
+
 export function resolveCoreDist(): ClientDist | undefined {
   let manifest: string
   try {

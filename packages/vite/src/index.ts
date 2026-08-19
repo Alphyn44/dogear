@@ -16,6 +16,7 @@ import {
   clientScriptSrc,
   MODIFIERS,
   resolveCoreDist,
+  UNBUILT_CORE_WARNING,
 } from './client.js'
 import { readConfigFile } from './config-file.js'
 import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
@@ -311,10 +312,7 @@ export function dogear(options: DogearOptions = {}): Plugin {
         // Not fatal — the route answers with a stub module that says the same thing in the
         // browser console. Said here too, because the terminal is where someone who just
         // cloned the repo is actually looking.
-        server.config.logger.warn(
-          '[dogear] @dogear/core has not been built, so the overlay will not load. Run ' +
-            '`npm run build -w @dogear/core`.',
-        )
+        server.config.logger.warn(UNBUILT_CORE_WARNING)
       }
 
       // C4 (#18). Resolved once, for the same reason the git root above is: the Vite root

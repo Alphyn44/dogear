@@ -67,6 +67,7 @@ export {
   deregisterProject,
   deregisterServer,
   isProcessAlive,
+  normaliseKey,
   readRegistry,
   registerProject,
   registerServer,

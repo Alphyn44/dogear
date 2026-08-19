@@ -6,6 +6,7 @@ import { readRegistry, registryKey, registryPath } from '@dogear/queue'
 import type { Plugin, ViteDevServer } from 'vite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { UNBUILT_CORE_WARNING } from './client.js'
 import { dogear } from './index.js'
 
 /**
@@ -83,7 +84,14 @@ function run(
     config: {
       root,
       server: {},
-      logger: { warn: (m: string) => warnings.push(m), info: () => {} },
+      logger: {
+        // Not recorded, for the reason ./index.test.ts's fake logger gives at length: core's
+        // build state is environmental, and nothing in this file is about it.
+        warn: (m: string) => {
+          if (m !== UNBUILT_CORE_WARNING) warnings.push(m)
+        },
+        info: () => {},
+      },
     },
     middlewares: { use: () => {} },
     httpServer,
