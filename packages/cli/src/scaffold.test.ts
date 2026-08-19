@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 
-import { CONFIG_FILE, QUEUE_DIR } from '@dogear/queue'
+import { CONFIG_FILE, QUEUE_DIR, registryPath, shortenHome } from '@dogear/queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Agent, Cli, Detection } from './detect.js'
@@ -16,6 +16,7 @@ import { resolveWiring, scaffold } from './scaffold.js'
 import {
   createRepo,
   isolateGitConfig,
+  isolateRegistry,
   NO_DETECTION,
   removeRepo,
   trackFile,
@@ -43,9 +44,13 @@ import {
 
 let root: string
 let restoreGitConfig: () => void
+let registry: ReturnType<typeof isolateRegistry>
 
 beforeEach(() => {
   restoreGitConfig = isolateGitConfig()
+  // E5 (#30). The last step registers the repo in the machine-level registry; without this
+  // every case in this file would write into the developer's own home directory.
+  registry = isolateRegistry()
   root = createRepo('dogear-scaffold-')
 
   // A Vite repository, since E2 (#27): detection runs on every invocation and a repo with no
@@ -67,8 +72,20 @@ beforeEach(() => {
 
 afterEach(() => {
   removeRepo(root)
+  registry.restore()
   restoreGitConfig()
 })
+
+/**
+ * How E5's (#30) registry step names its target.
+ *
+ * Computed rather than written out: `isolateRegistry()` picks a fresh temp directory per test,
+ * and on Windows `tmpdir()` sits under the home directory, so `shortenHome` collapses it to a
+ * `~/…` path a literal could not predict.
+ */
+function registryLabel(): string {
+  return shortenHome(registryPath(process.env))
+}
 
 /** The report's first line, which names the root init actually resolved. */
 function header(): string {
@@ -158,6 +175,9 @@ describe('scaffold() on a fresh repository', () => {
         // gets it pulled, then the hook that is the tier on top.
         ...WIRING,
         '  created .gitignore',
+        // E5 (#30), last: the only step that writes outside the repository, and the only one
+        // whose work is not part of the feature itself.
+        `  registered this repository in ${registryLabel()}`,
         ...BLOCK,
       ].join('\n'),
     )
@@ -514,6 +534,7 @@ describe('scaffold() with dryRun', () => {
         '  would create AGENTS.md',
         '  would create .claude/settings.json',
         '  would create .gitignore',
+        `  would register this repository in ${registryLabel()}`,
         ...BLOCK,
       ].join('\n'),
     )

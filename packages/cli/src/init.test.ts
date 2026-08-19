@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { init } from './init.js'
 import { isAsync } from './run.js'
+import { isolateRegistry } from './test-repo.js'
 
 /**
  * The command adapter, not the scaffolding — E1 (#26).
@@ -19,13 +20,21 @@ import { isAsync } from './run.js'
  */
 
 let root: string
+let registry: ReturnType<typeof isolateRegistry>
 
 beforeEach(() => {
+  // E5 (#30). `init()` reaches `scaffold()`, whose last step writes to the machine-level
+  // registry — so without this every case below registers its temp directory in the
+  // developer's real `~/.dogear/projects.json`. That failure is invisible: the suite passes
+  // either way, and the only evidence is a growing file full of directories that no longer
+  // exist. It was found by looking, not by a red test.
+  registry = isolateRegistry()
   root = mkdtempSync(join(tmpdir(), 'dogear-init-'))
 })
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })
+  registry.restore()
   vi.restoreAllMocks()
 })
 

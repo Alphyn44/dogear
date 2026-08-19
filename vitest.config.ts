@@ -18,5 +18,8 @@ export default defineConfig({
     // selecting by directory keeps the two configs from needing exclude rules.
     include: ['packages/*/src/**/*.test.ts', 'scripts/*.test.ts'],
     environment: 'node',
+    // E5 (#30). Keeps `DOGEAR_HOME` off the developer's real home directory by default —
+    // see ./vitest.setup.ts for why this is a global rather than a convention.
+    setupFiles: ['./vitest.setup.ts'],
   },
 })

@@ -19,8 +19,19 @@ import { COMMANDS, isAsync, run, usage } from './run.js'
  * dispatch is *lazy*. `run(['init'])` resolves this repo's git root and returns a continuation,
  * and nothing below ever calls it — so no `.dogear/` is created and no file in this repository
  * is touched. ./init.test.ts and ./scaffold.test.ts do the real work against temp roots.
+ *
+ * **E5 (#30) moved `status` across and emptied `UNIMPLEMENTED` for the first time**, which is
+ * why the table below it is declared conditionally: `it.each([])` is a collection-time error in
+ * vitest, so a suite that simply updated the list would fail to load rather than fail an
+ * assertion. The accounting test still runs and still covers the case the split exists for — a
+ * command added to COMMANDS and never built has to appear in one list or the other.
+ *
+ * `status` is safe among the dispatched commands, and for a stronger reason than `init`'s: it
+ * never writes anything at all. `run(['status'])` reads the real environment, where
+ * ../../../vitest.setup.ts has pinned `DOGEAR_HOME` to a temp directory — so it finds an empty
+ * registry and says so. ./status.test.ts covers the output shapes.
  */
-const IMPLEMENTED = ['init', 'hook', 'mcp', 'prune'] as const
+const IMPLEMENTED = ['init', 'hook', 'mcp', 'prune', 'status'] as const
 const UNIMPLEMENTED = COMMANDS.filter(
   (command) => !(IMPLEMENTED as readonly string[]).includes(command),
 )
@@ -40,15 +51,18 @@ describe('run()', () => {
     expect(run(argv)).toEqual({ output: usage(), exitCode: 0 })
   })
 
-  it.each(UNIMPLEMENTED.map((command) => ({ command })))(
-    'recognises $command but reports it unimplemented',
-    ({ command }) => {
-      const result = asResult(run([command]))
-      expect(result.exitCode).toBe(1)
-      expect(result.output).toContain('not implemented')
-      expect(result.output).toContain(command)
-    },
-  )
+  // Declared only when there is something to declare — see the header. Empty since E5 (#30).
+  if (UNIMPLEMENTED.length > 0) {
+    it.each(UNIMPLEMENTED.map((command) => ({ command })))(
+      'recognises $command but reports it unimplemented',
+      ({ command }) => {
+        const result = asResult(run([command]))
+        expect(result.exitCode).toBe(1)
+        expect(result.output).toContain('not implemented')
+        expect(result.output).toContain(command)
+      },
+    )
+  }
 
   it('accounts for every command as either implemented or not', () => {
     expect([...IMPLEMENTED, ...UNIMPLEMENTED].sort()).toEqual([...COMMANDS].sort())
@@ -94,6 +108,16 @@ describe('run()', () => {
     expect(rejected.output).toContain('--nope')
   })
 
+  it('dispatches `status` instead of reporting it unimplemented', () => {
+    // Safe to actually run, unlike `prune`: status never writes. vitest.setup.ts has pointed
+    // DOGEAR_HOME at a temp directory, so this reads an empty registry rather than the
+    // developer's own.
+    const result = asResult(run(['status']))
+
+    expect(result.exitCode).toBe(0)
+    expect(result.output).not.toContain('not implemented')
+  })
+
   it('distinguishes an unknown command from an unimplemented one', () => {
     const unknown = asResult(run(['wibble']))
     expect(unknown.exitCode).toBe(1)
@@ -118,12 +142,13 @@ describe('usage()', () => {
     expect(usage()).toContain('your agent runs this, not you')
   })
 
-  it.each(IMPLEMENTED.map((command) => ({ command })))(
-    'does not still advertise $command as unbuilt',
-    ({ command }) => {
-      // The footer line named only `hook` until D1. A usage string that lies about what is
-      // implemented is the first thing a new user reads.
-      expect(usage()).toContain(`\`${command}\``)
-    },
-  )
+  it('makes no claim about what is unbuilt, now that nothing is', () => {
+    // This replaced a per-command check that `usage()` listed each implemented command in a
+    // "Only `x`, `y` … are implemented" footer. E5 (#30) implemented the last command and
+    // deleted that footer, so the old assertion could only have been satisfied by keeping a
+    // sentence with nothing left to say. What matters is the property the footer existed for:
+    // a usage string that lies about what is implemented is the first thing a new user reads.
+    expect(usage()).not.toContain('not implemented')
+    expect(usage()).not.toContain('are implemented')
+  })
 })

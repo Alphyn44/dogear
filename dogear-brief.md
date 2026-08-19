@@ -186,7 +186,7 @@ Installed globally, provides `dogear` on PATH. Subcommands:
 | `dogear mcp` | Run the MCP server over stdio |
 | `dogear hook` | Emit `UserPromptSubmit` JSON for Claude Code |
 | `dogear prune` | Drop resolved items |
-| `dogear status` | What's running, what's pending, across all registered repos |
+| `dogear status` | What's running, what's pending, across all registered repos. The one command that runs outside a repo |
 
 Absorbing the hook into the CLI removes a package that would otherwise exist to hold
 about fifty lines.
@@ -306,9 +306,21 @@ processes appending to one file. The atomic temp filename must include the pid, 
 the write must be read-modify-write — re-read the queue immediately before writing,
 never cache it at server start. Otherwise app A's submit silently drops app B's items.
 
-**Machine-level registry.** `~/.dogear/projects.json` maps origin → repo root, written
-by each plugin instance at startup. It powers `dogear status` and is the piece a future
-sidecar or extension mode would need, since those *do* have the URL-to-project problem.
+**Machine-level registry.** `~/.dogear/projects.json` records every repo dogear knows about
+and the dev servers currently serving each one. It powers `dogear status` and is the piece a
+future sidecar or extension mode would need, since those *do* have the URL-to-project problem.
+Built by E5 (#30); `$DOGEAR_HOME` overrides the location.
+
+**It has two writers, and they write different halves of an entry.** `dogear init` records
+that a repo exists (install step 7 below); each plugin instance records its own dev server
+once that server is *listening*. Neither is optional and neither is sufficient — see the
+Decisions log for why the earlier "written by each plugin instance at startup" was wrong on
+both counts.
+
+Entries are keyed by a **normalised repo root**, not by origin: an entry has to exist before
+any origin does, and one repo must not become two entries when two processes disagree about
+a Windows drive letter's case. The origin→root direction a sidecar would want is a scan over
+a handful of entries.
 
 ---
 
@@ -484,7 +496,7 @@ matching Vite's own `/__vite_ping` convention):
 | `POST` | `/__dogear/annotations` | Submit a batch |
 | `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
 | `GET` | `/__dogear/client.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
-| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. D4 was the last plausible claimant and turned it down — its clipboard copies the in-memory batch, since "works with no server" is one of its acceptance criteria. E5 is the only story left that could want it |
+| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and now in no story at all.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. D4 was the last plausible claimant and turned it down — its clipboard copies the in-memory batch, since "works with no server" is one of its acceptance criteria. E5 was the last story that could have wanted it and **declined**: `dogear status` reads each repo's `queue.json` off disk, which works for the stopped dev servers this endpoint could never answer for. Nothing is left to claim it |
 | `POST` | `/__dogear/prune` | Drop resolved items — **not built.** D6 shipped prune on the CLI and MCP surfaces and deferred this one for want of a caller; see the Decisions log |
 
 ### MCP tools
@@ -654,7 +666,8 @@ cd my-repo && dogear init   # once per repo
 6. **Prints the plugin install and the two-line `vite.config` change.** It writes neither.
    Config files are too varied to rewrite safely, and the manifest is printed rather than
    edited for reasons of its own — see the Decisions log. Amended during E8.
-7. **Registers the repo** in `~/.dogear/projects.json`.
+7. **Registers the repo** in `~/.dogear/projects.json` — that it *exists*, not any dev
+   server, which init has no way to know about. Built by E5 (#30).
 
 Re-running is safe: it diffs against what's there and only reports what changed.
 
@@ -878,7 +891,13 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 
 **E5 — Cross-repo status**
 - `dogear status` lists registered repos, running dev servers, and pending counts.
-- It works from anywhere, not just inside a repo.
+- It works from anywhere, not just inside a repo. It is the **only** command that does not
+  refuse outside one — every other walks up for `.git` and gives up.
+- It never writes. A dead dev server's record is filtered out of the display and dropped by
+  the *plugin* when that repo next starts one; a repo whose directory has gone is reported,
+  not removed.
+- No MCP tool answers this, which is a deliberate exception to "everything works through
+  MCP" — see the Decisions log.
 
 **E6 — Undoing an init**
 - `dogear init --undo` removes what init added to *this* repo and reports what it removed.
@@ -1672,6 +1691,54 @@ The alternative considered and rejected was E8's: print it, never write it. It i
 option and it costs the ticket — in most Claude Code repos `.claude/settings.json` already
 exists, so the hook would never actually be wired, and "merged into `.claude/settings.json`"
 would have become "printed for you to paste".
+
+**The registry has two writers, and is keyed by repo root rather than origin. Settled during
+E5, correcting this document against itself.**
+This document said two incompatible things and neither section knew about the other: the
+multiple-dev-servers section had the registry "written by each plugin instance at startup",
+and install step 7 had `dogear init` registering the repo. There was no Decisions entry, so
+there was nothing to defer to.
+
+Decided on merits, and both halves are needed. **`init` cannot write an origin** — there is no
+dev server when it runs. **The plugin cannot be the only writer** either, because E5's own
+story is "what's pending across every repo you've init'd", and a registry written only by dev
+servers means a repo you set up this morning is invisible until you start Vite. So init writes
+that the repo exists and the plugin writes the servers, either may create the entry, and a repo
+someone wired by hand without ever running `init` still shows up — which is the more useful
+answer anyway.
+
+"At startup" was wrong in a second way that only shows up in code. `configureServer` runs
+*before* the server binds, and Vite moves to the next free port when the configured one is
+taken — the `:8000, :8001, :8002` case this document opens that section with. So the origin is
+knowable only from the listening socket, and the write is deferred to `listening`. Vite's own
+`resolvedUrls` is not available there either; it is assigned after the event fires.
+
+Keying by **normalised root** rather than by origin follows from init writing first: an entry
+has to exist before any origin does. The normalisation is not fussiness — Node reports a
+Windows drive letter's case differently depending on how the process was started, and `init`
+typed into a shell and Vite spawned by npm are exactly that pair, so the raw path would give
+one repo two entries and `dogear status` would list it twice.
+
+**Liveness is a pid check, not a probe.** The plugin records its pid; `dogear status` sends
+signal 0. An HTTP probe of each origin would be more truthful — it proves the server answers,
+not merely that a process exists — and it would need an explicit exception to the zero-egress
+rule, timeouts, and an async command. A pid can be reused and a process can outlive its
+server, both of which heal on that repo's next dev server start. Not worth a socket.
+
+**`dogear status` gets no MCP tool. Settled during E5 — a deliberate exception to a stated
+rule.**
+"Everything works through MCP" is one of this document's firmest rules, and E5 is the first
+capability to ship without a tool. The rule exists so that dogear is not a Claude Code product
+with portability bolted on: a feature reachable only through the hook would be exactly that.
+`dogear status` is not that shape. It is machine-level orientation for a human — which of my
+dev servers is up, which repo has annotations waiting — and every MCP session is scoped to one
+repo by construction, since the server resolves its root by walking up from `cwd`. An agent in
+repo A asking about repo B is not a capability it is missing; it is a boundary the same-origin
+design was built so that nothing would need to cross. `dogear_pending` already answers "what is
+pending here", which is the question an agent actually has.
+
+The rule's real target is unchanged and worth restating: no *annotation* capability may live
+only on a non-MCP surface. Reading and resolving still both go through the server.
 
 **Detection → a phase before the steps, plus `--dry-run`. Settled during E2.**
 E1's `Step` seam was written expecting detection to arrive as another entry in the list, and

@@ -90,8 +90,8 @@ Don't over-explain basics.
 |---|---|
 | `@dogear/core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
 | `@dogear/vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
-| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status`. `init`, `hook`, `mcp` and `prune` are implemented. |
-| `@dogear/queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. **Private, source-only, never published** — see below. |
+| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status` — all implemented since E5. |
+| `@dogear/queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. Also E5's machine-level registry. **Private, source-only, never published** — see below. |
 
 **`@dogear/queue` has no build and is not published.** Its `exports` points straight at
 `src/index.ts`; `@dogear/vite`, `@dogear/cli` and `@dogear/core` list it as a **devDependency**
@@ -116,9 +116,48 @@ an overlay that throws on page load. `format.test.ts` guards it with a source ru
 **Two readers in `@dogear/queue`, and the rule is not stylistic: reads may tolerate, writes
 must refuse.** `readQueue` throws; `tryReadQueue` never does and is *derived* from it.
 Tolerant reads **drop** malformed entries, so writing one back would silently delete a
-hand-broken item — every writer therefore uses `readQueue`. `dogear hook` and
-`dogear_pending` are the only tolerant callers. `tolerance.test.ts` is the guard, replacing
-the cross-package `parity.test.ts` that went vacuous when the copies merged.
+hand-broken item — every writer therefore uses `readQueue`. `dogear hook`, `dogear_pending`
+and — since E5 — `dogear status` are the tolerant callers. `tolerance.test.ts` is the guard,
+replacing the cross-package `parity.test.ts` that went vacuous when the copies merged.
+
+**E5's registry lives in the same package, and the rule above governs it too.**
+`packages/queue/src/registry.ts` reads and writes `~/.dogear/projects.json` (overridable with
+`DOGEAR_HOME`) with the same `readRegistry`/`tryReadRegistry` split and the same
+read-modify-write + pid-suffixed temp file, importing `tempPathFor` rather than reimplementing
+it. It is per *machine* where the rest of the package is per *repository*; they share the name
+`.dogear` and nothing else, which is why `REGISTRY_DIR` is its own constant. `writeRegistry` is
+deliberately **not exported** — the queue exports its equivalent because it has writers outside
+that module, and here it does not, so keeping it private makes read-modify-write unhoistable
+rather than merely documented.
+
+**Two writers, and the split is the ticket.** `dogear init` writes that a repo *exists*
+(`register.ts`, the last step in `stepsFor` and the only one writing outside the repo); the
+plugin writes its own dev server. The plugin's write is on `httpServer`'s **`listening` event,
+never in `configureServer`** — that hook runs before the port is bound and Vite bumps the port
+when the configured one is taken, so `config.server.port` is the request, not the answer.
+`server.resolvedUrls` is not usable either: Vite assigns it *after* the event fires. Middleware
+mode has no `httpServer` and registers nothing, which is why every case in
+`packages/vite/src/index.test.ts` was unaffected — its fake server has none. `registry.test.ts`
+beside it is the suite with one.
+
+**Entries are keyed by `registryKey(root)` — forward slashes, upper-cased drive letter.** Node
+reports a Windows drive letter's case differently depending on how the process started, and
+`init` from a shell versus Vite from an npm script is exactly that pair, so the raw path gives
+one repo two entries. The rest of the path keeps its case; it is the user's, and it is
+displayed back.
+
+**`dogear status` never writes.** Dead server records are filtered from the display by a
+`process.kill(pid, 0)` check and dropped by the *plugin* on that repo's next start; a repo
+whose directory has gone is reported, not removed. A whole-file failure exits non-zero (there
+is nothing to show), while one repo's broken queue or missing directory costs only that line.
+It is also the **only command that does not refuse outside a git repo** — `findGitRoot` is
+called just to mark the current one.
+
+**Every suite that reaches `dogear init` must isolate the registry.** `isolateRegistry()` in
+`test-repo.ts` does it per suite, and `vitest.setup.ts` pins `DOGEAR_HOME` to a temp directory
+for every run as a floor. Without that floor the failure is invisible — nothing goes red, and
+the only symptom is the developer's real `~/.dogear/projects.json` filling with entries for
+temp directories. `init.test.ts` did exactly this, and it was caught by opening the file.
 
 **`dogear init` is a detection phase and then a list of steps.** `packages/cli/src/init.ts` is
 the adapter (validate the flags, resolve the git root, refuse if there isn't one, defer to the
@@ -269,7 +308,10 @@ The brief has the full reasoning; the code is authoritative on mechanism.
 
 - **Everything works through MCP.** The MCP server carries the entire feature set —
   reading pending annotations and resolving them. A capability that can't be reached
-  through MCP doesn't ship.
+  through MCP doesn't ship. **One deliberate exception since E5:** `dogear status` has no
+  tool, because every MCP session resolves one repo from `cwd` and cross-repo state is a
+  boundary the same-origin design exists to avoid needing. The rule's target is unchanged —
+  no *annotation* capability may live only on a non-MCP surface. See the brief's Decisions log.
 - **The queue resolves from the git root, not the Vite root.** One repo → one queue →
   one agent session. A monorepo with three dev servers must not produce three queues.
 - **Queue writes are atomic and read-modify-write.** Temp filename includes the pid;
@@ -362,6 +404,10 @@ worst way: the count reads zero both while running and after teardown, so every 
 are gone" assertion passes without testing anything. `teardown.test.ts` and
 `controller.test.ts` both spy per target for this reason, and both pair a
 `> baseline` assertion with the `=== baseline` one so a vacuous pass cannot hide.
+
+`vitest.setup.ts` is shared by the fast and built configs, and does one thing: point
+`DOGEAR_HOME` at a temp directory so no suite can write to the real one. See the registry
+notes above for why that is a global rather than a convention.
 
 **Three vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
 plus the hermetic `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`

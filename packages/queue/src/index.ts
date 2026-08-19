@@ -47,3 +47,31 @@ export {
   withApp,
   writeQueue,
 } from './queue.js'
+
+/**
+ * E5's (#30) machine-level registry. Per *machine*, where everything above is per
+ * *repository* — see ./registry.ts's header for why one package holds both.
+ */
+export type {
+  Project,
+  Registry,
+  RegistryEnv,
+  RegistryRead,
+  ServerInput,
+  ServerRecord,
+} from './registry.js'
+export {
+  REGISTRY_DIR,
+  REGISTRY_FILE,
+  REGISTRY_VERSION,
+  deregisterServer,
+  isProcessAlive,
+  readRegistry,
+  registerProject,
+  registerServer,
+  registryHome,
+  registryKey,
+  registryPath,
+  shortenHome,
+  tryReadRegistry,
+} from './registry.js'

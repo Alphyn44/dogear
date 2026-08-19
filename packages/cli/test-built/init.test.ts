@@ -312,12 +312,16 @@ describe('the built `dogear init`', () => {
   })
 
   it('no longer advertises itself as unimplemented', async () => {
-    // The usage footer is the first thing a new global install shows. Until E1 it named only
-    // `hook`, `mcp` and `prune`, and a footer that lies about what is built is worse than no
-    // footer at all.
+    // The usage footer is the first thing a new global install shows, and one that lies about
+    // what is built is worse than no footer at all. Until E1 it named only `hook`, `mcp` and
+    // `prune`; E5 (#30) built the last command and deleted the sentence entirely, so what is
+    // asserted is the absence of any such claim rather than `init`'s presence in a list that
+    // no longer exists. `init` is still checked to be documented — one line above this.
     const help = await runCli('--help', root)
 
     expect(help.exitCode).toBe(0)
-    expect(help.stdout).toContain('`init`')
+    expect(help.stdout).toContain('init')
+    expect(help.stdout).not.toContain('are implemented')
+    expect(help.stdout).not.toContain('not implemented')
   })
 })

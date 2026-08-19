@@ -1,5 +1,12 @@
-import { CONFIG_FILE, findGitRoot, QUEUE_DIR } from '@dogear/queue'
-import type { FilterPattern, Plugin } from 'vite'
+import {
+  CONFIG_FILE,
+  deregisterServer,
+  findGitRoot,
+  QUEUE_DIR,
+  registerServer,
+  registryPath,
+} from '@dogear/queue'
+import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
 import { createFilter } from 'vite'
 
 import { findAppName } from './app-name.js'
@@ -373,6 +380,8 @@ export function dogear(options: DogearOptions = {}): Plugin {
       // registered — so there is no window in which the tag is injected but the route that
       // serves its import is not.
       injection = { endpoint, config }
+
+      registerWith(server, gitRoot, app)
     },
 
     /**
@@ -460,6 +469,75 @@ function validateModifier(modifier: Modifier | undefined): Modifier | undefined 
     `dogear: modifier must be one of ${MODIFIERS.join(', ')}, received ` +
       JSON.stringify(modifier),
   )
+}
+
+/**
+ * Record this dev server in the machine-level registry, so `dogear status` can see it — E5 (#30).
+ *
+ * **Deferred to `listening`, and that is the whole reason this is a function rather than four
+ * lines in `configureServer`.** That hook runs before the server binds a port, and Vite moves
+ * to the next free one when the configured port is taken — the brief's own example is one
+ * repository serving `:8000`, `:8001` and `:8002`. So `server.config.server.port` is the
+ * *request*, and only the listening socket knows the answer.
+ *
+ * `server.resolvedUrls` would read better than assembling the origin by hand, and is not an
+ * option either: Vite assigns it *after* `httpServerStart` resolves, which is after this event
+ * has already fired. `address()` is the one thing that is authoritative at this moment.
+ *
+ * **No `httpServer` means middleware mode**, where Vite is mounted inside someone else's
+ * server and there is no origin of dogear's to record. Nothing is registered and nothing is
+ * warned about — the repository still appears in `dogear status` through the entry
+ * `dogear init` wrote, just with no dev server under it. Every suite in ./index.test.ts takes
+ * this branch, since its fake server has no `httpServer`, which is why none of them had to
+ * change when this landed.
+ *
+ * **A registry failure must never take the dev server down.** Same trade as the missing git
+ * root above: the user came here to work on their app, and `dogear status` being unable to
+ * list this repo is not worth a failed startup. It warns, once, and carries on.
+ */
+function registerWith(
+  server: ViteDevServer,
+  gitRoot: string,
+  app: string | undefined,
+): void {
+  const httpServer = server.httpServer
+  if (!httpServer) return
+
+  httpServer.once('listening', () => {
+    const address = httpServer.address()
+    // A string address is a UNIX socket, which has no port and no origin a browser could have
+    // loaded the page from. Nothing to record.
+    if (address === null || typeof address === 'string') return
+
+    // `localhost` rather than the bound address, which for the default host is `127.0.0.1` and
+    // for `--host` is `::` — neither is what the browser's `location.origin` says, and the
+    // origin is here to be recognised by a human reading `dogear status`.
+    const protocol = server.config.server.https === undefined ? 'http' : 'https'
+
+    try {
+      registerServer(registryPath(), gitRoot, {
+        origin: `${protocol}://localhost:${address.port}`,
+        pid: process.pid,
+        app,
+      })
+    } catch (error) {
+      server.config.logger.warn(
+        `[dogear] could not record this dev server in ${registryPath()}, so \`dogear ` +
+          `status\` will not list it: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  })
+
+  httpServer.once('close', () => {
+    // Best effort, and silent. A dev server that is SIGKILLed never reaches this at all, which
+    // is why `isProcessAlive` exists rather than this being relied on — and a warning printed
+    // while the process is already shutting down is noise nobody acts on.
+    try {
+      deregisterServer(registryPath(), gitRoot, process.pid)
+    } catch {
+      // Ignored on purpose. See above.
+    }
+  })
 }
 
 export default dogear

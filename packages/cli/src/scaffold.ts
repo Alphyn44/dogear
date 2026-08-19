@@ -6,6 +6,7 @@ import { guidance } from './guidance.js'
 import { createHookStep } from './hook-config.js'
 import { createMcpStep } from './mcp-config.js'
 import { queueDirectory } from './queue-dir.js'
+import { createRegisterStep } from './register.js'
 import { createRulesStep } from './rules.js'
 import type { Result } from './run.js'
 
@@ -217,6 +218,12 @@ export function resolveWiring(detection: Detection, options: ScaffoldOptions): W
  * and comes first, the stanza that makes a pull-based server actually get pulled comes next,
  * and the prompt hook — the tier on top, and the only one `--no-hook` removes — comes last. A
  * failure part-way therefore leaves the more important half done.
+ *
+ * **E5's (#30) registry step is last of all**, after `.gitignore`, because it is the only step
+ * whose work is not part of the feature: every other one contributes to annotations reaching an
+ * agent, while this one tells `dogear status` the repository exists. It is also the only step
+ * that writes outside the repository, which is the second reason to run it once everything
+ * inside is done. That matches the brief's install sequence, where registering is step 7.
  */
 function stepsFor(wiring: Wiring): readonly Step[] {
   return [
@@ -226,6 +233,12 @@ function stepsFor(wiring: Wiring): readonly Step[] {
     createRulesStep(wiring),
     createHookStep(wiring),
     gitignore,
+    // `process.env` reaches the step here rather than through {@link ScaffoldOptions}, because
+    // the only thing it carries is `DOGEAR_HOME` and the only caller that wants a different one
+    // is a test — which sets the variable itself through `isolateRegistry()`, exactly as the
+    // suites that need git to see no configuration go through `isolateGitConfig()`. An option
+    // nothing but a test would ever pass is API that exists to be mocked.
+    createRegisterStep(process.env),
   ]
 }
 

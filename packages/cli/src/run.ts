@@ -2,6 +2,7 @@ import { hook } from './hook.js'
 import { init } from './init.js'
 import { mcp } from './mcp.js'
 import { prune } from './prune.js'
+import { status } from './status.js'
 
 /**
  * Argument handling for the `dogear` CLI, kept separate from the executable so it can
@@ -14,9 +15,12 @@ import { prune } from './prune.js'
  */
 
 /**
- * TODO(dogear): `init`, `hook`, `mcp` and `prune` are implemented. `status` is E5. Listing it
- * now is deliberate — an unknown command and an unimplemented one are different failures, and
- * the CLI should be able to say which.
+ * Every command, all of them implemented since E5 (#30) landed `status`.
+ *
+ * The list stays separate from the dispatch below even now that nothing falls through it. An
+ * unknown command and a recognised-but-unbuilt one are different failures and the CLI should
+ * be able to say which — a property worth keeping for the next command that is announced
+ * before it is written, rather than one to rediscover then.
  */
 export const COMMANDS = ['init', 'hook', 'mcp', 'prune', 'status'] as const
 
@@ -93,7 +97,7 @@ export function usage(): string {
     '  prune    Drop resolved items from the queue',
     '  status   What is running and what is pending, across all repos',
     '',
-    'Only `init`, `hook`, `mcp` and `prune` are implemented. See https://github.com/Alphyn44/dogear/milestones',
+    'See https://github.com/Alphyn44/dogear/milestones',
   ].join('\n')
 }
 
@@ -137,8 +141,19 @@ export function run(argv: readonly string[]): Outcome {
   // temp git roots instead, and ./run.test.ts pins the command out of the unimplemented table.
   if (command === 'prune') return prune(process.cwd())
 
+  // Given the environment here rather than reading it inside `status()`, exactly as `hook` is
+  // above and for the same reason: the only code touching process globals is this file and
+  // ./cli.ts. The variable in question is `DOGEAR_HOME`, which decides where the registry
+  // lives. `cwd` is passed too, but only so the current repository can be marked — this is the
+  // one command that does not refuse when there is no repository there.
+  if (command === 'status') return status(process.env, process.cwd())
+
+  // Unreachable while every member of COMMANDS is dispatched above, and kept anyway: it is the
+  // branch that makes `isCommand` worth having, and the next announced-but-unbuilt command
+  // needs it back. TypeScript narrows `command` to `never` here, which is the proof that the
+  // dispatch is exhaustive.
   return {
-    output: `dogear: '${command}' is recognised but not implemented yet`,
+    output: `dogear: '${String(command)}' is recognised but not implemented yet`,
     exitCode: 1,
   }
 }

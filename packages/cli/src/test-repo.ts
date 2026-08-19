@@ -72,6 +72,34 @@ export function isolateGitConfig(): () => void {
   }
 }
 
+/**
+ * Point the machine-level registry at a temp directory, returning the function that restores
+ * the environment. Call in `beforeEach`, call the result in `afterEach` — E5 (#30).
+ *
+ * **Every suite that reaches `dogear init`'s registry step needs this**, and the failure
+ * without it is not a test failure: `scaffold()` would register each temp repository in the
+ * developer's own `~/.dogear/projects.json`, and in CI's. The suites would pass while
+ * silently filling a real file with entries for directories that no longer exist.
+ *
+ * The same shape as {@link isolateGitConfig}, and for the same reason — the environment is
+ * worker-global, so it is saved and put back rather than set once.
+ */
+export function isolateRegistry(): { home: string; restore: () => void } {
+  const saved = process.env.DOGEAR_HOME
+  const home = mkdtempSync(join(tmpdir(), 'dogear-home-'))
+  process.env.DOGEAR_HOME = home
+
+  return {
+    home,
+    restore: () => {
+      if (saved === undefined) delete process.env.DOGEAR_HOME
+      else process.env.DOGEAR_HOME = saved
+
+      rmSync(home, { recursive: true, force: true })
+    },
+  }
+}
+
 /** A fresh temp directory with a real `.git` in it. The caller removes it. */
 export function createRepo(prefix: string): string {
   const root = mkdtempSync(join(tmpdir(), prefix))
