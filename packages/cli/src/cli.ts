@@ -15,28 +15,20 @@
  *   and writing anything at all would corrupt the protocol.
  *
  * That distinction cannot live in `emit()`, because `emit()`'s job is to turn an outcome
- * into bytes and a serving command has none. It is a value either way — `isServe` — so
- * ./run.test.ts still asserts on it without spawning anything.
+ * into bytes and an asynchronous command has none to hand back. It is a value either way —
+ * `isAsync` — so ./run.test.ts still asserts on it without spawning anything.
+ *
+ * Note that "asynchronous" is not "silent": `dogear mcp` writes nothing here because the
+ * transport owns stdout, while `dogear init` writes ordinary bytes through the same
+ * `write()` this file calls — it simply does so after its dynamic import resolves. See
+ * ./run.ts's `Async` for why both land in one variant.
  */
 
-import { emit } from './emit.js'
-import { isServe, run } from './run.js'
+import { write } from './emit.js'
+import { isAsync, run } from './run.js'
 
 const outcome = run(process.argv.slice(2))
 
-if (isServe(outcome)) {
-  // Nothing is written here. From this point the transport owns stdout.
-  process.exitCode = await outcome.serve()
-} else {
-  const { stdout, stderr, exitCode } = emit(outcome)
-
-  // Unconditional, and `write('')` is a genuine no-op — zero bytes reach the file
-  // descriptor. That is what lets the branch live in emit() instead of here. It matters
-  // more than it looks: `dogear hook` runs on every prompt the user types, and Claude Code
-  // injects a UserPromptSubmit hook's stdout verbatim as context, so writing a blank line
-  // for an empty queue would put a blank line in front of every prompt.
-  process.stdout.write(stdout)
-  process.stderr.write(stderr)
-
-  process.exitCode = exitCode
-}
+// `write()` rather than three statements inline: E1 gave the byte-producing path a second
+// caller in ./init.ts, and the empty-string-means-zero-bytes rule has to hold in both.
+process.exitCode = isAsync(outcome) ? await outcome.run() : write(outcome)

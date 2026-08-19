@@ -9,9 +9,7 @@
  * every structural layer already failed and core is somehow live in a real user's browser.
  * Treating it as the defense would be reading the layers backwards.
  *
- * Nothing calls it yet. Core has no `init()` until B1 (#8); this ships as a pure predicate
- * plus a thin ambient reader so that `init()`'s first line can be
- * `if (!isCurrentHostAllowed()) return`.
+ * `init()`'s first line is `if (!isCurrentHostAllowed(resolveHosts(options))) return`.
  *
  * The bail is deliberately **silent**. A console warning here would fire precisely on a
  * deployed page in front of real users, announcing a dev tool on the one page it must be
@@ -22,14 +20,14 @@
  * The hosts dogear will run on, and the whole of the answer — there is no second, hidden
  * rule beside this list.
  *
- * The brief's Config block calls this `hosts` and E4 (#29) will read it from
- * `.dogear/config.json`. That file does not exist yet and nothing here reads it: F3 ships
- * the defaults and the matcher, E4 plugs the file in by passing a second argument to
- * {@link isAllowedHost}.
+ * The brief's Config block calls this `hosts`, and E7 (#40) is what plugged it in: the key is
+ * read from `.dogear/config.json` by @dogear/vite, rides the config parameter, and reaches
+ * {@link isCurrentHostAllowed} as its argument. `dogear init` writes `version` and nothing
+ * else, so a repo that has never edited that file names no hosts and lands here.
  *
- * Private ranges live *in* the list rather than beside it as an always-on rule. It matters
- * for E4: someone who narrows `hosts` to `["localhost"]` is telling dogear to stop running
- * on their LAN address, and a separate hard-coded private-IP allowance would silently
+ * Private ranges live *in* the list rather than beside it as an always-on rule, and E7 is
+ * where that pays: someone who narrows `hosts` to `["localhost"]` is telling dogear to stop
+ * running on their LAN address, and a separate hard-coded private-IP allowance would silently
  * ignore them. One list means "what is allowed" has exactly one answer.
  */
 export const DEFAULT_HOSTS: readonly string[] = Object.freeze([
@@ -57,8 +55,10 @@ export const DEFAULT_HOSTS: readonly string[] = Object.freeze([
  * Takes a hostname, never a host:port — `location.hostname` is the intended source, and a
  * `example.com:5173` string fails closed because no pattern kind can match it.
  *
- * `hosts` replaces the defaults entirely rather than extending them. That is E4's eventual
- * contract: the config file's `hosts` array is the list, not an addition to a hidden one.
+ * `hosts` replaces the defaults entirely rather than extending them. That is E7's (#40)
+ * contract, now wired: the config file's `hosts` array is the list, not an addition to a
+ * hidden one. An empty array therefore allows nothing, which is a legitimate thing for a
+ * project to say and is honoured rather than read as absence.
  */
 export function isAllowedHost(
   hostname: string,
@@ -79,10 +79,15 @@ export function isAllowedHost(
  * `globalThis.location` rather than `window.location` so this is answerable from a worker
  * or a non-DOM context without throwing. Its absence is treated as "not local", for the
  * same reason an empty hostname is: there is no origin to judge.
+ *
+ * `hosts` is E7's (#40) arrival: `.dogear/config.json`'s list, layered by @dogear/vite and
+ * carried on the config parameter. Omitted means the defaults, so every existing bare call
+ * behaves exactly as before — and `isAllowedHost`'s own default parameter is what handles
+ * the `undefined`, rather than a second copy of the fallback here.
  */
-export function isCurrentHostAllowed(): boolean {
+export function isCurrentHostAllowed(hosts?: readonly string[]): boolean {
   const hostname = (globalThis as { location?: { hostname?: string } }).location?.hostname
-  return hostname === undefined ? false : isAllowedHost(hostname)
+  return hostname === undefined ? false : isAllowedHost(hostname, hosts)
 }
 
 /**

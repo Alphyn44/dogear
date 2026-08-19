@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { mcp } from './mcp.js'
-import { isServe } from './run.js'
+import { isAsync } from './run.js'
 
 /**
  * The command adapter, not the protocol. ../test-built/mcp.test.ts drives a real client
@@ -24,10 +24,10 @@ afterEach(() => {
 })
 
 describe('mcp()', () => {
-  it('hands back a serving outcome inside a repository', () => {
+  it('hands back an asynchronous outcome inside a repository', () => {
     mkdirSync(join(root, '.git'))
 
-    expect(isServe(mcp(root))).toBe(true)
+    expect(isAsync(mcp(root))).toBe(true)
   })
 
   it('walks up to the git root, so a client spawning in a subdirectory still works', () => {
@@ -38,7 +38,7 @@ describe('mcp()', () => {
     const nested = join(root, 'packages', 'apps', 'admin')
     mkdirSync(nested, { recursive: true })
 
-    expect(isServe(mcp(nested))).toBe(true)
+    expect(isAsync(mcp(nested))).toBe(true)
   })
 
   it('FAILS LOUDLY outside a repository, unlike the hook', () => {
@@ -49,15 +49,15 @@ describe('mcp()', () => {
     // install.
     const outcome = mcp(root)
 
-    expect(isServe(outcome)).toBe(false)
-    if (isServe(outcome)) return
+    expect(isAsync(outcome)).toBe(false)
+    if (isAsync(outcome)) return
 
     expect(outcome.exitCode).toBe(1)
     expect(outcome.output).toContain(root)
     expect(outcome.output).toContain('no git repository')
   })
 
-  it('decides without starting anything — serve() is a continuation, not a side effect', () => {
+  it('decides without starting anything — run() is a continuation, not a side effect', () => {
     // Constructing the outcome must not touch stdio or load the SDK. The laziness itself is
     // asserted where it is actually observable: ../test-built/mcp.test.ts checks that the
     // built dist/cli.js has no top-level SDK import, and ../test-built/hook.test.ts's 2s
@@ -65,6 +65,6 @@ describe('mcp()', () => {
     mkdirSync(join(root, '.git'))
     const outcome = mcp(root)
 
-    expect(isServe(outcome) && typeof outcome.serve).toBe('function')
+    expect(isAsync(outcome) && typeof outcome.run).toBe('function')
   })
 })

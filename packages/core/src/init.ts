@@ -9,7 +9,7 @@
 import { isCurrentHostAllowed } from './host.js'
 import { createListenerRegistry } from './listeners.js'
 import type { InitOptions, Teardown } from './options.js'
-import { resolveOptions } from './options.js'
+import { resolveHosts, resolveOptions } from './options.js'
 import { createOverlay } from './overlay.js'
 import type { Queue } from './queue.js'
 import { createQueue } from './queue.js'
@@ -76,7 +76,12 @@ export function init(options?: InitOptions, context?: InitContext): Teardown {
   // only correct behaviour is to do nothing at all, and to do it silently: a
   // `[dogear] refusing to initialize` warning would announce a dev tool on the one page it
   // must be invisible on. See ./host.ts.
-  if (!isCurrentHostAllowed()) return () => {}
+  //
+  // E7 (#40) made the list configurable without moving this line. `resolveHosts` is a
+  // separate resolver from `resolveOptions` precisely so the guard can read the one value it
+  // needs, in the argument position, rather than being sequenced after a resolution step that
+  // exists for the session's benefit.
+  if (!isCurrentHostAllowed(resolveHosts(options))) return () => {}
 
   const resolved = resolveOptions(options)
 

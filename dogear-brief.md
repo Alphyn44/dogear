@@ -186,7 +186,7 @@ Installed globally, provides `dogear` on PATH. Subcommands:
 | `dogear mcp` | Run the MCP server over stdio |
 | `dogear hook` | Emit `UserPromptSubmit` JSON for Claude Code |
 | `dogear prune` | Drop resolved items |
-| `dogear status` | What's running, what's pending, across all registered repos |
+| `dogear status` | What's running, what's pending, across all registered repos. The one command that runs outside a repo |
 
 Absorbing the hook into the CLI removes a package that would otherwise exist to hold
 about fifty lines.
@@ -306,9 +306,21 @@ processes appending to one file. The atomic temp filename must include the pid, 
 the write must be read-modify-write — re-read the queue immediately before writing,
 never cache it at server start. Otherwise app A's submit silently drops app B's items.
 
-**Machine-level registry.** `~/.dogear/projects.json` maps origin → repo root, written
-by each plugin instance at startup. It powers `dogear status` and is the piece a future
-sidecar or extension mode would need, since those *do* have the URL-to-project problem.
+**Machine-level registry.** `~/.dogear/projects.json` records every repo dogear knows about
+and the dev servers currently serving each one. It powers `dogear status` and is the piece a
+future sidecar or extension mode would need, since those *do* have the URL-to-project problem.
+Built by E5 (#30); `$DOGEAR_HOME` overrides the location.
+
+**It has two writers, and they write different halves of an entry.** `dogear init` records
+that a repo exists (install step 7 below); each plugin instance records its own dev server
+once that server is *listening*. Neither is optional and neither is sufficient — see the
+Decisions log for why the earlier "written by each plugin instance at startup" was wrong on
+both counts.
+
+Entries are keyed by a **normalised repo root**, not by origin: an entry has to exist before
+any origin does, and one repo must not become two entries when two processes disagree about
+a Windows drive letter's case. The origin→root direction a sidecar would want is a scan over
+a handful of entries.
 
 ---
 
@@ -484,7 +496,7 @@ matching Vite's own `/__vite_ping` convention):
 | `POST` | `/__dogear/annotations` | Submit a batch |
 | `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
 | `GET` | `/__dogear/client.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
-| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and in no story.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. D4 was the last plausible claimant and turned it down — its clipboard copies the in-memory batch, since "works with no server" is one of its acceptance criteria. E5 is the only story left that could want it |
+| `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and now in no story at all.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. D4 was the last plausible claimant and turned it down — its clipboard copies the in-memory batch, since "works with no server" is one of its acceptance criteria. E5 was the last story that could have wanted it and **declined**: `dogear status` reads each repo's `queue.json` off disk, which works for the stopped dev servers this endpoint could never answer for. Nothing is left to claim it |
 | `POST` | `/__dogear/prune` | Drop resolved items — **not built.** D6 shipped prune on the CLI and MCP surfaces and deferred this one for want of a caller; see the Decisions log |
 
 ### MCP tools
@@ -556,7 +568,8 @@ there is resolvable regardless of tooling. See the Decisions log.
 
 ### Config
 
-`<git-root>/.dogear/config.json`, committed, written by `dogear init`:
+`<git-root>/.dogear/config.json`, committed, created by `dogear init`. Every key dogear
+recognises, with the value each one falls back to:
 
 ```json
 {
@@ -566,6 +579,7 @@ there is resolvable regardless of tooling. See the Decisions log.
   "endpoint": "/__dogear",
   "transform": true,
   "include": ["**/*.tsx", "**/*.jsx"],
+  "exclude": ["**/node_modules/**"],
   "hosts": [
     "localhost",
     "*.localhost",
@@ -576,12 +590,32 @@ there is resolvable regardless of tooling. See the Decisions log.
     "172.16.0.0/12",
     "192.168.0.0/16"
   ],
-  "agent": "claude-code"
+  "agent": "claude"
 }
 ```
 
+**That is the recognised set, not the file init writes.** `dogear init` writes
+`{ "version": 1 }` and stops; every other key is absent until someone sets it, and an
+absent key means "whatever dogear's current default is". Amended during E4 — see the
+Decisions log.
+
+`exclude` was added to the set during E7, which found it was a plugin option with no
+config key: a file that can widen `include` but cannot adjust the skip list is a
+half-configurable filter, and the commonest reason to touch `include` is also a reason
+to touch `exclude`. Like `include`, setting it *replaces* the default rather than
+extending it.
+
+`agent` still has no reader — it is a `dogear init` concern, and E3 shipped the choice as
+the `--agent` flag instead. Its value was corrected from `claude-code` to `claude` during
+E7 to match the values that flag actually accepts (`claude|cursor|vscode|none`); nothing
+reads the key either way, and giving it one needs its own story.
+
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
-in `~/.dogear/config.json` and lose to both.
+in `~/.dogear/config.json` and lose to both — still unbuilt, and out of E7's scope.
+E4 (#29) writes the file; **E7 (#40)** gave it a reader in `@dogear/vite`.
+
+**A bad value in this file is warned about and dropped, never thrown on**, and that is
+the opposite of how the same value behaves as a plugin option. See the Decisions log.
 
 `enabled` is the repo-wide form of B6's kill switch, and it sits at the top of that same
 precedence chain: `dogear({ enabled: false })` beats the file, which beats the default. It
@@ -613,22 +647,38 @@ npm i -g @dogear/cli        # once per machine
 cd my-repo && dogear init   # once per repo
 ```
 
-`dogear init` is interactive and idempotent. It:
+`dogear init` is non-interactive and idempotent. It:
 
 1. **Finds the git root.** Refuses to run outside a repo — the queue location depends
    on it.
-2. **Detects the setup** — Vite config, framework, workspace layout, how many apps.
-3. **Asks which agent you use** and wires it. Claude Code gets the hook merged into
-   `.claude/settings.json` (merged, never clobbered) plus the MCP server registered.
-   Anything else gets the MCP server registration and an `AGENTS.md` stanza.
+2. **Detects the setup** — Vite config, framework, workspace layout, how many apps,
+   and which agent the repo shows signs of using.
+3. **Wires that agent.** Every agent gets the MCP server registered — `.mcp.json`,
+   `.cursor/mcp.json` or `.vscode/mcp.json` — plus an `AGENTS.md` stanza, since MCP is
+   pull and needs the nudge. Claude Code additionally gets the hook merged into
+   `.claude/settings.json` (merged, never clobbered); `--no-hook` declines it and leaves
+   a fully working install. `--agent=<name>` overrides detection. Amended during E3,
+   which replaced "asks which agent you use" with detection plus flags — see the
+   Decisions log.
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
 5. **Appends to `.gitignore`** — `.dogear/queue.json` and `.dogear/*.tmp`, not the whole
    directory, since config is meant to be committed.
-6. **Adds `@dogear/vite` to devDependencies** and prints the two-line `vite.config`
-   change rather than editing it — config files are too varied to rewrite safely.
-7. **Registers the repo** in `~/.dogear/projects.json`.
+6. **Prints the plugin install and the two-line `vite.config` change.** It writes neither.
+   Config files are too varied to rewrite safely, and the manifest is printed rather than
+   edited for reasons of its own — see the Decisions log. Amended during E8.
+7. **Registers the repo** in `~/.dogear/projects.json` — that it *exists*, not any dev
+   server, which init has no way to know about. Built by E5 (#30).
 
 Re-running is safe: it diffs against what's there and only reports what changed.
+
+`dogear init --dry-run` runs steps 1–2 and plans the rest, printing the detection result and
+every change it *would* make without writing any of them. That is how step 2's report-before-
+change is reachable from a non-interactive command; see the Decisions log.
+
+`dogear init --undo` reverses steps 3–5 and 7 in *this* repo and reports what it removed,
+taking the prompt hook out first. Step 2 does not run — detection describes a repo being set
+up — and step 6 wrote nothing to reverse. `--dry-run` applies; `--agent` and `--no-hook` are
+refused. Built by E6 (#39); see the Decisions log.
 
 ---
 
@@ -821,25 +871,88 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 **E2 — Detection**
 - init identifies Vite, the framework, and the workspace layout without being told.
 - It reports what it found before changing anything.
+- `dogear init --dry-run` reports the findings and every change it would make, and writes
+  nothing. Added during E2 — see the Decisions log.
 
 **E3 — Agent wiring**
 - **Every agent gets the MCP server registered.** That is the baseline path and is never
-  skipped.
+  skipped. Claude Code, Cursor and VS Code, each through its own project-local config.
 - init writes an `AGENTS.md` / rules stanza telling the agent to check pending
   annotations, since MCP is pull and needs the nudge.
-- init then asks whether to add the prompt hook, offered only where the chosen agent
-  supports one. Declining leaves a fully working install.
-- Claude Code's hook is merged into `.claude/settings.json` — existing hooks survive.
+- The prompt hook is offered only where the chosen agent supports one, and `--no-hook`
+  declines it. Declining leaves a fully working install. Amended during E3 from "init
+  then asks" — see the Decisions log.
+- Claude Code's hook is merged into `.claude/settings.json` — existing hooks survive,
+  and no line init did not write is reformatted.
 - The hook is written as `node <path> hook`, never `dogear hook`, so it works on Windows.
-- Where a local `@dogear/cli` exists, the path is repo-relative and portable.
+- The path is repo-relative and portable whether or not `@dogear/cli` is installed yet;
+  a missing local install is reported, not worked around.
 
 **E4 — Gitignore and config**
 - `.dogear/queue.json` and `.dogear/*.tmp` are gitignored; `.dogear/config.json` is not.
 - An existing `.gitignore` is appended to, never rewritten.
+- init creates `.dogear/config.json`, holding `version` and nothing else. Amended during
+  E4, which also split the reading half out into E7; see the Decisions log.
 
 **E5 — Cross-repo status**
 - `dogear status` lists registered repos, running dev servers, and pending counts.
-- It works from anywhere, not just inside a repo.
+- It works from anywhere, not just inside a repo. It is the **only** command that does not
+  refuse outside one — every other walks up for `.git` and gives up.
+- It never writes. A dead dev server's record is filtered out of the display and dropped by
+  the *plugin* when that repo next starts one; a repo whose directory has gone is reported,
+  not removed.
+- No MCP tool answers this, which is a deliberate exception to "everything works through
+  MCP" — see the Decisions log.
+
+**E6 — Undoing an init**
+- `dogear init --undo` removes what init added to *this* repo and reports what it removed.
+  It refuses outside a git repo exactly as `dogear init` does, and `--dry-run` applies to it.
+- The agent wiring comes out first and always: an orphaned `UserPromptSubmit` hook fires on
+  every prompt against a path that no longer exists.
+- Pending annotations are never destroyed silently — the queue is the user's data, and
+  removing it is a separate, explicit act. `.dogear/` goes only once it is empty.
+- Entries dogear did not write survive. A file is deleted only when it is byte-identical to
+  what init writes; anything else is spliced. An edited `.gitignore` block is reported rather
+  than guessed at. Added during E6 — see the Decisions log.
+- `--agent` and `--no-hook` are refused alongside `--undo`, which unwires unconditionally.
+  Added during E6; see the Decisions log.
+- Uninstalling the CLI without running this is survivable: nothing dogear writes may break
+  an agent that no longer has dogear installed.
+
+**E7 — Config precedence**
+- `@dogear/vite` reads `<git-root>/.dogear/config.json` and layers it under its own plugin
+  options: option, then file, then default. A key the file does not set is left to the
+  default, not overwritten with one.
+- `enabled`, `endpoint`, `modifier`, `transform`, `include` and `exclude` are all layered.
+  `app` is not — it is per Vite root, and this file is per repo. `exclude` was added to the
+  recognised set during E7; see the Config section.
+- `hosts` reaches core's `isAllowedHost`, replacing the defaults rather than extending
+  them. It is omitted from the wire entirely when the file does not set one.
+- A config that will not parse is reported in the dev server's terminal and the plugin
+  falls back to its options, rather than taking the dev server down. So is a key that
+  parses but holds the wrong kind of value — see the Decisions log.
+
+Split out of E4 during E4, which shipped the file without a reader. The four code comments
+that named E4 for this work now name E7; see the Decisions log.
+
+**E8 — Plugin install and the vite.config change**
+- Where an app has no `@dogear/vite`, init prints the dependency to install and the
+  `vite.config` change to make. It writes neither.
+- The install command matches the repository's package manager, and names the package the
+  dependency belongs to — which in a monorepo is not always the app's own directory.
+- An app that already declares the plugin gets nothing. A repo with no Vite app gets nothing.
+- `@dogear/vite` in `dependencies` rather than `devDependencies` is reported, not moved.
+
+Filed during E2, which found that install step 6 was in no story at all. Written as printing
+rather than writing after the same ticket's grill; see the Decisions log.
+
+`init` writes into four places outside `.dogear/` by the time E3 and E4 land — the agent's
+config, an `AGENTS.md` stanza, `.gitignore`, and `~/.dogear/projects.json` — and
+`npm rm -g @dogear/cli` removes none of them. That asymmetry is the story: the install is
+per-machine and the configuration is per-repo, so uninstalling the tool cannot clean up the
+repos, and each repo has to be able to clean up after itself. The hook is the sharp edge
+rather than a tidiness concern, because a `UserPromptSubmit` entry pointing at a deleted
+binary fails on every prompt the user types.
 
 ### Epic F — Safety (cross-cutting)
 
@@ -852,6 +965,46 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 
 **F3 — Runtime hostname bail**
 - Core refuses to initialize on a non-local hostname even if every other layer failed.
+
+### Epic G — Release (M5)
+
+Everything above makes dogear work in *this* repository. This epic is what makes it
+installable in someone else's, and none of it was tracked while the features were being
+built — which is why it is filed as an epic rather than left as a release checklist.
+
+**G1 — The repository reads as a product**
+- `README.md` describes what dogear does, how to install it and how to use it, and no longer
+  says the product is not built yet.
+- An MIT `LICENSE` file exists at the root, matching the `license` field all three manifests
+  already declare.
+- Each published package carries its own `README.md`, because npm renders that file — and
+  only that file — on the package page.
+
+**G2 — The packages are publishable**
+- `@dogear/core`, `@dogear/vite` and `@dogear/cli` drop `private: true` and carry a real
+  version. `@dogear/queue` keeps both — it is source-only and inlined, and publishing it
+  would add a runtime dependency the three-package install story does not have.
+- `npm pack` on each produces a tarball containing `dist/` and no tests or fixtures.
+- Nothing else about the manifests changes: `repository.directory`, `files` and `license`
+  were written correctly when each package was created.
+
+**G3 — The install path is exercised end to end, before anyone else runs it**
+- A global install from a packed tarball puts `dogear` on PATH, and `dogear init` sets up a
+  repository that was never part of this workspace.
+- The plugin installs into that repository, its dev server serves the overlay, a click
+  reaches `.dogear/queue.json`, and an agent reads it back through MCP.
+- Verified on a repository dogear has never seen — a fresh Vite app, not `examples/react-app`,
+  which resolves the workspace copies and therefore proves nothing about an install.
+
+This is the one user journey nobody has run start to finish, and it is the first one a new
+user hits. It is deliberately ordered before G4: a tarball can be installed locally, so
+publishing is not a prerequisite for finding out whether the install works.
+
+**G4 — Publishing from CI, with provenance**
+- A tagged release publishes all three packages from GitHub Actions.
+- Publishing uses OIDC trusted publishing — no stored credential, and provenance
+  attestations emitted automatically. See Repo and publishing for why this is not optional.
+- The first publish of each scoped package uses `--access public`.
 
 ### Non-functional requirements
 
@@ -874,8 +1027,9 @@ Increasing order of how much can go wrong.
 | **M1** | Overlay | B1–B7 | Modifier-click, hover outline, comment box, in-memory queue, POST on submit. Ships with selector + text only, and is **already useful** — an agent can often find a component from a distinctive class or text. |
 | **M2** | Localization | C1–C5 | The attribute transform. Deterministic, synchronous, unit-testable against fixture files. |
 | **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
-| **M4** | Install and init | E1–E5 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
-| — | Safety | F1–F3 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
+| **M4** | Install and init | E1–E8 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
+| **M5** | Release | G1–G4 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages are private and unpublished until now, so `npm i -D @dogear/vite` resolves to nothing and the install path M4 prints instructions for has never been run by anyone. |
+| — | Safety | F1–F4 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
 
 Two deliberate orderings worth noting:
 
@@ -892,6 +1046,103 @@ the hook first would mean writing the formatter twice.
 ---
 
 ## Decisions log
+
+**`dogear init` writes `{ "version": 1 }`, not the Config block. Settled during E4.**
+The block above lists every key dogear recognises, and writing it out with today's values
+was the obvious reading of "init writes `.dogear/config.json`". It is wrong in one
+direction that only shows up later: a config file that restates a default *pins* it.
+Change `DEFAULT_HOSTS` or the default modifier in a future release and every repo that
+ever ran `dogear init` keeps the old value forever, having never expressed an opinion
+about it. An absent key means "whatever dogear thinks", which is what a user who did not
+edit the file actually wants, and it is also the only form under which "plugin option beats
+file beats default" has three distinguishable layers. `version` is written because it is the
+one key whose absence is genuinely ambiguous — E7's reader has to tell a config predating a
+schema from a config that opted into every default.
+
+**E4 shipped the config file without a reader; the precedence chain became E7.**
+Four code comments assigned the reading half to E4 by name, and the issue's acceptance
+criteria covered only the `.gitignore` split. Splitting on that seam keeps this ticket
+inside `@dogear/cli`, and keeps `hosts` — the one config key that feeds F3's runtime host
+guard, a production-safety layer — out of a ticket about ignore rules. The cost is a
+release where `.dogear/config.json` exists and nothing consumes it, which is visible and
+harmless; the alternative was one ticket spanning three packages and touching the last
+line of the production defense.
+
+**A bad value in `.dogear/config.json` is warned about and dropped; the same value as a
+plugin option still throws. Settled during E7.** `dogear({ modifier: 'banana' })` throws at
+config time, and that stays right: `vite.config.ts` is the author's own code, in the file
+they are editing, and a typo should be named loudly in the terminal in front of them. The
+config file is a different artifact with a different audience — it is *committed*, so
+whoever broke it is often not whoever is running the dev server, and one person's typo must
+not stop everyone else's `npm run dev`. It is also user data that `dogear init` deliberately
+never validates on the way in, so this reader is the first thing that will ever tell anyone
+their config is wrong; the useful thing for it to do is say so and carry on.
+
+Dropping rather than repairing is the other half. A rejected key is simply absent, so the
+`??` chain falls through to the plugin option or the default exactly as if it had never been
+written — which is what keeps "an unset key falls to the default rather than being
+overwritten with one" true for broken keys as well as missing ones. Guessing what a value
+was meant to be would make the precedence chain unpredictable in the one case where someone
+is already confused.
+
+The endpoint is the exception that proves the shape: it is validated by *calling*
+`normaliseEndpoint` inside a `try`, not by restating its rules. An earlier draft accepted any
+non-empty string, and `"endpoint": "/"` then threw out of the plugin a few lines later —
+a dev server killed by a data file, which is the failure this whole rule exists to prevent.
+`packages/vite/src/index.test.ts` found it rather than predicting it.
+
+**`hosts` is omitted from the wire when the config file does not set one. Settled during
+E7.** The plugin could resolve `hosts` to `DEFAULT_HOSTS` and always serialise the array;
+instead the key is absent unless the file supplied it, and `@dogear/core` applies its own
+defaults. The reason is the one E4 already recorded for not writing defaults into the config
+file: a restated default *pins* it. `@dogear/vite` and `@dogear/core` version independently,
+so a plugin one release behind would keep overriding core's list with a stale copy on behalf
+of a project that never expressed an opinion about it. Omission is the only form under which
+the two halves can move separately.
+
+It also keeps `[]` meaningful. An empty array has to survive the wire distinguishably from
+absence, or "dogear runs nowhere" silently becomes "dogear runs on the defaults" — so `[]` is
+honoured as itself, and `enabled: false` remains the clearer way to say the same thing.
+
+Core resolves the list **all-or-nothing**, unlike every other field it resolves per-field: a
+malformed array falls back to the defaults rather than to the strings inside it, because half
+of a safety list is not a safety list and filtering would silently *widen* whatever the author
+was narrowing. The per-entry dropping happens in `@dogear/vite`, which reads the file in a
+terminal and can name what it dropped. Core is silent, for F3's usual reason.
+
+**`normaliseEndpoint` rejects protocol-relative paths, queries and fragments. Settled during
+E7.** It already refused the site root; it accepted `//evil.com`, which is a protocol-relative
+URL — and since F4 the endpoint is not only where the middleware mounts but the `src` of the
+injected `<script>`, so a dev page would have fetched dogear's bundle from a third-party host.
+That contradicts "zero network egress" outright. A `?` or `#` fails the other way round, by
+colliding with the config parameter the same URL carries.
+
+The hole predates E7 and was reachable only from `vite.config.ts`, which was never a trust
+boundary — it is executable code loaded by the same process. E7 is what makes a *data file*
+able to set the field, which is a new shape of the same problem, and the rule lives in the one
+function every endpoint flows through so that both layers are covered by it.
+
+**init asks git whether the queue is ignored; it does not read `.gitignore`. Settled
+during E4.** "Is `.dogear/queue.json` ignored?" depends on `.git/info/exclude`, on the
+user's `core.excludesFile`, on every `.gitignore` between the root and the file, and on
+negation precedence that runs bottom-up within a file and top-down across them. Matching
+lines would be a second, worse gitignore engine whose bugs surface as a queue quietly
+getting committed — and it would append two redundant rules to any repo already using a
+broader pattern, which is what dogear's own repository does. `git check-ignore` is
+definitive and already installed. When it cannot answer at all — no git on `PATH`, a
+worktree whose pointer went stale — init writes the rules anyway: a redundant line costs
+nothing and an unignored queue gets committed. Idempotency in that degraded case rests on
+a narrower check, "have I already written my own block?", which is not the same question.
+
+**A step may report without changing. Settled during E4 by needing it twice.**
+E1's `plan()` returned a `Change` or `undefined`, where a change is a past-tense line
+printed after `apply()` returned. E4 found two things init must say and must not act on: a
+`.gitignore` whose existing rules also swallow `config.json` — appending a negation repairs
+a `.dogear/*` rule and silently fails against `.dogear/`, so it would fix the easy case and
+lie about the hard one — and a `queue.json` already in git's index, where no ignore rule
+has any effect and the fix is a `git rm --cached` only the user can decide to run. Neither
+fits a `Change`, so `plan()` now returns `{ change?, notes? }`. E2's report-before-change
+and E6's "a queue with pending annotations is reported, not deleted" want the same shape.
 
 **Queue schema: overwrite vs. append-with-status → append-with-status.**
 Claude marks items done, stale entries stay visible, history is inspectable. The costs —
@@ -1414,6 +1665,164 @@ would contradict the only thing it claims. It is stopped hard for the same reaso
 is — an app binding the same chord must not also fire — and it is the one chord that guards on
 `event.repeat`, because neither of the others can fire twice and this one can.
 
+**Plugin install → printed, not written. Settled during E8.**
+Install step 6 said init *adds* `@dogear/vite` to devDependencies. Three things make writing it
+wrong, and only the first is temporary.
+
+Both dogear packages are unpublished, so there is no range init can write that `npm install`
+resolves — `^0.0.0` names a version the registry does not have, and `*` or `latest` are odd
+things to commit into someone else's repository. A manifest edited without a matching lockfile
+update fails `npm ci` on the next machine that runs it, which is a breakage init caused in a
+repository it claimed to be setting up. And the edit accomplishes nothing on its own: the
+config's `import` still fails until someone runs an install, so the command has to be run
+either way.
+
+`npm i -D @dogear/vite` needs no version-derivation logic in the CLI, cannot desync a lockfile,
+and is correct the day the packages publish. It also makes the step symmetric with the decision
+already beside it: init prints the `vite.config` change rather than editing it, and now prints
+the dependency rather than writing it, for adjacent reasons.
+
+The consequence worth recording is structural: this step has no `Change` at all. It is a runner
+phase beside E2's detection remarks rather than an entry in the `Step` list, and E6's teardown
+has nothing of it to reverse.
+
+**`dogear init` is not interactive, and never was. Settled during E3.**
+This document said "init is interactive" and that step 3 *asks* which agent you use; E2's entry
+above went further and predicted E3 would build the prompt layer. Reconciling that against the
+code is what E3 actually started with, and the code had already answered: `init()` returns a
+string and an exit code, `emit()` is the only thing in the CLI that touches `process.stdout`,
+`plan()` may not write or throw, and every `plan()` runs before any `apply()`. A prompt fits
+nowhere in that. It cannot live in `plan()`, and asking between plan and apply invalidates what
+was planned — which is the one ordering `--dry-run` depends on.
+
+So detection guesses and flags override: `--agent=<name>`, repeatable, and `--no-hook`. Three
+things fall out of it. `--dry-run` stops being a substitute for a decline point and becomes the
+decline point, which is the role E2 built it for. The command stays assertable byte-for-byte in
+the fast suite, which is how `test-built/init.test.ts` can pin what lands in a real repository.
+And `--agent` can *subtract* — it replaces what detection found rather than adding to it, which
+is the only way to say "I know there is a `.cursor/` here, leave it alone". A prompt could not
+have expressed that without asking twice.
+
+The cost is a guess that can be wrong, and it is bounded on both sides: the `agent:` findings
+line says what was detected and what marker proved it, above every change, and `--dry-run`
+prints the lot before anything is written.
+
+**Agent configs are edited in place, never re-serialised. Settled during E3.**
+Adding an entry to `.claude/settings.json` or `.mcp.json` obviously means `JSON.parse` → mutate
+→ `JSON.stringify(…, null, 2)`, and that is wrong here for a concrete reason rather than a
+stylistic one. This repository's own `.claude/settings.json` writes hook objects like
+`{ "type": "command", "command": "bash \"…\"" }` on one line; re-serialising explodes every one
+of them onto four. The user asked for a hook and got a 250-line diff to the file they configure
+their agent with.
+
+JSON has no file-level append — a second top-level value is not a document — but inserting
+before the *enclosing* closing bracket is available, and that is what init does: find the
+container, place the entry, leave every other byte alone. Three shapes cover it, and they are
+the same primitive with a different path: no `hooks` key, a `hooks` key without the event, or
+an existing `UserPromptSubmit` array to join. The third is what "existing hooks survive" means.
+
+Two rules make it safe rather than merely careful. The scanner tracks string literals, so a `}`
+inside a shell command is not a closing brace. And the spliced text is parsed before it reaches
+disk — if it will not parse, init writes nothing and prints what to add instead. A config with
+comments in it lands on that path, which is the graceful degradation rather than a gap: a
+commented `.vscode/mcp.json` is an ordinary thing to find, and the right answer is to tell the
+user, not to reformat a file they hand-wrote. Verified against the real 250-line settings.json
+in this repo: zero lines lost or reformatted.
+
+Two things the format matrix turned up that neither rule covers, both found by writing the tests
+rather than by reasoning about them. **A key that is present but wrongly typed has to decline**:
+`{"hooks": "x"}` parses, so a merge that only asks "is this an object?" inserts a second `"hooks"`
+key — and `JSON.parse` accepts duplicates and keeps the last, so the parse check waves it through
+and the user's value is silently shadowed. Init cannot tell a typo it should route around from
+data it would be destroying, so it declines and says so. And **the byte order mark has to be
+tolerated**: `JSON.parse` throws on a leading one, several Windows editors write them, and
+without special handling a perfectly valid `settings.json` is reported as unreadable. It is
+stripped for the parse only, never from what is written back.
+
+The alternative considered and rejected was E8's: print it, never write it. It is the safest
+option and it costs the ticket — in most Claude Code repos `.claude/settings.json` already
+exists, so the hook would never actually be wired, and "merged into `.claude/settings.json`"
+would have become "printed for you to paste".
+
+**The registry has two writers, and is keyed by repo root rather than origin. Settled during
+E5, correcting this document against itself.**
+This document said two incompatible things and neither section knew about the other: the
+multiple-dev-servers section had the registry "written by each plugin instance at startup",
+and install step 7 had `dogear init` registering the repo. There was no Decisions entry, so
+there was nothing to defer to.
+
+Decided on merits, and both halves are needed. **`init` cannot write an origin** — there is no
+dev server when it runs. **The plugin cannot be the only writer** either, because E5's own
+story is "what's pending across every repo you've init'd", and a registry written only by dev
+servers means a repo you set up this morning is invisible until you start Vite. So init writes
+that the repo exists and the plugin writes the servers, either may create the entry, and a repo
+someone wired by hand without ever running `init` still shows up — which is the more useful
+answer anyway.
+
+"At startup" was wrong in a second way that only shows up in code. `configureServer` runs
+*before* the server binds, and Vite moves to the next free port when the configured one is
+taken — the `:8000, :8001, :8002` case this document opens that section with. So the origin is
+knowable only from the listening socket, and the write is deferred to `listening`. Vite's own
+`resolvedUrls` is not available there either; it is assigned after the event fires.
+
+Keying by **normalised root** rather than by origin follows from init writing first: an entry
+has to exist before any origin does. The normalisation is not fussiness — Node reports a
+Windows drive letter's case differently depending on how the process was started, and `init`
+typed into a shell and Vite spawned by npm are exactly that pair, so the raw path would give
+one repo two entries and `dogear status` would list it twice.
+
+**Liveness is a pid check, not a probe.** The plugin records its pid; `dogear status` sends
+signal 0. An HTTP probe of each origin would be more truthful — it proves the server answers,
+not merely that a process exists — and it would need an explicit exception to the zero-egress
+rule, timeouts, and an async command. A pid can be reused and a process can outlive its
+server, both of which heal on that repo's next dev server start. Not worth a socket.
+
+**`dogear status` gets no MCP tool. Settled during E5 — a deliberate exception to a stated
+rule.**
+"Everything works through MCP" is one of this document's firmest rules, and E5 is the first
+capability to ship without a tool. The rule exists so that dogear is not a Claude Code product
+with portability bolted on: a feature reachable only through the hook would be exactly that.
+`dogear status` is not that shape. It is machine-level orientation for a human — which of my
+dev servers is up, which repo has annotations waiting — and every MCP session is scoped to one
+repo by construction, since the server resolves its root by walking up from `cwd`. An agent in
+repo A asking about repo B is not a capability it is missing; it is a boundary the same-origin
+design was built so that nothing would need to cross. `dogear_pending` already answers "what is
+pending here", which is the question an agent actually has.
+
+The rule's real target is unchanged and worth restating: no *annotation* capability may live
+only on a non-MCP surface. Reading and resolving still both go through the server.
+
+**Detection → a phase before the steps, plus `--dry-run`. Settled during E2.**
+E1's `Step` seam was written expecting detection to arrive as another entry in the list, and
+that was wrong in a way worth recording. A step's only voice is `Plan.notes`, and notes print
+*below* the change list — so detection-as-a-step would have reported what it found after init
+had already changed things, inverting E2's second criterion. Detection is therefore a phase:
+it runs first, its findings get a labelled section above the changes, and the structured result
+reaches every `plan()` as a second argument, which is what E3 needs to wire what detection saw
+rather than looking again. Steps that ignore the argument declare the narrower signature and
+are unaffected, so E4's three needed no edit.
+
+`--dry-run` is the other half. "Reports before changing" only means something if there is a
+point at which you can decline, and a non-interactive command has none — every byte prints at
+the end either way. The flag supplies it without inventing a prompt layer. This entry expected
+E3 to build one anyway for "which agent do you use"; it did not, and the flag turned out to be
+the whole answer rather than a stopgap — see E3's entry below. Plan-every-step-then-apply
+already existed for report ordering, so the flag is a branch rather than a mechanism.
+
+Two smaller decisions inside it. **Versions are the declared range, verbatim** — `react
+^19.2.0`, never resolved from `node_modules`, which need not exist and would make the report
+depend on whether anyone had run an install. And **detection's remarks do not suppress
+`nothing changed`, though a step's notes still do**: a repository with no Vite config earns a
+remark on *every* run, so folding them together would mean the commonest reason to run init
+twice is also the case where it never gives a verdict. A step note qualifies what init did; a
+remark describes the repository, which is what the findings already do without silencing
+anything.
+
+`pnpm-workspace.yaml` names the layout but its globs are not parsed. Reading them means a YAML
+dependency — the CLI has one dependency and it is the MCP SDK — or a hand-rolled parser that
+will meet YAML it cannot read. The bounded walk finds the apps regardless; only the package
+count is missing, and the report omits the number rather than guessing it.
+
 **Cross-repo isolation → free, via same-origin.**
 Each dev server serves its own endpoint and knows its own root, so port collisions across
 repos cannot cause confusion. Worth stating because it's a real advantage over the
@@ -1552,6 +1961,57 @@ inherit the whole mechanism. The two rules that are built (pid-suffixed temp fil
 read-modify-write on every submit) already guarantee the failure is a lost append rather
 than a corrupted queue, which is the property worth having. Moved to Still open; revisit
 when someone actually loses an annotation.
+
+**Undo is a second list of steps, not a `revert` on each one. Settled during E6.**
+E6 left the choice open on the grounds that a second list "avoids burdening E2's detection,
+which writes nothing". That argument had expired by the time the ticket was picked up:
+detection became a *phase* rather than a `Step` during E2, and E8's guidance block went the
+same way, so every member of `stepsFor` is a real writer and none of them would have been
+burdened either way.
+
+What decided it instead is `Wiring`. `stepsFor` picks its MCP targets from resolved
+detection; undo cannot. Run `dogear init --agent=cursor`, delete `.cursor/`, and detection
+now reports `claude` — a `revert` hanging off the wiring-built step would walk straight past
+the file it wrote and leave the entry. Undo must scan all three agent configs
+unconditionally, so a `revert` on those objects would have to be documented never to consult
+the wiring it was constructed from, which is a trap rather than a contract. A separate list
+has no wiring to ignore and needs no change to `Step`, `Plan`, `Change` or the report.
+
+The cost is that nothing makes the compiler demand a teardown for a new step, and
+`scaffold.test.ts` pins it instead by matching names in both directions. Two step modules
+contribute several `Undo` entries rather than one, because a `Plan` carries a single
+past-tense summary and undo has two verbs — `deleted` for a file that goes whole, `removed`
+for one that is spliced — and a repository with both kinds needs a line of each.
+
+**Undo deletes a file only when it is byte-identical to what init writes. Settled during E6.**
+The alternative to the byte comparison was judging whether a document is "empty of meaning",
+which would let undo delete a `{"mcpServers": {}}` the user wrote. Byte identity cannot: a
+file matching init's fresh output to the byte is one init created and nobody has touched.
+Anything else is spliced and every other byte survives.
+
+Two limits are real and were found by running E3's format matrix rather than predicted. A
+file that was `{}` before init comes out of the merge byte-identical to init's own output, so
+undo removes it — it configured nothing, and the information distinguishing the two cases does
+not exist on disk. And undo prunes a hook container its entry emptied, which takes an *empty*
+`"UserPromptSubmit": []` that predated init with it; an empty array of hooks and an absent key
+are the same configuration, so the cost is zero and the alternative is visible litter in the
+common case. The `.gitignore` block and the `AGENTS.md` stanza have a third, smaller version of
+the same problem: the separator init writes turns `a`, `a\n` and `a\n\n` into one string, so
+removal restores the middle one.
+
+**A `.gitignore` whose dogear block has been edited is reported, not repaired. Settled during
+E6.** The three lines must be contiguous and in the order init wrote them, header comment
+included — which is what that comment was added for during E4. A line-wise sweep would be
+tidier and is wrong for the reason E4 already gave in the other direction: a repository may
+perfectly well have carried `.dogear/queue.json` before init ever ran, and deleting a rule the
+user wrote costs a committed queue, while leaving two redundant lines costs a `git status`
+line.
+
+**`dogear init --undo` refuses `--agent` and `--no-hook`. Settled during E6.**
+They select what to wire, and undo unwires everything unconditionally — see the entry above.
+Ignoring them would leave someone who typed `--undo --agent=cursor` believing they had asked
+for something narrower than what happened, which is the same asymmetry that already makes an
+unrecognised argument a failure rather than something to skip.
 
 **Tooling → npm workspaces, TypeScript 7, tsup, vitest, Prettier. No ESLint.**
 npm workspaces because pnpm isn't installed and this doesn't need it. TypeScript 7 is the

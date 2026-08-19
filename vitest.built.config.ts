@@ -20,5 +20,8 @@ export default defineConfig({
   test: {
     include: ['packages/*/test-built/*.test.ts'],
     environment: 'node',
+    // E5 (#30). The spawned binary inherits this process's environment, so pinning
+    // `DOGEAR_HOME` here keeps `dogear init` in a subprocess off the real home directory too.
+    setupFiles: ['./vitest.setup.ts'],
   },
 })

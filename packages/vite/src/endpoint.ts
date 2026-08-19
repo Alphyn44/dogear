@@ -76,6 +76,18 @@ export interface EndpointOptions {
  * Throws on a base path that would be the site root. `dogear({ endpoint: '/' })` would put
  * dogear in front of every request in the application, which is never what someone means
  * and would be baffling to debug.
+ *
+ * **It must also be a path and nothing else — E7 (#40).** This value is not only where the
+ * middleware mounts; `clientScriptSrc` turns it into the `src` of the injected `<script>`,
+ * so `//evil.com` is a protocol-relative URL and the dev page would fetch dogear's bundle
+ * from a third-party host. That contradicts "zero network egress" outright. A `?` or `#`
+ * loses the same way in the other direction: the config parameter would land inside a query
+ * string the endpoint had already opened, and core would read a truncated one.
+ *
+ * Checked here rather than in E7's file reader because this is the one function every
+ * endpoint flows through, whichever layer supplied it. A plugin option was never a trust
+ * boundary — `vite.config.ts` is executable code — but a *data file* that can point the
+ * script tag off-host is a new shape of the same hole, and one rule closes both.
  */
 export function normaliseEndpoint(endpoint: string): string {
   const trimmed = endpoint.trim().replace(/\/+$/, '')
@@ -84,6 +96,21 @@ export function normaliseEndpoint(endpoint: string): string {
   if (normalised === '/') {
     throw new Error(
       `dogear: endpoint must be a path below the site root, received ${JSON.stringify(endpoint)}`,
+    )
+  }
+
+  // After the leading-slash step, so `//evil.com` and a bare `/evil.com` written as
+  // `//evil.com/` are both caught by the one test.
+  if (normalised.startsWith('//')) {
+    throw new Error(
+      'dogear: endpoint must be a same-origin path, not a protocol-relative URL, received ' +
+        JSON.stringify(endpoint),
+    )
+  }
+
+  if (normalised.includes('?') || normalised.includes('#')) {
+    throw new Error(
+      `dogear: endpoint must be a path with no query or fragment, received ${JSON.stringify(endpoint)}`,
     )
   }
 

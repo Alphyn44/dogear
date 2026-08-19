@@ -31,9 +31,9 @@
  * the most *intentionally* stable hook on a page — someone chose it and something else
  * depends on it — which is why it outranks everything below an `id` here.
  *
- * Not configurable, on purpose. `.dogear/config.json` is E4's (#29) to introduce, and
- * ./host.ts is the pattern to copy when it lands: ship the defaults and the matcher now,
- * let E4 pass a second argument later.
+ * Not configurable, on purpose. E4 (#29) introduced `.dogear/config.json`, and E7 (#40) is what
+ * gives it a reader; ./host.ts is the pattern to copy if this ever becomes configurable —
+ * ship the defaults and the matcher now, let a later ticket pass a second argument.
  */
 export const TEST_ID_ATTRIBUTES: readonly string[] = Object.freeze([
   'data-testid',

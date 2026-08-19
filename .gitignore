@@ -5,6 +5,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# `npm pack` output. Written to the repo root, and the manual install smoke check
+# in E1 (#26) runs it — so this is a file you will create again every time you
+# verify the global install story, not a one-off accident.
+*.tgz
+
 # Test / coverage
 coverage/
 

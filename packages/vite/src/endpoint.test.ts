@@ -100,6 +100,37 @@ describe('normaliseEndpoint', () => {
       expect(() => normaliseEndpoint(input)).toThrow(/below the site root/)
     },
   )
+
+  /**
+   * E7 (#40). This value is not only where the middleware mounts — `clientScriptSrc` makes it
+   * the `src` of the injected `<script>`, so a protocol-relative form would have the dev page
+   * fetch dogear's bundle from a third-party host, which "zero network egress" forbids.
+   *
+   * Checked here rather than in ./config-file.ts because every endpoint flows through this
+   * one function whichever layer supplied it. A plugin option was never a trust boundary —
+   * `vite.config.ts` is executable code — but E7 makes a *data file* able to set this, which
+   * is a new shape of the same hole, and one rule closes both.
+   */
+  it.each(['//evil.com', '//evil.com/x', '  //evil.com  '])(
+    'refuses %j, which would load the client from another origin',
+    (input) => {
+      expect(() => normaliseEndpoint(input)).toThrow(/protocol-relative/)
+    },
+  )
+
+  it.each(['/__dogear?a=1', '/__dogear#x', '/a?b#c'])(
+    'refuses %j, which would collide with the config parameter',
+    (input) => {
+      expect(() => normaliseEndpoint(input)).toThrow(/query or fragment/)
+    },
+  )
+
+  it('still accepts a path that merely contains a colon or a dot', () => {
+    // The rejections above are about *origin* and *URL structure*, not about exotic
+    // characters. A path is a path.
+    expect(normaliseEndpoint('/__dogear.v2')).toBe('/__dogear.v2')
+    expect(normaliseEndpoint('/a:b')).toBe('/a:b')
+  })
 })
 
 describe('POST /__dogear/annotations', () => {

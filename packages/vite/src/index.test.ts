@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -7,6 +7,7 @@ import { normalizePath } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { readConfig } from '../../core/src/client-config.js'
+import { UNBUILT_CORE_WARNING } from './client.js'
 import { dogear } from './index.js'
 import { SENTINEL } from './sentinel.js'
 import { SOURCE_ATTRIBUTE } from './stamp.js'
@@ -51,7 +52,15 @@ function fakeServer(serverRoot: string, log: ServerLog): ViteDevServer {
     config: {
       root: serverRoot,
       logger: {
-        warn: (message: string) => log.warnings.push(message),
+        // Dropped rather than recorded: whether `@dogear/core` has been built is
+        // environmental, not something any case here is about. `npm test` is deliberately
+        // build-independent, so this warning is absent on a machine that has run
+        // `npm run build` and present in CI, which runs the suites first — and an
+        // assertion that the plugin warned about nothing would pass locally and fail
+        // there. ./client.test.ts skips its own case for the same reason.
+        warn: (message: string) => {
+          if (message !== UNBUILT_CORE_WARNING) log.warnings.push(message)
+        },
         info: (message: string) => log.infos.push(message),
       },
     },
@@ -110,6 +119,36 @@ function injectedSrc(plugin: Plugin): string {
   const src = injectedTags(plugin)[0]?.attrs?.['src']
   if (typeof src !== 'string') throw new Error('expected a script src')
   return src
+}
+
+/**
+ * Run `body` with `.dogear/config.json` present, and remove it afterwards — E7 (#40).
+ *
+ * `root` is one temp directory shared by every test in this file, created once in
+ * `beforeAll`. A config written by one test would therefore be read by every test after it,
+ * and the failure would be invisible: the *other* tests would keep passing while quietly
+ * being run against a configuration they never asked for. Hence a scope rather than a bare
+ * `writeFileSync`, and `finally` rather than a trailing cleanup line.
+ */
+function withConfig<T>(contents: string, body: () => T): T {
+  const dir = join(root, '.dogear')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'config.json'), contents)
+  try {
+    return body()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/** The same, for the ordinary case of a well-formed object. */
+function withConfigOf<T>(value: unknown, body: () => T): T {
+  return withConfig(JSON.stringify(value), body)
+}
+
+/** The decoded `?config=` payload from the injected tag. */
+function injectedConfig(plugin: Plugin): Record<string, unknown> {
+  return readConfig(`https://x${injectedSrc(plugin)}`) as Record<string, unknown>
 }
 
 describe('dogear()', () => {
@@ -285,6 +324,189 @@ describe('enabled: false', () => {
 
   it('does not throw on a bad modifier it will never use', () => {
     expect(() => run({ enabled: false, modifier: 'ctr1' as never })).not.toThrow()
+  })
+})
+
+/**
+ * E7 (#40) — `.dogear/config.json` layered under the plugin options.
+ *
+ * Three layers, and the order is the whole ticket: option, then file, then default. What the
+ * reader itself accepts and rejects is ./config-file.test.ts's subject; these tests are about
+ * *precedence*, and about the two places the layered values actually land — the config on the
+ * injected tag, and the filter the C1 transform consults.
+ */
+describe('config precedence (E7)', () => {
+  it('uses the file when the option is absent', () => {
+    withConfigOf({ version: 1, modifier: 'ctrl' }, () => {
+      expect(injectedConfig(configured()).modifier).toBe('ctrl')
+    })
+  })
+
+  it('lets the option beat the file', () => {
+    withConfigOf({ version: 1, modifier: 'ctrl' }, () => {
+      expect(injectedConfig(configured({ modifier: 'meta' })).modifier).toBe('meta')
+    })
+  })
+
+  it('falls to the default for a key the file does not set', () => {
+    // The criterion this ticket turns on. `dogear init` writes only `version`, so a file that
+    // sets nothing is the ordinary case, not the edge — and every unset key must reach the
+    // default rather than being overwritten with one the layering invented.
+    withConfigOf({ version: 1, modifier: 'ctrl' }, () => {
+      const config = injectedConfig(configured())
+
+      expect(config.modifier).toBe('ctrl')
+      expect(config.endpoint).toBe('/__dogear')
+    })
+  })
+
+  it('layers the endpoint, and the tag follows it', () => {
+    withConfigOf({ version: 1, endpoint: '/__x' }, () => {
+      const plugin = configured()
+
+      expect(injectedSrc(plugin)).toContain('/__x/client.js?')
+      expect(injectedConfig(plugin).endpoint).toBe('/__x')
+    })
+  })
+
+  it('says which keys the file supplied, and only when it supplied some', () => {
+    // The file's only confirmation channel — nothing else reads it.
+    withConfigOf({ version: 1, modifier: 'ctrl' }, () => {
+      const { log } = run()
+      const line = log.infos.find((message) => message.includes('config.json'))
+
+      expect(line).toBeDefined()
+      expect(line).toContain('modifier')
+    })
+
+    // And the case that must stay quiet: what `dogear init` actually writes.
+    withConfigOf({ version: 1 }, () => {
+      const { log } = run()
+
+      expect(log.infos.some((message) => message.includes('config.json'))).toBe(false)
+      expect(log.warnings).toEqual([])
+    })
+  })
+
+  describe('enabled', () => {
+    it('turns dogear off from the file', () => {
+      withConfigOf({ version: 1, enabled: false }, () => {
+        const { log, plugin } = run()
+
+        expect(log.middlewares).toHaveLength(0)
+        expect(injectedTags(plugin)).toHaveLength(0)
+        expect(log.infos.some((message) => message.includes('config.json'))).toBe(true)
+      })
+    })
+
+    it('lets an explicit option override the file', () => {
+      withConfigOf({ version: 1, enabled: false }, () => {
+        expect(run({ enabled: true }).log.middlewares).toHaveLength(1)
+      })
+    })
+
+    it('bails on the option before ever reading the file', () => {
+      // The ordering the hook depends on: `enabled: false` as an option is dispositive by
+      // precedence, so a broken file cannot make a disabled project throw.
+      withConfig('{ not json', () => {
+        const { log } = run({ enabled: false })
+
+        expect(log.warnings).toEqual([])
+        expect(log.middlewares).toHaveLength(0)
+      })
+    })
+  })
+
+  describe('hosts', () => {
+    it('reaches the browser when the file sets it', () => {
+      withConfigOf({ version: 1, hosts: ['localhost', '*.test'] }, () => {
+        expect(injectedConfig(configured()).hosts).toEqual(['localhost', '*.test'])
+      })
+    })
+
+    it('is absent from the wire when the file does not', () => {
+      // Not merely equal to the defaults — *absent*. Sending @dogear/vite's copy of the list
+      // would pin it, so a plugin one version behind @dogear/core would keep overriding core's
+      // defaults with a stale list it never chose. Omitted means "core decides".
+      withConfigOf({ version: 1, modifier: 'ctrl' }, () => {
+        expect(injectedConfig(configured())).not.toHaveProperty('hosts')
+      })
+
+      expect(injectedConfig(configured())).not.toHaveProperty('hosts')
+    })
+
+    it('survives as an empty array, which allows nothing', () => {
+      withConfigOf({ version: 1, hosts: [] }, () => {
+        expect(injectedConfig(configured()).hosts).toEqual([])
+      })
+    })
+  })
+
+  describe('the transform', () => {
+    const JSX = 'const a = <div />\n'
+
+    function stamps(plugin: Plugin, relative: string): boolean {
+      const hook = plugin.transform
+      if (typeof hook !== 'function')
+        throw new Error('expected transform in function form')
+      const id = normalizePath(join(root, relative))
+      return (
+        (hook as (code: string, id: string) => unknown).call(plugin, JSX, id) !== null
+      )
+    }
+
+    it('is turned off from the file', () => {
+      withConfigOf({ version: 1, transform: false }, () => {
+        expect(stamps(configured(), 'src/App.tsx')).toBe(false)
+      })
+    })
+
+    it('lets `transform: true` as an option beat the file', () => {
+      withConfigOf({ version: 1, transform: false }, () => {
+        expect(stamps(configured({ transform: true }), 'src/App.tsx')).toBe(true)
+      })
+    })
+
+    it('takes include from the file, resolved against the git root', () => {
+      // The file sits at the git root, so a relative glob written there anchors where its
+      // author would expect — the same root `resolve: gitRoot` already pins for options.
+      withConfigOf({ version: 1, include: ['src/**/*.jsx'] }, () => {
+        const plugin = configured()
+
+        expect(stamps(plugin, 'src/App.jsx')).toBe(true)
+        expect(stamps(plugin, 'src/App.tsx')).toBe(false)
+      })
+    })
+
+    it('takes exclude from the file', () => {
+      withConfigOf({ version: 1, exclude: ['**/vendor/**'] }, () => {
+        const plugin = configured()
+
+        expect(stamps(plugin, 'src/App.tsx')).toBe(true)
+        expect(stamps(plugin, 'src/vendor/App.tsx')).toBe(false)
+      })
+    })
+  })
+
+  describe('a file that will not parse', () => {
+    it('is reported and the plugin falls back to its options', () => {
+      withConfig('{ "modifier": ', () => {
+        const { log, plugin } = run({ modifier: 'meta' })
+
+        expect(log.warnings.some((message) => message.includes('config.json'))).toBe(true)
+        // Still fully alive: endpoint served, tag injected, options honoured.
+        expect(log.middlewares).toHaveLength(1)
+        expect(injectedConfig(plugin).modifier).toBe('meta')
+      })
+    })
+
+    it('never takes the dev server down', () => {
+      withConfig('{ "endpoint": "/", "modifier": 99 }', () => {
+        // `endpoint: '/'` would throw if it were a plugin option. From the file it is a bad
+        // value like any other: warned about, dropped, default used.
+        expect(() => run()).not.toThrow()
+      })
+    })
   })
 })
 

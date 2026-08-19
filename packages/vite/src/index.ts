@@ -1,5 +1,12 @@
-import { findGitRoot } from '@dogear/queue'
-import type { FilterPattern, Plugin } from 'vite'
+import {
+  CONFIG_FILE,
+  deregisterServer,
+  findGitRoot,
+  QUEUE_DIR,
+  registerServer,
+  registryPath,
+} from '@dogear/queue'
+import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
 import { createFilter } from 'vite'
 
 import { findAppName } from './app-name.js'
@@ -9,7 +16,9 @@ import {
   clientScriptSrc,
   MODIFIERS,
   resolveCoreDist,
+  UNBUILT_CORE_WARNING,
 } from './client.js'
+import { readConfigFile } from './config-file.js'
 import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
 import { SENTINEL } from './sentinel.js'
 import { stampSource } from './stamp.js'
@@ -45,6 +54,11 @@ export interface DogearOptions {
    * never puts dogear in the browser to be toggled. A committed `enabled: false` is off for
    * everyone who clones the repo.
    *
+   * `.dogear/config.json` layers underneath — E7 (#40) — but this option is checked *first*
+   * and on its own: an explicit `false` here is dispositive by precedence, so no file read
+   * can change the answer, and a disabled project must not be stoppable by a dogear
+   * misconfiguration it will never use.
+   *
    * Not a production-safety layer. `apply: 'serve'` is that, and this changes nothing about
    * what a build contains — see the brief.
    */
@@ -53,15 +67,20 @@ export interface DogearOptions {
    * Base path for dogear's HTTP endpoints. Default `/__dogear`, matching Vite's own
    * `/__vite_ping` convention.
    *
-   * Reading this from `.dogear/config.json` is E4's job; the brief's model is that plugin
-   * options override the file, so this is the layer that wins either way.
+   * `.dogear/config.json` layers underneath this — E7 (#40). Plugin options override the
+   * file, so this is the layer that wins when both are set.
+   *
+   * Must be a same-origin path: no protocol-relative `//host`, no query, no fragment. It
+   * becomes the `src` of the injected `<script>` as well as the middleware's mount point —
+   * see `normaliseEndpoint`, which rejects the rest.
    */
   readonly endpoint?: string
   /**
    * Which key arms the overlay. Default `'alt'`.
    *
-   * Same precedence as {@link DogearOptions.endpoint}: E4 (#29) layers `.dogear/config.json`
-   * underneath this, and neither reaches past it.
+   * Same precedence as {@link DogearOptions.endpoint}: E7 (#40) layers `.dogear/config.json`
+   * underneath this, and neither reaches past it. A bad value **here** throws, while a bad
+   * value in the file is warned about and dropped — see `validateModifier`.
    *
    * `'meta'` is the Windows key on Windows, where the OS claims it on keyup — it works, but
    * it is a poor choice there.
@@ -75,7 +94,7 @@ export interface DogearOptions {
    * do in a Vue or Svelte app. That is the axis this option exists on — it is about source
    * *resolution*, not about whether dogear runs. {@link DogearOptions.enabled} is the latter.
    *
-   * Same precedence as the options above: E4 (#29) layers `.dogear/config.json` underneath,
+   * Same precedence as the options above: E7 (#40) layers `.dogear/config.json` underneath,
    * where the brief already names this field.
    */
   readonly transform?: boolean
@@ -86,12 +105,20 @@ export interface DogearOptions {
    * the same root the stamped paths themselves are relative to. In a monorepo that is what
    * lets one dev server stamp a shared `packages/ui` component it imports from outside its
    * own Vite root, which anchoring to the Vite root would silently skip.
+   *
+   * E7 (#40) layers `.dogear/config.json` underneath. The file can only express a string or
+   * an array of them — JSON has no `RegExp` — and it sits at the git root, so a relative glob
+   * written there already anchors where its author would expect.
    */
   readonly include?: FilterPattern
   /**
    * Files the transform skips even when {@link DogearOptions.include} matches. Default
    * `['**\/node_modules/**']`; setting this replaces that rather than extending it, so
    * keep the `node_modules` entry unless you mean to lose it.
+   *
+   * Layered from `.dogear/config.json` alongside {@link DogearOptions.include} — E7 (#40)
+   * added it to the recognised set, since a file that can widen `include` without adjusting
+   * the skip list is a half-configurable filter.
    */
   readonly exclude?: FilterPattern
   /**
@@ -103,7 +130,7 @@ export interface DogearOptions {
    * `Button`. Derived rather than configured in the ordinary case — set it when the package
    * has no name, or when its published name is not what you would call the app.
    *
-   * **Unlike the options above, E4 (#29) does not layer `.dogear/config.json` under this
+   * **Unlike the options above, E7 (#40) does not layer `.dogear/config.json` under this
    * one.** That file lives at the git root, one per repo, and this value is per Vite root —
    * a monorepo's three servers would all read the same key and tag their annotations
    * identically, which is the exact ambiguity the field exists to remove. The nearest
@@ -208,19 +235,17 @@ export function dogear(options: DogearOptions = {}): Plugin {
         return
       }
 
-      const endpoint = normaliseEndpoint(options.endpoint ?? DEFAULT_ENDPOINT)
-      // The *normalised* endpoint, not `options.endpoint` — core POSTs to
-      // `<endpoint>/annotations`, and it has to be the path the middleware below is
-      // actually mounted at. B5 (#12).
-      const config = buildClientConfig({
-        modifier: validateModifier(options.modifier),
-        endpoint,
-      })
-
       // Resolved once: the repository root cannot move while this process lives. The
       // brief's "never cache" rule is about queue *contents*, which are re-read on every
       // single write — see queue.ts. Conflating the two would mean walking the filesystem
       // on every request to learn something that cannot have changed.
+      //
+      // **Ahead of the option resolution below since E7 (#40)**, because `.dogear/config.json`
+      // is found from here and it is one of the three layers those options come from. The
+      // `enabled: false` check above deliberately stays in front of both: a plugin option
+      // beats the file by definition, so no file read can change that answer, and a project
+      // that has turned dogear off should not be able to have its dev server taken down by a
+      // dogear misconfiguration of any kind.
       const gitRoot = findGitRoot(server.config.root)
 
       if (gitRoot === undefined) {
@@ -241,15 +266,53 @@ export function dogear(options: DogearOptions = {}): Plugin {
         return
       }
 
+      // E7 (#40). The middle layer: plugin option, then this file, then the default. Every
+      // `??` below leans on that order, and `??` rather than `||` is load-bearing — it falls
+      // through only on `undefined`, so a literal `enabled: false` or `transform: false`
+      // option still beats the file, and a key the file does not set falls to the *default*
+      // rather than being overwritten with one.
+      //
+      // Read once, like the git root above. Vite restarts on a `vite.config` change and knows
+      // nothing about this file, so editing it needs a dev server restart — which the
+      // confirmation line below says out loud rather than leaving to be discovered.
+      const file = readConfigFile(gitRoot, (message) => {
+        server.config.logger.warn(message)
+      })
+      const supplied = Object.keys(file)
+
+      if ((options.enabled ?? file.enabled) === false) {
+        // Separate from the option branch at the top of this hook, because the two name
+        // different places to go and undo it. Same consequence: no middleware, no tag.
+        server.config.logger.info(
+          `[dogear] disabled by ${QUEUE_DIR}/${CONFIG_FILE} (\`enabled: false\`). No script ` +
+            'is injected and no endpoint is served.',
+        )
+        return
+      }
+
+      const endpoint = normaliseEndpoint(
+        options.endpoint ?? file.endpoint ?? DEFAULT_ENDPOINT,
+      )
+      // The *normalised* endpoint, not the configured one — core POSTs to
+      // `<endpoint>/annotations`, and it has to be the path the middleware below is
+      // actually mounted at. B5 (#12).
+      //
+      // `hosts` has no plugin option above it: it is F3's allow-list, repo-wide safety
+      // configuration that belongs in the repo-wide committed file. Passed through as
+      // `file.hosts`, so an unset key leaves it off the wire entirely and core keeps its own
+      // defaults — see `ClientConfig`.
+      const config = buildClientConfig({
+        modifier: validateModifier(options.modifier) ?? file.modifier,
+        endpoint,
+        hosts: file.hosts,
+      })
+
       const clientDist = resolveCoreDist()
       if (clientDist === undefined) {
         // Not fatal — the route answers with a stub module that says the same thing in the
         // browser console. Said here too, because the terminal is where someone who just
         // cloned the repo is actually looking.
-        server.config.logger.warn(
-          '[dogear] @dogear/core has not been built, so the overlay will not load. Run ' +
-            '`npm run build -w @dogear/core`.',
-        )
+        server.config.logger.warn(UNBUILT_CORE_WARNING)
       }
 
       // C4 (#18). Resolved once, for the same reason the git root above is: the Vite root
@@ -272,6 +335,21 @@ export function dogear(options: DogearOptions = {}): Plugin {
           'Ctrl+Alt+D to turn dogear off.',
       )
 
+      // E7 (#40). Only when the file actually contributed something, which is why it is
+      // `supplied.length` and not "does the file exist". `dogear init` writes `{"version": 1}`
+      // and stops, so an init'd repo that has never been edited supplies nothing and stays as
+      // quiet as it was before this ticket — the commonest case by far, and the one a line
+      // here would turn into noise on every dev server start.
+      //
+      // It is the only confirmation this file will ever get: nothing else reads it, so
+      // "did my config apply?" is otherwise answerable only by observing dogear's behaviour.
+      if (supplied.length > 0) {
+        server.config.logger.info(
+          `[dogear] ${QUEUE_DIR}/${CONFIG_FILE} set ${supplied.join(', ')}. ` +
+            'Restart the dev server to pick up changes to it.',
+        )
+      }
+
       // C1 (#15). Resolved here rather than per-request because neither the git root nor
       // the option patterns can change while this process lives, and `createFilter`
       // compiles its globs once.
@@ -281,12 +359,16 @@ export function dogear(options: DogearOptions = {}): Plugin {
       // to start the dev server — in a workspace that is the package directory, not the
       // repo. Anchoring to the git root instead makes one root govern the whole feature:
       // the globs a user writes and the paths the attribute carries mean the same thing.
-      if (options.transform !== false) {
+      //
+      // The file layers under all three since E7 (#40), and `resolve: gitRoot` needs no
+      // adjusting for it: `.dogear/config.json` sits at that same root, so a relative glob
+      // written in the file already means what its author would expect.
+      if ((options.transform ?? file.transform) !== false) {
         stamping = {
           gitRoot,
           matches: createFilter(
-            options.include ?? DEFAULT_INCLUDE,
-            options.exclude ?? DEFAULT_EXCLUDE,
+            options.include ?? file.include ?? DEFAULT_INCLUDE,
+            options.exclude ?? file.exclude ?? DEFAULT_EXCLUDE,
             { resolve: gitRoot },
           ),
         }
@@ -296,6 +378,8 @@ export function dogear(options: DogearOptions = {}): Plugin {
       // registered — so there is no window in which the tag is injected but the route that
       // serves its import is not.
       injection = { endpoint, config }
+
+      registerWith(server, gitRoot, app)
     },
 
     /**
@@ -365,6 +449,12 @@ export function dogear(options: DogearOptions = {}): Plugin {
  * server starts, where a typo should be named; there it is a page load in a browser, where a
  * dev tool throwing has broken the app it exists to help inspect.
  *
+ * E7 (#40) adds a third audience and it lands on the tolerant side: a bad `modifier` in
+ * `.dogear/config.json` is warned about and dropped by ./config-file.ts rather than thrown
+ * on. That file is committed, so whoever broke it is often not whoever is running the dev
+ * server, and one person's typo must not stop everyone else's `npm run dev`. This function
+ * still governs the *option*, which is the author's own code in the file they are editing.
+ *
  * Validated in `configureServer` rather than in the factory, for the same reason
  * `normaliseEndpoint` is: a misconfigured dev tool must not be able to take down a
  * production build. `apply: 'serve'` already excludes the plugin from one, and throwing from
@@ -377,6 +467,75 @@ function validateModifier(modifier: Modifier | undefined): Modifier | undefined 
     `dogear: modifier must be one of ${MODIFIERS.join(', ')}, received ` +
       JSON.stringify(modifier),
   )
+}
+
+/**
+ * Record this dev server in the machine-level registry, so `dogear status` can see it — E5 (#30).
+ *
+ * **Deferred to `listening`, and that is the whole reason this is a function rather than four
+ * lines in `configureServer`.** That hook runs before the server binds a port, and Vite moves
+ * to the next free one when the configured port is taken — the brief's own example is one
+ * repository serving `:8000`, `:8001` and `:8002`. So `server.config.server.port` is the
+ * *request*, and only the listening socket knows the answer.
+ *
+ * `server.resolvedUrls` would read better than assembling the origin by hand, and is not an
+ * option either: Vite assigns it *after* `httpServerStart` resolves, which is after this event
+ * has already fired. `address()` is the one thing that is authoritative at this moment.
+ *
+ * **No `httpServer` means middleware mode**, where Vite is mounted inside someone else's
+ * server and there is no origin of dogear's to record. Nothing is registered and nothing is
+ * warned about — the repository still appears in `dogear status` through the entry
+ * `dogear init` wrote, just with no dev server under it. Every suite in ./index.test.ts takes
+ * this branch, since its fake server has no `httpServer`, which is why none of them had to
+ * change when this landed.
+ *
+ * **A registry failure must never take the dev server down.** Same trade as the missing git
+ * root above: the user came here to work on their app, and `dogear status` being unable to
+ * list this repo is not worth a failed startup. It warns, once, and carries on.
+ */
+function registerWith(
+  server: ViteDevServer,
+  gitRoot: string,
+  app: string | undefined,
+): void {
+  const httpServer = server.httpServer
+  if (!httpServer) return
+
+  httpServer.once('listening', () => {
+    const address = httpServer.address()
+    // A string address is a UNIX socket, which has no port and no origin a browser could have
+    // loaded the page from. Nothing to record.
+    if (address === null || typeof address === 'string') return
+
+    // `localhost` rather than the bound address, which for the default host is `127.0.0.1` and
+    // for `--host` is `::` — neither is what the browser's `location.origin` says, and the
+    // origin is here to be recognised by a human reading `dogear status`.
+    const protocol = server.config.server.https === undefined ? 'http' : 'https'
+
+    try {
+      registerServer(registryPath(), gitRoot, {
+        origin: `${protocol}://localhost:${address.port}`,
+        pid: process.pid,
+        app,
+      })
+    } catch (error) {
+      server.config.logger.warn(
+        `[dogear] could not record this dev server in ${registryPath()}, so \`dogear ` +
+          `status\` will not list it: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  })
+
+  httpServer.once('close', () => {
+    // Best effort, and silent. A dev server that is SIGKILLed never reaches this at all, which
+    // is why `isProcessAlive` exists rather than this being relied on — and a warning printed
+    // while the process is already shutting down is noise nobody acts on.
+    try {
+      deregisterServer(registryPath(), gitRoot, process.pid)
+    } catch {
+      // Ignored on purpose. See above.
+    }
+  })
 }
 
 export default dogear

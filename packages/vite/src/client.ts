@@ -70,6 +70,17 @@ export const DEFAULT_MODIFIER: Modifier = 'alt'
 export interface ClientConfig {
   readonly modifier: Modifier
   readonly endpoint: string
+  /**
+   * F3's allow-list, when `.dogear/config.json` sets one — E7 (#40).
+   *
+   * **Optional, and absent unless the file said so.** Sending the plugin's own copy of the
+   * defaults would *pin* them: a repo whose `@dogear/vite` is a version behind `@dogear/core`
+   * would keep overriding core's list with a stale one, having never expressed an opinion
+   * about it. That is precisely the failure the brief's E4 entry rejects for writing defaults
+   * into the config file, and it applies identically here. Omitted means "core decides",
+   * which is the only form under which the two packages can move independently.
+   */
+  readonly hosts?: readonly string[]
 }
 
 /** Absolute paths to core's dev build, resolved once per dev server. */
@@ -101,6 +112,21 @@ const resolveFrom = createRequire(import.meta.url)
  * exposes a manifest, not code, so `@dogear/core` still resolves to the noop for every
  * consumer under every condition but `development`.
  */
+/**
+ * What the *terminal* gets when {@link resolveCoreDist} finds nothing — the twin of
+ * `MISSING_BUNDLE_STUB`, which says the same thing in the browser console.
+ *
+ * A named constant rather than an inline string because the tests have to recognise it.
+ * Whether core's `dist/` exists is environmental — `npm test` is deliberately
+ * build-independent, so it is present on a developer's machine after a build and absent in
+ * CI, which runs the suites before `npm run build`. Every harness asserting "the plugin
+ * warned about nothing" therefore has to drop precisely this message, and matching on a
+ * copied substring would let the two drift apart silently.
+ */
+export const UNBUILT_CORE_WARNING =
+  '[dogear] @dogear/core has not been built, so the overlay will not load. ' +
+  'Run `npm run build -w @dogear/core`.'
+
 export function resolveCoreDist(): ClientDist | undefined {
   let manifest: string
   try {
@@ -138,10 +164,16 @@ export function resolveCoreDist(): ClientDist | undefined {
 export function buildClientConfig(options: {
   readonly modifier?: Modifier
   readonly endpoint: string
+  readonly hosts?: readonly string[]
 }): ClientConfig {
   return {
     modifier: options.modifier ?? DEFAULT_MODIFIER,
     endpoint: options.endpoint,
+    // Spread rather than `hosts: options.hosts`, so an unset list leaves the key off the
+    // object entirely. `JSON.stringify` would drop an explicit `undefined` anyway, but the
+    // object is compared directly by ./client.test.ts's assignability proof and read by
+    // ./index.test.ts, and "absent" is the state that means something here.
+    ...(options.hosts === undefined ? {} : { hosts: options.hosts }),
   }
 }
 

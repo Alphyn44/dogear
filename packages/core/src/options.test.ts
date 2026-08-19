@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
+import { DEFAULT_HOSTS } from './host.js'
 import type { InitOptions } from './options.js'
 import {
   DEFAULT_ENDPOINT,
   DEFAULT_MODIFIER,
   MODIFIERS,
+  resolveHosts,
   resolveOptions,
 } from './options.js'
 
@@ -100,5 +102,54 @@ describe('resolveOptions', () => {
     const options = { enabled: value } as unknown as InitOptions
 
     expect(resolveOptions(options).enabled).toBe(true)
+  })
+
+  it('does not carry hosts, which belongs to the guard rather than the session', () => {
+    // `ResolvedOptions` is what `createSession` receives and every field on it is one the
+    // session reads. F3's list is consumed once, before a session exists — see `resolveHosts`.
+    expect(resolveOptions({ hosts: ['localhost'] })).not.toHaveProperty('hosts')
+  })
+})
+
+/**
+ * E7 (#40). Separate from `resolveOptions` because it is consumed at a different moment by a
+ * different caller: `init()` hands it to the host guard and never refers to it again.
+ *
+ * Its rule is also different, and deliberately so — every fallback above is per-field, while
+ * this one is all-or-nothing. Half of a safety list is not a safety list.
+ */
+describe('resolveHosts', () => {
+  it('defaults to DEFAULT_HOSTS', () => {
+    expect(resolveHosts(undefined)).toBe(DEFAULT_HOSTS)
+    expect(resolveHosts({})).toBe(DEFAULT_HOSTS)
+  })
+
+  it('passes a well-formed list through unchanged', () => {
+    expect(resolveHosts({ hosts: ['localhost', '*.test'] })).toEqual([
+      'localhost',
+      '*.test',
+    ])
+  })
+
+  it('honours an empty list as "nowhere"', () => {
+    // Not read as absence. `.dogear/config.json` is allowed to say that dogear runs nowhere,
+    // and reading `[]` as "unset" would silently override whoever meant it.
+    expect(resolveHosts({ hosts: [] })).toEqual([])
+  })
+
+  it.each([
+    { why: 'a string', value: 'localhost' },
+    { why: 'null', value: null },
+    { why: 'an object', value: { 0: 'localhost' } },
+    { why: 'a list with a number in it', value: ['localhost', 7] },
+    { why: 'a list of nulls', value: [null] },
+  ])('falls back to the defaults for $why', ({ value }) => {
+    // Wholesale, not per-entry: dropping the bad entries would silently *widen* a list its
+    // author was narrowing. @dogear/vite does the per-entry dropping, in a terminal where it
+    // can name what it dropped — so anything malformed by the time it reaches here was
+    // hand-written onto the query parameter.
+    const options = { hosts: value } as unknown as InitOptions
+
+    expect(resolveHosts(options)).toBe(DEFAULT_HOSTS)
   })
 })

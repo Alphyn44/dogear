@@ -37,5 +37,8 @@ export function mcp(cwd: string): Outcome {
     }
   }
 
-  return { serve: async () => (await import('./server.js')).serve(gitRoot) }
+  // An `Async` outcome, and the strictest kind: from here the transport owns stdout, so
+  // unlike `dogear init` — the other command in that variant — nothing may ever be written
+  // through `emit()`. See ./run.ts's `Async` for the distinction.
+  return { run: async () => (await import('./server.js')).serve(gitRoot) }
 }
