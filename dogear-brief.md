@@ -675,6 +675,11 @@ Re-running is safe: it diffs against what's there and only reports what changed.
 every change it *would* make without writing any of them. That is how step 2's report-before-
 change is reachable from a non-interactive command; see the Decisions log.
 
+`dogear init --undo` reverses steps 3–5 and 7 in *this* repo and reports what it removed,
+taking the prompt hook out first. Step 2 does not run — detection describes a repo being set
+up — and step 6 wrote nothing to reverse. `--dry-run` applies; `--agent` and `--no-hook` are
+refused. Built by E6 (#39); see the Decisions log.
+
 ---
 
 ## Keeping it out of production
@@ -901,10 +906,16 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 
 **E6 — Undoing an init**
 - `dogear init --undo` removes what init added to *this* repo and reports what it removed.
+  It refuses outside a git repo exactly as `dogear init` does, and `--dry-run` applies to it.
 - The agent wiring comes out first and always: an orphaned `UserPromptSubmit` hook fires on
   every prompt against a path that no longer exists.
 - Pending annotations are never destroyed silently — the queue is the user's data, and
-  removing it is a separate, explicit act.
+  removing it is a separate, explicit act. `.dogear/` goes only once it is empty.
+- Entries dogear did not write survive. A file is deleted only when it is byte-identical to
+  what init writes; anything else is spliced. An edited `.gitignore` block is reported rather
+  than guessed at. Added during E6 — see the Decisions log.
+- `--agent` and `--no-hook` are refused alongside `--undo`, which unwires unconditionally.
+  Added during E6; see the Decisions log.
 - Uninstalling the CLI without running this is survivable: nothing dogear writes may break
   an agent that no longer has dogear installed.
 
@@ -1909,6 +1920,57 @@ inherit the whole mechanism. The two rules that are built (pid-suffixed temp fil
 read-modify-write on every submit) already guarantee the failure is a lost append rather
 than a corrupted queue, which is the property worth having. Moved to Still open; revisit
 when someone actually loses an annotation.
+
+**Undo is a second list of steps, not a `revert` on each one. Settled during E6.**
+E6 left the choice open on the grounds that a second list "avoids burdening E2's detection,
+which writes nothing". That argument had expired by the time the ticket was picked up:
+detection became a *phase* rather than a `Step` during E2, and E8's guidance block went the
+same way, so every member of `stepsFor` is a real writer and none of them would have been
+burdened either way.
+
+What decided it instead is `Wiring`. `stepsFor` picks its MCP targets from resolved
+detection; undo cannot. Run `dogear init --agent=cursor`, delete `.cursor/`, and detection
+now reports `claude` — a `revert` hanging off the wiring-built step would walk straight past
+the file it wrote and leave the entry. Undo must scan all three agent configs
+unconditionally, so a `revert` on those objects would have to be documented never to consult
+the wiring it was constructed from, which is a trap rather than a contract. A separate list
+has no wiring to ignore and needs no change to `Step`, `Plan`, `Change` or the report.
+
+The cost is that nothing makes the compiler demand a teardown for a new step, and
+`scaffold.test.ts` pins it instead by matching names in both directions. Two step modules
+contribute several `Undo` entries rather than one, because a `Plan` carries a single
+past-tense summary and undo has two verbs — `deleted` for a file that goes whole, `removed`
+for one that is spliced — and a repository with both kinds needs a line of each.
+
+**Undo deletes a file only when it is byte-identical to what init writes. Settled during E6.**
+The alternative to the byte comparison was judging whether a document is "empty of meaning",
+which would let undo delete a `{"mcpServers": {}}` the user wrote. Byte identity cannot: a
+file matching init's fresh output to the byte is one init created and nobody has touched.
+Anything else is spliced and every other byte survives.
+
+Two limits are real and were found by running E3's format matrix rather than predicted. A
+file that was `{}` before init comes out of the merge byte-identical to init's own output, so
+undo removes it — it configured nothing, and the information distinguishing the two cases does
+not exist on disk. And undo prunes a hook container its entry emptied, which takes an *empty*
+`"UserPromptSubmit": []` that predated init with it; an empty array of hooks and an absent key
+are the same configuration, so the cost is zero and the alternative is visible litter in the
+common case. The `.gitignore` block and the `AGENTS.md` stanza have a third, smaller version of
+the same problem: the separator init writes turns `a`, `a\n` and `a\n\n` into one string, so
+removal restores the middle one.
+
+**A `.gitignore` whose dogear block has been edited is reported, not repaired. Settled during
+E6.** The three lines must be contiguous and in the order init wrote them, header comment
+included — which is what that comment was added for during E4. A line-wise sweep would be
+tidier and is wrong for the reason E4 already gave in the other direction: a repository may
+perfectly well have carried `.dogear/queue.json` before init ever ran, and deleting a rule the
+user wrote costs a committed queue, while leaving two redundant lines costs a `git status`
+line.
+
+**`dogear init --undo` refuses `--agent` and `--no-hook`. Settled during E6.**
+They select what to wire, and undo unwires everything unconditionally — see the entry above.
+Ignoring them would leave someone who typed `--undo --agent=cursor` believing they had asked
+for something narrower than what happened, which is the same asymmetry that already makes an
+unrecognised argument a failure rather than something to skip.
 
 **Tooling → npm workspaces, TypeScript 7, tsup, vitest, Prettier. No ESLint.**
 npm workspaces because pnpm isn't installed and this doesn't need it. TypeScript 7 is the

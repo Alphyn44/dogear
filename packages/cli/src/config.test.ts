@@ -1,11 +1,19 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { QUEUE_DIR, configPathFor } from '@dogear/queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { configFile } from './config.js'
+import { configFile, configRemoval } from './config.js'
+import type { Plan } from './scaffold.js'
 import { NO_DETECTION } from './test-repo.js'
 
 /**
@@ -121,5 +129,65 @@ describe('the config step when the path is occupied by something else', () => {
 
     expect(() => change?.apply()).toThrow(/is not a regular file/)
     expect(() => change?.apply()).toThrow(/Remove it and re-run/)
+  })
+})
+
+describe('removing the config — E6 (#39)', () => {
+  function undo(): Plan | undefined {
+    const plan = configRemoval.plan(root)
+    plan?.change?.apply()
+    return plan
+  }
+
+  it('deletes it', () => {
+    apply()
+
+    expect(undo()?.change?.summary).toBe(`deleted ${QUEUE_DIR}/config.json`)
+    expect(existsSync(configPathFor(root))).toBe(false)
+  })
+
+  it('says nothing extra about a config holding only version', () => {
+    apply()
+
+    expect(undo()?.notes).toBeUndefined()
+  })
+
+  it('names the settings that went with it', () => {
+    // The one file undo removes that a user may have written by hand — E7 (#40) made this real
+    // configuration. It goes, because #39's first criterion names it and because `.gitignore`
+    // deliberately does not cover it, so git has a copy. Doing it silently is the part that
+    // would not be defensible.
+    writeFileSync(
+      configPathFor(root),
+      `${JSON.stringify({ version: 1, modifier: 'ctrl', hosts: ['app.local'] })}\n`,
+    )
+
+    const note = undo()?.notes?.[0]
+
+    expect(note).toContain('modifier, hosts')
+    expect(note).toContain('git checkout')
+    expect(existsSync(configPathFor(root))).toBe(false)
+  })
+
+  it('still deletes a config that will not parse, and says nothing about it', () => {
+    // "Your unreadable file was deleted" tells the user less than the file already did, and
+    // `plan()` must not throw trying to work out what was in it.
+    writeFileSync(configPathFor(root), '{ broken')
+
+    expect(() => configRemoval.plan(root)).not.toThrow()
+    expect(undo()?.notes).toBeUndefined()
+    expect(existsSync(configPathFor(root))).toBe(false)
+  })
+
+  it('plans nothing when there is no config', () => {
+    expect(configRemoval.plan(root)).toBeUndefined()
+  })
+
+  it('plans nothing, and does not throw, when .dogear is a regular file', () => {
+    rmSync(join(root, QUEUE_DIR), { recursive: true })
+    writeFileSync(join(root, QUEUE_DIR), 'not a directory')
+
+    expect(() => configRemoval.plan(root)).not.toThrow()
+    expect(configRemoval.plan(root)).toBeUndefined()
   })
 })

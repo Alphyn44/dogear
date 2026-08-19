@@ -1,10 +1,10 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Agent, Cli } from './detect.js'
-import { createMcpStep } from './mcp-config.js'
+import { createMcpStep, mcpRemovals } from './mcp-config.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
 
@@ -212,5 +212,88 @@ describe('createMcpStep() applying twice', () => {
       mcpServers: { dogear: { command: string } }
     }
     expect(parsed.mcpServers.dogear.command).toBe('mine')
+  })
+})
+
+describe('unregistering the server — E6 (#39)', () => {
+  /** Plan every target's removal and apply what each planned. */
+  function undo(): readonly (Plan | undefined)[] {
+    const plans = mcpRemovals.map((step) => step.plan(root))
+    for (const planned of plans) planned?.change?.apply()
+    return plans
+  }
+
+  it('deletes an .mcp.json that init created', () => {
+    run(['claude'])
+
+    expect(undo().find((planned) => planned !== undefined)?.change?.summary).toBe(
+      'deleted .mcp.json',
+    )
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+  })
+
+  it('leaves other servers registered, byte for byte', () => {
+    const before =
+      '{\n  "mcpServers": {\n    "other": { "command": "node", "args": ["x.js"] }\n  }\n}\n'
+    seed('.mcp.json', before)
+    run(['claude'])
+
+    undo()
+
+    expect(read('.mcp.json')).toBe(before)
+  })
+
+  it('reaches every target, not just the one detection would pick today', () => {
+    // The argument for undo being driven by TARGETS rather than by the Wiring: init with
+    // --agent=cursor, delete `.cursor/`, and detection now says claude. A wiring-driven undo
+    // walks straight past the file it wrote.
+    run(['cursor'], '.cursor/mcp.json')
+    run(['vscode'], '.vscode/mcp.json')
+
+    undo()
+
+    expect(existsSync(join(root, '.cursor', 'mcp.json'))).toBe(false)
+    expect(existsSync(join(root, '.vscode', 'mcp.json'))).toBe(false)
+  })
+
+  it("does not remove the agent's own directory", () => {
+    // `.cursor/` is the marker ./detect.ts reads to know the tool is used here at all, and an
+    // empty one is inert. init creating it does not make removing it symmetric.
+    run(['cursor'], '.cursor/mcp.json')
+
+    undo()
+
+    expect(existsSync(join(root, '.cursor'))).toBe(true)
+  })
+
+  it('handles the VS Code container, which is `servers` rather than `mcpServers`', () => {
+    const before = '{\n  "servers": {\n    "other": { "command": "node" }\n  }\n}\n'
+    seed('.vscode/mcp.json', before)
+    run(['vscode'], '.vscode/mcp.json')
+
+    undo()
+
+    expect(read('.vscode/mcp.json')).toBe(before)
+  })
+
+  it('plans nothing when dogear was never registered', () => {
+    seed('.mcp.json', '{\n  "mcpServers": {\n    "other": {}\n  }\n}\n')
+
+    expect(mcpRemovals.map((step) => step.plan(root))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
+
+  it('leaves an unparseable file alone and says what to remove', () => {
+    const broken = '{ "mcpServers": '
+    seed('.mcp.json', broken)
+
+    const notes = undo().flatMap((planned) => planned?.notes ?? [])
+
+    expect(notes[0]).toContain('could not be parsed')
+    expect(notes[0]).toContain('dogear')
+    expect(read('.mcp.json')).toBe(broken)
   })
 })

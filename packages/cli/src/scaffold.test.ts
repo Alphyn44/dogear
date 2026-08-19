@@ -12,7 +12,8 @@ import { CONFIG_FILE, QUEUE_DIR, registryPath, shortenHome } from '@dogear/queue
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Agent, Cli, Detection } from './detect.js'
-import { resolveWiring, scaffold } from './scaffold.js'
+import type { Wiring } from './scaffold.js'
+import { resolveWiring, scaffold, stepsFor, undoSteps } from './scaffold.js'
 import {
   createRepo,
   isolateGitConfig,
@@ -686,5 +687,40 @@ describe('scaffold() wiring an agent — E3 (#28)', () => {
     expect(lines.findIndex((line) => line.includes('agent:'))).toBeLessThan(
       lines.findIndex((line) => line.includes('would register')),
     )
+  })
+})
+
+describe('every step can be undone — E6 (#39)', () => {
+  it('has an Undo for every Step, matched by name', () => {
+    // **This is what a `revert` on `Step` would have given the compiler**, recovered as a test.
+    // #39 weighed the two and the second list won on other grounds (see `Undo` in
+    // ./scaffold.ts), which leaves nothing forcing a new step to declare a teardown. A step
+    // added without one is a step that `dogear init --undo` silently walks past, leaving
+    // exactly the residue the ticket exists to remove — so it fails here instead.
+    const wiring: Wiring = {
+      agents: ['claude', 'cursor', 'vscode'],
+      hook: true,
+      cli: 'local',
+    }
+    const undone = new Set(undoSteps().map((step) => step.name))
+
+    for (const step of stepsFor(wiring)) {
+      expect(undone).toContain(step.name)
+    }
+  })
+
+  it('names nothing that is not a step', () => {
+    // The other direction, which catches a rename on the init side: an `Undo` whose `Step` has
+    // gone is reversing something nothing writes any more.
+    const wiring: Wiring = {
+      agents: ['claude', 'cursor', 'vscode'],
+      hook: true,
+      cli: 'local',
+    }
+    const steps = new Set(stepsFor(wiring).map((step) => step.name))
+
+    for (const step of undoSteps()) {
+      expect(steps).toContain(step.name)
+    }
   })
 })

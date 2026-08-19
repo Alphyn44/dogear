@@ -92,6 +92,7 @@ export function usage(): string {
     '  init     Set this repo up for dogear (safe to re-run; --dry-run changes nothing)',
     '             --agent=claude|cursor|vscode|none  wire these instead of what is detected',
     '             --no-hook                          skip Claude Code’s prompt hook',
+    '             --undo                             remove what init wrote to this repo',
     '  hook     Emit UserPromptSubmit JSON (your agent runs this, not you)',
     '  mcp      Run the MCP server over stdio',
     '  prune    Drop resolved items from the queue',

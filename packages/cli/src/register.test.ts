@@ -12,7 +12,7 @@ import {
 } from '@dogear/queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { createRegisterStep } from './register.js'
+import { createDeregisterStep, createRegisterStep } from './register.js'
 import { NO_DETECTION } from './test-repo.js'
 
 /**
@@ -122,5 +122,82 @@ describe('createRegisterStep', () => {
     plan()?.change?.apply()
 
     expect(Object.keys(readRegistry(path).projects)).toHaveLength(2)
+  })
+})
+
+describe('createDeregisterStep — E6 (#39)', () => {
+  function undo() {
+    return createDeregisterStep(env).plan(root)
+  }
+
+  it('plans nothing for a repository that was never registered', () => {
+    expect(undo()).toBeUndefined()
+  })
+
+  it('removes the entry', () => {
+    plan()?.change?.apply()
+
+    expect(undo()?.change?.summary).toBe(
+      `removed this repository from ${shortenHome(path)}`,
+    )
+    undo()?.change?.apply()
+
+    expect(readRegistry(path).projects[registryKey(root)]).toBeUndefined()
+  })
+
+  it('writes nothing at plan time — the rule --dry-run is built on', () => {
+    plan()?.change?.apply()
+
+    undo()
+
+    expect(readRegistry(path).projects[registryKey(root)]).toBeDefined()
+  })
+
+  it('keeps other repositories’ entries', () => {
+    const other = join(tmpdir(), 'dogear-register-other')
+    registerServer(path, other, { origin: 'http://localhost:5173', pid: process.pid })
+    plan()?.change?.apply()
+
+    undo()?.change?.apply()
+
+    expect(readRegistry(path).projects[registryKey(other)]).toBeDefined()
+    expect(readRegistry(path).projects[registryKey(root)]).toBeUndefined()
+  })
+
+  it('removes an entry the plugin created without init ever running', () => {
+    // Deleting the whole entry rather than clearing `initialisedAt`: `dogear status` has no
+    // notion of a de-initialised repo, so a half-cleared entry would sit in the list forever.
+    registerServer(path, root, { origin: 'http://localhost:5173', pid: process.pid })
+
+    undo()?.change?.apply()
+
+    expect(readRegistry(path).projects[registryKey(root)]).toBeUndefined()
+  })
+
+  it('warns that a live dev server is still serving the overlay', () => {
+    // Undo removes configuration, not the installed plugin. A dev server already up still has
+    // @dogear/vite loaded and will recreate the queue on the next click.
+    registerServer(path, root, { origin: 'http://localhost:5173', pid: process.pid })
+
+    const note = undo()?.notes?.[0]
+
+    expect(note).toContain('http://localhost:5173')
+    expect(note).toContain(`pid ${process.pid}`)
+    expect(note).toContain('until you restart it')
+  })
+
+  it('says nothing about a dev server whose process has gone', () => {
+    // The pid probe, not the record's presence — a dead server is not something to act on.
+    registerServer(path, root, { origin: 'http://localhost:5173', pid: 0x7fffffff })
+
+    expect(undo()?.notes).toBeUndefined()
+  })
+
+  it('notes a registry it cannot read rather than throwing', () => {
+    writeFileSync(path, 'not json')
+
+    expect(() => undo()).not.toThrow()
+    expect(undo()?.notes?.[0]).toContain('could not be read')
+    expect(undo()?.change).toBeUndefined()
   })
 })

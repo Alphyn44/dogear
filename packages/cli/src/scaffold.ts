@@ -1,13 +1,13 @@
-import { configFile } from './config.js'
+import { configFile, configRemoval } from './config.js'
 import type { Agent, Cli, Detection, DetectedApp } from './detect.js'
 import { detect } from './detect.js'
-import { gitignore } from './gitignore.js'
+import { gitignore, gitignoreRemoval } from './gitignore.js'
 import { guidance } from './guidance.js'
-import { createHookStep } from './hook-config.js'
-import { createMcpStep } from './mcp-config.js'
-import { queueDirectory } from './queue-dir.js'
-import { createRegisterStep } from './register.js'
-import { createRulesStep } from './rules.js'
+import { createHookStep, hookRemoval } from './hook-config.js'
+import { createMcpStep, mcpRemovals } from './mcp-config.js'
+import { queueDirectory, queueDirRemoval } from './queue-dir.js'
+import { createDeregisterStep, createRegisterStep } from './register.js'
+import { createRulesStep, rulesRemovals } from './rules.js'
 import type { Result } from './run.js'
 
 /**
@@ -129,6 +129,42 @@ export interface Step {
   readonly plan: (root: string, detection: Detection) => Plan | undefined
 }
 
+/**
+ * One thing `dogear init --undo` takes back out — E6 (#39).
+ *
+ * **A second list rather than a `revert` beside `plan`**, and #39 left the choice open on the
+ * grounds that a `revert` "avoids burdening E2's detection, which writes nothing". That
+ * argument had expired by the time this was picked up: E2 settled detection as a *phase* and
+ * E8 did the same for its guidance block, so every member of {@link stepsFor} is a real writer
+ * and none of them would have been burdened.
+ *
+ * What decided it instead is {@link Wiring}. `stepsFor` picks its MCP targets from resolved
+ * detection, so a `revert` hanging off one of those objects would carry a wiring it must be
+ * documented never to consult — because undo has to scan **all three** agent configs
+ * unconditionally. Init with `--agent=cursor`, delete `.cursor/`, and detection now says
+ * `claude`; a wiring-driven undo would walk straight past `.cursor/mcp.json` and leave the
+ * entry that #39 exists to remove. A separate list has no wiring to ignore, and needs no change
+ * to {@link Step}, {@link Plan}, {@link Change} or the report.
+ *
+ * The cost is that nothing makes the compiler demand a teardown for a new step. ./scaffold.test.ts
+ * pins it instead, by matching every {@link Step} name against an entry in {@link UNDO_STEPS}.
+ */
+export interface Undo {
+  /** Matches the {@link Step} it reverses, which is what ./scaffold.test.ts pairs them on. */
+  readonly name: string
+  /**
+   * Inspect the repository. **Never writes, and never throws** — the same contract as
+   * {@link Step.plan}, for the same reason: `--undo --dry-run` plans everything and applies
+   * nothing.
+   *
+   * No `detection` argument, because an undo run never calls `detect()`. Detection answers
+   * *what should be wired here*, and every line of it — the `vite:` findings, the JSX-only
+   * remark, E8's install block — describes a repository being set up rather than one being
+   * taken apart.
+   */
+  readonly plan: (root: string) => Plan | undefined
+}
+
 /** How `dogear init` was asked to run. */
 export interface ScaffoldOptions {
   /**
@@ -159,6 +195,17 @@ export interface ScaffoldOptions {
    * ask for it.
    */
   readonly hook?: boolean
+}
+
+/**
+ * How `dogear init --undo` was asked to run — E6 (#39).
+ *
+ * Only `dryRun`, and that is the whole point: `--agent` and `--no-hook` select what to *wire*,
+ * so ./init.ts refuses them here rather than letting this type quietly ignore them. Someone who
+ * typed `--undo --agent=cursor` believes they asked for something narrower than what undo does.
+ */
+export interface UndoOptions {
+  readonly dryRun?: boolean
 }
 
 /**
@@ -225,7 +272,7 @@ export function resolveWiring(detection: Detection, options: ScaffoldOptions): W
  * that writes outside the repository, which is the second reason to run it once everything
  * inside is done. That matches the brief's install sequence, where registering is step 7.
  */
-function stepsFor(wiring: Wiring): readonly Step[] {
+export function stepsFor(wiring: Wiring): readonly Step[] {
   return [
     queueDirectory,
     configFile,
@@ -240,6 +287,42 @@ function stepsFor(wiring: Wiring): readonly Step[] {
     // nothing but a test would ever pass is API that exists to be mocked.
     createRegisterStep(process.env),
   ]
+}
+
+/**
+ * The reverse — E6 (#39). Not `stepsFor` read backwards, and the difference is the ticket.
+ *
+ * **The prompt hook comes out first and always.** Every other residue is inert: a leftover
+ * `.mcp.json` entry costs a server the client fails to spawn once per session, and a leftover
+ * `.gitignore` rule costs a line. An orphaned `UserPromptSubmit` entry runs `node <path> hook`
+ * against a path that no longer exists **on every prompt the user types**, which is the only
+ * thing here that breaks something, and it breaks it in a tool the user believes they have
+ * removed. So it goes before anything that could fail — `apply` stops at the first failure, and
+ * the ordering rule init already follows (leave the important half done) inverts under teardown
+ * into *take the dangerous half out first*.
+ *
+ * The rest follows the same inversion. `.dogear/config.json` must go before `.dogear/`, because
+ * the directory is only removed once it is empty. The registry is last for the reason it is
+ * last on the way in: it is the only entry that writes outside the repository, and there is
+ * nothing to be gained by forgetting a repository whose teardown then fails half way.
+ *
+ * `process.env` reaches ./register.ts's factory here for the reason {@link stepsFor} gives.
+ */
+const UNDO_STEPS: readonly Undo[] = [
+  hookRemoval,
+  // Several entries each, one per file they touch, so a repository where one config is deleted
+  // whole and another is spliced gets a correctly-verbed line for each. See ./mcp-config.ts.
+  ...mcpRemovals,
+  ...rulesRemovals,
+  gitignoreRemoval,
+  configRemoval,
+  queueDirRemoval,
+  createDeregisterStep(process.env),
+]
+
+/** Exposed for ./scaffold.test.ts, which pairs these against {@link stepsFor} by name. */
+export function undoSteps(): readonly Undo[] {
+  return UNDO_STEPS
 }
 
 /**
@@ -277,6 +360,76 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
   // `remarks` for the same reason it is not a step: nothing plans it and nothing applies it.
   const next = guidance(detection)
   const notes = plans.flatMap((plan) => plan.notes ?? [])
+  const { applied, failure } = applyAll(plans, options.dryRun === true)
+
+  return {
+    output: report({
+      root,
+      findings,
+      applied,
+      notes,
+      found,
+      // E8's block is withheld on a failure, and this is the only place it is. It tells the
+      // user to install a plugin into a repository init could not finish setting up; what they
+      // should do next is fix what failed and re-run, and the re-run prints it.
+      next: failure === undefined ? next : [],
+      dryRun: options.dryRun === true,
+      failure,
+    }),
+    exitCode: failure === undefined ? 0 : 1,
+  }
+}
+
+/**
+ * Take back out what {@link scaffold} put in, and report what that removed — E6 (#39).
+ *
+ * The mirror of `scaffold`, and deliberately the *smaller* function: no detection phase, no
+ * `remarks()`, no E8 guidance block. All three describe a repository being set up. See
+ * {@link Undo} for why undo is a list of its own rather than a `revert` on each `Step`, and
+ * {@link UNDO_STEPS} for why its order is not `stepsFor` reversed.
+ *
+ * **Refusing outside a git repository is ./init.ts's, not this function's** — `--undo` is a
+ * flag on `init`, so it reaches the same synchronous check before anything here runs. That is
+ * most of the argument for it being a flag rather than a command of its own.
+ *
+ * A repository that was never init'd plans nothing, reports `nothing changed` and exits 0,
+ * which falls straight out of `plan()` returning `undefined` — the same mechanism that makes
+ * re-running `init` a no-op, doing its second job.
+ */
+export function unscaffold(root: string, options: UndoOptions = {}): Result {
+  const plans = UNDO_STEPS.map((step) => step.plan(root)).filter(
+    (plan): plan is Plan => plan !== undefined,
+  )
+
+  const notes = plans.flatMap((plan) => plan.notes ?? [])
+  const { applied, failure } = applyAll(plans, options.dryRun === true)
+
+  return {
+    output: report({
+      root,
+      findings: [],
+      applied,
+      notes,
+      found: [],
+      next: [],
+      dryRun: options.dryRun === true,
+      failure,
+    }),
+    exitCode: failure === undefined ? 0 : 1,
+  }
+}
+
+/**
+ * Apply what was planned, or say what it would have done — shared by both runners.
+ *
+ * **Stops at the first failure**, and `applied` holds only what actually happened, so the
+ * report stays true and a re-run resumes from there rather than repeating what already
+ * succeeded. See the header for why collecting errors was rejected.
+ */
+function applyAll(
+  plans: readonly Plan[],
+  dryRun: boolean,
+): { readonly applied: readonly string[]; readonly failure?: string } {
   const applied: string[] = []
 
   for (const { change } of plans) {
@@ -286,7 +439,7 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
     // cannot honour it. Converting here rather than giving every step a second tense to keep
     // in sync is the cheaper half of that trade — one call site bends, instead of every step
     // carrying a string it uses on one run in a hundred.
-    if (options.dryRun === true) {
+    if (dryRun) {
       applied.push(`would ${imperative(change.summary)}`)
       continue
     }
@@ -294,44 +447,13 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
     try {
       change.apply()
     } catch (error) {
-      // Stop here. `applied` holds only what actually happened, so the report stays true and
-      // a re-run resumes from this step rather than repeating the ones above it.
-      //
-      // The notes still go out. They describe what was already true of the repository, so a
-      // failure part-way through makes none of them less true — and the one about a tracked
-      // queue.json is exactly what someone re-running a failed init needs to know.
-      return {
-        output: report({
-          root,
-          findings,
-          applied,
-          notes,
-          found,
-          // Withheld on a failure, and this is the only place it is. The block tells the user
-          // to install a plugin into a repository init could not finish setting up; what they
-          // should do next is fix what failed and re-run, and the re-run prints it.
-          next: [],
-          failure: `failed: ${messageOf(error)}`,
-        }),
-        exitCode: 1,
-      }
+      return { applied, failure: `failed: ${messageOf(error)}` }
     }
 
     applied.push(change.summary)
   }
 
-  return {
-    output: report({
-      root,
-      findings,
-      applied,
-      notes,
-      found,
-      next,
-      dryRun: options.dryRun === true,
-    }),
-    exitCode: 0,
-  }
+  return { applied }
 }
 
 /**
@@ -412,6 +534,12 @@ const IMPERATIVE = new Map([
   ['added', 'add'],
   ['wrote', 'write'],
   ['registered', 'register'],
+  // E6 (#39)'s two teardown verbs, and they are not interchangeable. `deleted` means a whole
+  // file or directory is gone; `removed` means bytes were spliced out of one that stays. Undo
+  // can do either to `.mcp.json`, and the user has to be able to tell which happened at a
+  // glance — so the split is the report's, not a matter of taste, and every `Undo` keeps to it.
+  ['removed', 'remove'],
+  ['deleted', 'delete'],
 ])
 
 /** `created .dogear/` → `create .dogear/`, for the one caller that has not done it yet. */

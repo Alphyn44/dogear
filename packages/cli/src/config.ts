@@ -1,8 +1,8 @@
-import { statSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 
 import { CONFIG_FILE, QUEUE_DIR, QUEUE_VERSION, configPathFor } from '@dogear/queue'
 
-import type { Step } from './scaffold.js'
+import type { Step, Undo } from './scaffold.js'
 
 /**
  * `.dogear/config.json` exists — E4 (#29), the committed half of the directory.
@@ -59,6 +59,74 @@ export const configFile: Step = {
       },
     }
   },
+}
+
+/**
+ * Delete `.dogear/config.json` — E6 (#39), and the one removal that is not conditional.
+ *
+ * **It goes even when the user edited it, and that is #39's first acceptance criterion**
+ * naming this file directly. E7 (#40) made it real configuration — `hosts`, `modifier`,
+ * `endpoint` — so this is the one place undo removes something a user may have written by hand,
+ * and it is defensible only because of where the file lives: `.gitignore` deliberately does not
+ * cover it, so it is *committed*, and `git checkout` brings it back. What is not defensible is
+ * doing it silently, so a config carrying anything beyond `version` says so on the way out.
+ *
+ * **Before ./queue-dir.ts, and that ordering is load-bearing** — the directory is only removed
+ * once it is empty, and this file is usually the last thing in it.
+ */
+export const configRemoval: Undo = {
+  name: 'config-file',
+  plan: (root) => {
+    const path = configPathFor(root)
+    if (kindOf(path) !== 'file') return undefined
+
+    return {
+      change: {
+        summary: `deleted ${QUEUE_DIR}/${CONFIG_FILE}`,
+        apply: () => {
+          // Re-checked rather than trusted, as every `apply` in this package is. A directory
+          // that appeared here between plan and apply would produce `EPERM`/`EISDIR` from
+          // `rmSync`, naming neither the path nor a way out.
+          if (kindOf(path) !== 'file') {
+            throw new Error(
+              `${QUEUE_DIR}/${CONFIG_FILE} is no longer a regular file at ${root}, so it ` +
+                'was left alone. Re-run dogear init --undo.',
+            )
+          }
+
+          rmSync(path)
+        },
+      },
+      notes: settings(path),
+    }
+  },
+}
+
+/**
+ * What the user put in this file, if anything — the note that keeps the deletion honest.
+ *
+ * Tolerant to the point of silence: a config that will not parse earns nothing here, because
+ * `plan()` must not throw and because "your unreadable file was deleted" tells the user less
+ * than the file itself did. `version` is dogear's own and is not worth naming.
+ */
+function settings(path: string): readonly string[] | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return undefined
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    return undefined
+
+  const keys = Object.keys(parsed).filter((key) => key !== 'version')
+  if (keys.length === 0) return undefined
+
+  return [
+    `${QUEUE_DIR}/${CONFIG_FILE} also set ${keys.join(', ')}, which went with it. It is ` +
+      'committed, so `git checkout` brings it back.',
+  ]
 }
 
 /**

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Agent } from './detect.js'
-import { createRulesStep } from './rules.js'
+import { createRulesStep, rulesRemovals } from './rules.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
 
@@ -142,5 +142,77 @@ describe('createRulesStep() re-running', () => {
     expect(read('AGENTS.md')).toBe(
       '<!-- dogear:start -->\nsomeone else did it\n<!-- dogear:end -->\n',
     )
+  })
+})
+
+describe('cutting the stanza back out — E6 (#39)', () => {
+  /** Plan every candidate's removal and apply what each planned. */
+  function undo(): readonly (Plan | undefined)[] {
+    const plans = rulesRemovals.map((step) => step.plan(root))
+    for (const planned of plans) planned?.change?.apply()
+    return plans
+  }
+
+  it('deletes an AGENTS.md that init created', () => {
+    run()
+
+    expect(undo().find((planned) => planned !== undefined)?.change?.summary).toBe(
+      'deleted AGENTS.md',
+    )
+    expect(existsSync(join(root, 'AGENTS.md'))).toBe(false)
+  })
+
+  it('leaves prose the user wrote above it', () => {
+    seed('AGENTS.md', '# My repo\n\nRead the docs first.\n')
+    run()
+
+    undo()
+
+    expect(read('AGENTS.md')).toBe('# My repo\n\nRead the docs first.\n')
+  })
+
+  it('finds the stanza in CLAUDE.md too', () => {
+    // init writes to whichever it picked, and which one that was depends on what existed at
+    // the time. An undo that only checked today's pick would leave the other behind.
+    seed('CLAUDE.md', '# Instructions\n')
+    run()
+    expect(read('CLAUDE.md')).toContain('<!-- dogear:start -->')
+
+    undo()
+
+    expect(read('CLAUDE.md')).toBe('# Instructions\n')
+  })
+
+  it('cuts prose someone added between the markers, because that is what a span means', () => {
+    seed(
+      'AGENTS.md',
+      '# Mine\n\n<!-- dogear:start -->\nedited by hand\n<!-- dogear:end -->\n',
+    )
+
+    undo()
+
+    expect(read('AGENTS.md')).toBe('# Mine\n')
+  })
+
+  it('leaves the file alone and says so when the end marker is gone', () => {
+    // Without it there is no way to tell where the block ends, and guessing would take prose
+    // the user wrote below it.
+    const orphaned = '# Mine\n\n<!-- dogear:start -->\nleftovers\n'
+    seed('AGENTS.md', orphaned)
+
+    const notes = undo().flatMap((planned) => planned?.notes ?? [])
+
+    expect(notes[0]).toContain('no <!-- dogear:end -->')
+    expect(read('AGENTS.md')).toBe(orphaned)
+  })
+
+  it('plans nothing for a rules file dogear never touched', () => {
+    seed('AGENTS.md', '# Mine\n')
+
+    expect(rulesRemovals.map((step) => step.plan(root))).toEqual([undefined, undefined])
+  })
+
+  it('plans nothing when there is no rules file at all', () => {
+    expect(rulesRemovals.map((step) => step.plan(root))).toEqual([undefined, undefined])
   })
 })

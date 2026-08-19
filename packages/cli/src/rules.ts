@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import type { Plan, Step, Wiring } from './scaffold.js'
+import type { Plan, Step, Undo, Wiring } from './scaffold.js'
 
 /**
  * The stanza that tells the agent to look — E3 (#28).
@@ -96,6 +96,130 @@ export function createRulesStep(wiring: Wiring): Step {
       return plan
     },
   }
+}
+
+/**
+ * Cut the stanza back out — E6 (#39). One {@link Undo} per candidate, for ./mcp-config.ts's
+ * reason: `deleted AGENTS.md` and `removed dogear's stanza from CLAUDE.md` are different lines.
+ *
+ * **Both candidates are examined, though init only ever writes one.** Two stanzas is reachable:
+ * an `AGENTS.md` that exists without one sends init there even when `CLAUDE.md` already has
+ * one, from a run before `AGENTS.md` was created. Undo that checked only the file init would
+ * pick today would leave the other behind.
+ *
+ * **The markers are what makes this possible**, which is what they were put there for — a bare
+ * `## dogear` heading would give no way to find where the block ends, and would stop matching
+ * the moment someone renamed it. Prose edited *between* the markers is still dogear's block and
+ * goes with it; that is what delimiting a span means.
+ */
+export const rulesRemovals: readonly Undo[] = CANDIDATES.map(createRulesRemoval)
+
+function createRulesRemoval(file: string): Undo {
+  return {
+    name: 'rules-stanza',
+    plan: (root) => {
+      const path = join(root, file)
+      const existing = readIfFile(path)
+      if (existing === undefined) return undefined
+      if (!written(existing)) return undefined
+
+      // Byte-identical to what init writes into a repository that had neither candidate: init
+      // created this file and the stanza is the whole of it.
+      if (existing === STANZA) {
+        return {
+          change: {
+            summary: `deleted ${file}`,
+            apply: () => discard(path, file, STANZA),
+          },
+        }
+      }
+
+      if (withoutStanza(existing) === undefined) {
+        return { notes: [unclosed(file)] }
+      }
+
+      const plan: Plan = {
+        change: {
+          summary: `removed dogear's stanza from ${file}`,
+          apply: () => {
+            // Re-read rather than closing over the planned text — the same re-check the insert
+            // side does, and here it is what keeps a concurrent edit from being clobbered.
+            const current = readIfFile(path)
+            if (current === undefined || !written(current)) return
+
+            const second = withoutStanza(current)
+
+            if (second === undefined) {
+              throw new Error(
+                `${file} changed while dogear was working and its stanza no longer has a ` +
+                  'closing marker. Re-run dogear init --undo.',
+              )
+            }
+
+            writeFileSync(path, second, 'utf8')
+          },
+        },
+      }
+
+      return plan
+    },
+  }
+}
+
+/**
+ * The file with dogear's block cut out, or `undefined` when the block has no end marker.
+ *
+ * **The separator init wrote is lossy, and this is where that shows up.** {@link separator}
+ * turns `a`, `a\n` and `a\n\n` into the same `a\n\n` before appending, so no removal can
+ * restore all three — the information is gone. This restores the middle one: the block goes,
+ * and one blank line above it goes with it, leaving a file that ends in a single newline. That
+ * is what every editor produces and what the other two were probably meant to be; the
+ * alternative, leaving the blank line, is wrong in the common case instead of the rare one.
+ *
+ * A file init *created* does not come through here — it is byte-identical to the stanza and is
+ * deleted whole, which is exact.
+ */
+function withoutStanza(contents: string): string | undefined {
+  const start = contents.indexOf(START)
+  if (start === -1) return undefined
+
+  const marker = contents.indexOf(END, start)
+  if (marker === -1) return undefined
+
+  // Through the end of the marker's line, including its newline, so the cut lands on a line
+  // boundary at both ends rather than leaving a stray empty line behind.
+  const lineEnd = contents.indexOf('\n', marker + END.length)
+  const end = lineEnd === -1 ? contents.length : lineEnd + 1
+
+  return `${trimOneBlankLine(contents.slice(0, start))}${contents.slice(end)}`
+}
+
+/** `a\n\n` → `a\n`, and anything else unchanged. The inverse of {@link separator}'s common case. */
+function trimOneBlankLine(before: string): string {
+  return before.endsWith('\n\n') ? before.slice(0, -1) : before
+}
+
+/**
+ * Delete a file, having first confirmed it is still exactly what planning saw.
+ *
+ * Guards against deleting an edit rather than against writing over one — see ./mcp-config.ts.
+ */
+function discard(path: string, file: string, expected: string): void {
+  if (readIfFile(path) !== expected) {
+    throw new Error(
+      `${file} changed while dogear was working, so it was left alone rather than deleted. ` +
+        'Re-run dogear init --undo.',
+    )
+  }
+
+  rmSync(path)
+}
+
+function unclosed(file: string): string {
+  return (
+    `${file} has dogear's ${START} marker but no ${END}, so its stanza was left alone — ` +
+    'there is no way to tell where it ends. Delete the block by hand.'
+  )
 }
 
 /** The file to append to, with what is in it — `undefined` contents means it is not there. */

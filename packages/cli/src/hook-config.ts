@@ -1,9 +1,9 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import { CLI_ENTRY } from './detect.js'
-import { insertAt, stripBom } from './json-insert.js'
-import type { Plan, Step, Wiring } from './scaffold.js'
+import { insertAt, pruneEmpty, removeAt, stripBom } from './json-insert.js'
+import type { Plan, Step, Undo, Wiring } from './scaffold.js'
 
 /**
  * Claude Code's `UserPromptSubmit` hook — E3 (#28), the capability tier on top of MCP.
@@ -115,6 +115,147 @@ export function createHookStep(wiring: Wiring): Step {
 }
 
 /**
+ * Take the hook back out — E6 (#39), and **the first thing `dogear init --undo` does**.
+ *
+ * Everything else init writes is inert once the CLI is gone: an orphaned `.mcp.json` entry
+ * costs a server the client fails to spawn once a session, and an orphaned `.gitignore` rule
+ * costs a line. This one runs `node <path> hook` on **every prompt the user types**, against a
+ * path that no longer exists. That is the whole reason #39 is a command rather than a paragraph
+ * in the README, and it is why this sits at the top of `UNDO_STEPS` — before anything that
+ * could fail, since `apply` stops at the first failure.
+ *
+ * **The array is spliced, never assigned.** Other people's `UserPromptSubmit` entries survive,
+ * which is the same requirement as on the way in and the same primitive answering it — see
+ * ./json-insert.ts.
+ *
+ * **`.claude/` itself is never removed, even if this empties it.** init creates the directory
+ * on the way in, so removing it looks symmetric; it is not. `.claude/` belongs to Claude Code,
+ * ./detect.ts treats it as the marker that Claude Code is used here at all, and an empty one is
+ * inert. The same goes for `.cursor/` and `.vscode/` in ./mcp-config.ts.
+ */
+export const hookRemoval: Undo = {
+  name: 'prompt-hook',
+  plan: (root) => {
+    const path = join(root, ...SETTINGS.split('/'))
+    const existing = readIfFile(path)
+    if (existing === undefined) return undefined
+
+    // Byte-identical to what init writes into a repository that had no settings file: init
+    // created it, nobody has touched it since, and dogear's hook is the only thing in it.
+    // Deleting is the honest inverse — leaving `{"hooks": {"UserPromptSubmit": []}}` behind is
+    // litter that still says dogear was here.
+    if (existing === fresh()) {
+      return {
+        change: {
+          summary: `deleted ${SETTINGS}`,
+          apply: () => discard(path, fresh()),
+        },
+      }
+    }
+
+    const parsed = parse(existing)
+    if (parsed === undefined) return { notes: [unreadableRemoval()] }
+    if (!wired(parsed)) return undefined
+
+    if (withoutHook(existing, parsed) === undefined) {
+      return { notes: [unremovable()] }
+    }
+
+    const plan: Plan = {
+      change: {
+        summary: `removed the prompt hook from ${SETTINGS}`,
+        apply: () => {
+          // Re-read and re-splice, as every `apply` in this package does. Of every file undo
+          // touches this is still the likeliest to be open in an editor.
+          const current = readIfFile(path)
+          if (current === undefined) return
+
+          const now = parse(current)
+          if (now === undefined || !wired(now)) return
+
+          const second = withoutHook(current, now)
+
+          if (second === undefined) {
+            throw new Error(
+              `${SETTINGS} changed while dogear was working and can no longer be edited ` +
+                'safely. Re-run dogear init --undo.',
+            )
+          }
+
+          writeFileSync(path, second, 'utf8')
+        },
+      },
+    }
+
+    return plan
+  },
+}
+
+/**
+ * The existing file with every dogear hook spliced out, or `undefined` if one could not be.
+ *
+ * **A loop rather than a single splice.** `wired()` makes a second entry unreachable *through
+ * init*, but a hand-edited file can hold two — and an undo that left one behind would leave
+ * exactly the residue this ticket exists to remove. It terminates because each pass removes one
+ * array element, so the array it is searching strictly shrinks.
+ */
+function withoutHook(source: string, parsed: Parsed): string | undefined {
+  let text = source
+  let current: Parsed | undefined = parsed
+
+  for (;;) {
+    if (current === undefined) return undefined
+
+    const index = dogearIndex(current)
+    if (index === undefined) break
+
+    const next = removeAt(text, ['hooks', EVENT, index])
+    if (next === undefined) return undefined
+
+    text = next
+    current = parse(text)
+  }
+
+  // Then the containers, if dogear's entry was the only thing in them. Without this a
+  // repository that had no `hooks` key before init keeps `"hooks": {"UserPromptSubmit": []}`
+  // forever — inert, and still saying dogear was here. See `pruneEmpty`.
+  return pruneEmpty(pruneEmpty(text, ['hooks', EVENT]), ['hooks'])
+}
+
+/**
+ * Delete a file, having first confirmed it is still exactly what planning saw.
+ *
+ * The one `apply` in this package that destroys rather than edits, so the re-check is a
+ * different kind of load-bearing: every other one guards against writing over an edit, and this
+ * one guards against deleting one. A file that changed between plan and apply is no longer the
+ * file whose whole contents dogear wrote.
+ */
+function discard(path: string, expected: string): void {
+  if (readIfFile(path) !== expected) {
+    throw new Error(
+      `${SETTINGS} changed while dogear was working, so it was left alone rather than ` +
+        'deleted. Re-run dogear init --undo.',
+    )
+  }
+
+  rmSync(path)
+}
+
+function unreadableRemoval(): string {
+  return (
+    `${SETTINGS} could not be parsed, so dogear left it alone and its prompt hook is still ` +
+    `there. Remove the "${EVENT}" entry running \`${CLI_ENTRY} hook\` by hand.`
+  )
+}
+
+function unremovable(): string {
+  return (
+    `${SETTINGS} is not a shape dogear can edit safely, so it left it alone and its prompt ` +
+    `hook is still there. Remove the "${EVENT}" entry running \`${CLI_ENTRY} hook\` by hand.`
+  )
+}
+
+/**
  * The existing file with the hook added, or `undefined` if it could not be placed.
  *
  * **Three shapes, one primitive.** Which closing bracket the entry goes in front of depends on
@@ -204,13 +345,29 @@ function write(root: string, path: string, contents: string): void {
  * pair that cannot match anything else.
  */
 function wired(parsed: Parsed): boolean {
+  return dogearIndex(parsed) !== undefined
+}
+
+/**
+ * Where dogear's hook sits in the `UserPromptSubmit` array, if it is there at all.
+ *
+ * E6 (#39) needed the position rather than the fact, and {@link wired} is now derived from it
+ * so the two can never develop different ideas about which entry is dogear's — an undo that
+ * identified it more loosely than init would delete someone else's hook, and one that
+ * identified it more tightly would leave dogear's behind.
+ */
+function dogearIndex(parsed: Parsed): number | undefined {
   const hooks = parsed.hooks
-  if (!isObject(hooks)) return false
+  if (!isObject(hooks)) return undefined
 
   const entries = hooks[EVENT]
-  if (!Array.isArray(entries)) return false
+  if (!Array.isArray(entries)) return undefined
 
-  return entries.some((entry) => isObject(entry) && commands(entry).some(isDogear))
+  const index = entries.findIndex(
+    (entry) => isObject(entry) && commands(entry).some(isDogear),
+  )
+
+  return index === -1 ? undefined : index
 }
 
 function commands(entry: Parsed): readonly Parsed[] {

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   REGISTRY_VERSION,
+  deregisterProject,
   deregisterServer,
   isProcessAlive,
   readRegistry,
@@ -354,6 +355,67 @@ describe('deregisterServer', () => {
     deregisterServer(path, join(home, 'never-registered'), process.pid)
 
     expect(readFileSync(path, 'utf8')).toBe(before)
+  })
+})
+
+describe('deregisterProject — E6 (#39)', () => {
+  it('removes the whole entry, servers and all', () => {
+    // Not a cleared `initialisedAt`: an undone repository is not a half-registered one, and
+    // `dogear status` has no notion of one to display.
+    writeBehindItsBack({
+      [registryKey(home)]: {
+        root: home,
+        initialisedAt: 'then',
+        servers: [
+          { origin: 'http://localhost:5173', pid: process.pid, startedAt: 'then' },
+        ],
+      },
+    })
+
+    deregisterProject(path, home)
+
+    expect(read().projects[registryKey(home)]).toBeUndefined()
+  })
+
+  it("leaves other repositories' entries alone", () => {
+    const other = join(home, 'other')
+    registerProject(path, home)
+    registerProject(path, other)
+
+    deregisterProject(path, home)
+
+    expect(read().projects[registryKey(other)]).toBeDefined()
+    expect(read().projects[registryKey(home)]).toBeUndefined()
+  })
+
+  it('matches the entry by key, not by the spelling of the path', () => {
+    // The Windows drive-letter case that `registryKey` exists for: `dogear init` typed into a
+    // shell and Vite spawned by npm disagree, and an undo that missed would leave the entry.
+    registerProject(path, home)
+
+    deregisterProject(
+      path,
+      home.replace(/^[A-Z]:/, (drive) => drive.toLowerCase()),
+    )
+
+    expect(read().projects[registryKey(home)]).toBeUndefined()
+  })
+
+  it('writes nothing when there is nothing to remove', () => {
+    registerProject(path, home, new Date('2020-01-01T00:00:00.000Z'))
+    const before = readFileSync(path, 'utf8')
+
+    deregisterProject(path, join(home, 'never-registered'))
+
+    expect(readFileSync(path, 'utf8')).toBe(before)
+  })
+
+  it('leaves no temp file behind', () => {
+    registerProject(path, home)
+
+    deregisterProject(path, home)
+
+    expect(readdirSync(home).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 })
 

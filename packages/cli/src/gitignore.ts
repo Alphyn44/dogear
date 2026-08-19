@@ -1,11 +1,11 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { CONFIG_FILE, QUEUE_DIR } from '@dogear/queue'
 
 import type { GitQueries } from './git.js'
 import { git } from './git.js'
-import type { Plan, Step } from './scaffold.js'
+import type { Plan, Step, Undo } from './scaffold.js'
 
 /**
  * `.gitignore` covers the queue but not the config — E4 (#29).
@@ -32,12 +32,9 @@ const CONFIG_PATH = `${QUEUE_DIR}/${CONFIG_FILE}`
  * everything else, and two bare rules in a file a user has since reordered are not
  * identifiable. It also answers "what put this here?" for whoever reads the diff.
  */
-const BLOCK = [
-  '# dogear — the queue is machine state; config.json is committed',
-  QUEUE_RULE,
-  TEMP_RULE,
-  '',
-].join('\n')
+const HEADER = '# dogear — the queue is machine state; config.json is committed'
+
+const BLOCK = [HEADER, QUEUE_RULE, TEMP_RULE, ''].join('\n')
 
 /**
  * Build the step against a given view of git, so the degraded path is testable.
@@ -125,6 +122,119 @@ export function createGitignoreStep(queries: GitQueries): Step {
 
 /** The step init actually runs. */
 export const gitignore: Step = createGitignoreStep(git)
+
+/**
+ * Take dogear's rules back out — E6 (#39).
+ *
+ * **The exact block or nothing, and the header comment is what makes that possible** — which is
+ * what it was written for, as the note above {@link BLOCK} says. Undo looks for the three lines
+ * contiguous and in the order init wrote them. A `.gitignore` whose rules have since been
+ * reordered, or whose comment was deleted, is one where dogear can no longer tell its own lines
+ * from lines that happen to look like them, so it removes nothing and says what to remove by
+ * hand.
+ *
+ * **That strictness is #39's third criterion, not caution.** A `.gitignore` may perfectly well
+ * have carried `.dogear/queue.json` before init ever ran — this repository's own nearly did —
+ * and a line-wise sweep would delete a rule the user wrote and init merely declined to
+ * duplicate. Leaving two rules behind costs a `git status` line; deleting one costs a committed
+ * queue.
+ *
+ * **No git here, unlike the step it reverses.** `check-ignore` answers "is this path ignored",
+ * which is the question init has to ask because *any* rule will do. Undo asks a narrower and
+ * purely textual one — "are these three lines mine?" — and an ignore rule inherited from
+ * `.git/info/exclude` is not something undo has any business removing.
+ */
+export const gitignoreRemoval: Undo = {
+  name: 'gitignore',
+  plan: (root) => {
+    const path = join(root, '.gitignore')
+    const existing = readIfFile(path)
+    if (existing === undefined) return undefined
+
+    // Byte-identical to what init writes into a repository that had no `.gitignore`: init
+    // created the file and its rules are the whole of it.
+    if (existing === BLOCK) {
+      return {
+        change: {
+          summary: 'deleted .gitignore',
+          apply: () => discard(path, BLOCK),
+        },
+      }
+    }
+
+    if (!written(existing)) return undefined
+
+    if (withoutBlock(existing) === undefined) {
+      return { notes: [unremovable()] }
+    }
+
+    const plan: Plan = {
+      change: {
+        summary: "removed dogear's rules from .gitignore",
+        apply: () => {
+          // Re-read rather than closing over the planned text, the same re-check the append
+          // side does.
+          const current = readIfFile(path)
+          if (current === undefined) return
+
+          const second = withoutBlock(current)
+          if (second === undefined) return
+
+          writeFileSync(path, second, 'utf8')
+        },
+      },
+    }
+
+    return plan
+  },
+}
+
+/**
+ * The file with dogear's block cut out, or `undefined` when it is not there intact.
+ *
+ * Searched as literal bytes rather than matched line by line, because "contiguous and in order"
+ * is exactly what a substring search means and a line walker would be a second way of saying it.
+ * Both line endings are tried: init always writes `\n`, but an editor that normalised the file
+ * afterwards will have turned them into `\r\n`, and the block is still recognisably dogear's.
+ *
+ * One blank line above goes too, for the reason ./rules.ts's `withoutStanza` gives at length:
+ * {@link separator} is lossy, and a file ending in a single newline is the case worth restoring.
+ */
+function withoutBlock(contents: string): string | undefined {
+  for (const eol of ['\n', '\r\n']) {
+    const block = [HEADER, QUEUE_RULE, TEMP_RULE, ''].join(eol)
+    const at = contents.indexOf(block)
+    if (at === -1) continue
+
+    const before = contents.slice(0, at)
+    const trimmed = before.endsWith(`${eol}${eol}`)
+      ? before.slice(0, -eol.length)
+      : before
+
+    return `${trimmed}${contents.slice(at + block.length)}`
+  }
+
+  return undefined
+}
+
+/** Delete the file, having confirmed it is still exactly what planning saw — see ./rules.ts. */
+function discard(path: string, expected: string): void {
+  if (readIfFile(path) !== expected) {
+    throw new Error(
+      '.gitignore changed while dogear was working, so it was left alone rather than ' +
+        'deleted. Re-run dogear init --undo.',
+    )
+  }
+
+  rmSync(path)
+}
+
+function unremovable(): string {
+  return (
+    "dogear's .gitignore block has been edited, so it was left alone — its lines can no " +
+    `longer be told apart from rules you wrote. Remove ${QUEUE_RULE} and ${TEMP_RULE} by hand.`
+  )
+}
 
 /**
  * What goes between what is already there and dogear's block.

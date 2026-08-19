@@ -90,7 +90,7 @@ Don't over-explain basics.
 |---|---|
 | `@dogear/core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
 | `@dogear/vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
-| `@dogear/cli` | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status` — all implemented since E5. |
+| `@dogear/cli` | `dogear` on PATH: `init` (with `--undo` since E6), `hook`, `mcp`, `prune`, `status` — all implemented since E5. |
 | `@dogear/queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. Also E5's machine-level registry. **Private, source-only, never published** — see below. |
 
 **`@dogear/queue` has no build and is not published.** Its `exports` points straight at
@@ -212,6 +212,33 @@ an absent path or a JSONC file with comments declines, and the step turns that i
 naming what to add by hand. Do not "simplify" this to parse-and-stringify: this repo's own
 `.claude/settings.json` writes hook objects on one line, and re-serialising reflows all 250 of
 them. `json-insert.test.ts` pins the byte preservation, including against a replica of that file.
+
+**E6 added a second list, `UNDO_STEPS`, and it is not `stepsFor` reversed.** Each step module
+exports an `Undo` beside its `Step` — same `Plan`/`Change`/runner/verb table, one extra
+interface in `scaffold.ts` and no change to `Step`. Two rules. The **prompt hook comes out
+first and always**: every other residue is inert, while an orphaned `UserPromptSubmit` entry
+runs against a deleted path on every prompt the user types, and `applyAll` stops at the first
+failure. And it is **driven by `TARGETS`/`CANDIDATES`, never by the `Wiring`** — init with
+`--agent=cursor`, delete `.cursor/`, and detection now says `claude`, so a wiring-driven undo
+walks past the file it wrote. `unscaffold()` skips `detect()`, `remarks()` and `guidance()`
+outright; all three describe a repo being set up. Nothing makes the compiler demand a teardown
+for a new step, so `scaffold.test.ts` pairs the two lists by name in both directions.
+`mcp-config.ts` and `rules.ts` contribute several `Undo` entries each, because a `Plan` carries
+one past-tense summary and undo has two verbs — `deleted` for a whole file, `removed` for a
+splice — and a repo with both kinds needs a line of each.
+
+**`removeAt` is `insertAt`'s mirror and shares its scanner; `pruneEmpty` is the cascade after
+it.** One asymmetry: `insertAt`'s path names the *container*, `removeAt`'s names the *member*.
+A file is deleted **only when it is byte-identical to what init writes fresh** — anything else
+is spliced. Two limits, both found by running `formats.test.ts` rather than predicted: a file
+that was `{}` before init is indistinguishable from one init created, and `pruneEmpty` takes an
+*empty* `"UserPromptSubmit": []` that predated init with dogear's own. Both cost nothing —
+they configured nothing — and the alternative is litter in the common case. **`.dogear/queue.json`
+is never touched**; `.dogear/` goes only once `configRemoval` has emptied it, which is why
+`queueDirRemoval.plan` asks *"will this be empty?"* rather than *"is it?"* — every `plan()` runs
+before any `apply()`. Its `apply` uses `rmdirSync`, which refuses on a non-empty directory, so a
+lost race fails loudly instead of deleting data. `deregisterProject` lives in
+`packages/queue/src/registry.ts` because `writeRegistry` is private there.
 
 **A key that is present but wrongly typed must decline, and the parse check will not catch it
 for you.** `{"hooks": "x"}` parses, so a merge that only asks `isObject` inserts a *second*

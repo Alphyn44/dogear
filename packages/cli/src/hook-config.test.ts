@@ -1,10 +1,10 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Agent } from './detect.js'
-import { createHookStep } from './hook-config.js'
+import { createHookStep, hookRemoval } from './hook-config.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
 
@@ -244,5 +244,103 @@ describe('createHookStep() re-running', () => {
     planned?.change?.apply()
 
     expect(entries(read())).toHaveLength(1)
+  })
+})
+
+describe('taking the hook back out — E6 (#39)', () => {
+  function undo(): Plan | undefined {
+    const planned = hookRemoval.plan(root)
+    planned?.change?.apply()
+    return planned
+  }
+
+  it("deletes a settings.json that holds nothing but dogear's hook", () => {
+    run()
+
+    expect(undo()?.change?.summary).toBe(`deleted ${SETTINGS}`)
+    expect(existsSync(join(root, ...SETTINGS.split('/')))).toBe(false)
+  })
+
+  it("leaves someone else's UserPromptSubmit entry, byte for byte", () => {
+    // #39's third criterion, on the file where getting it wrong is worst: a splice one element
+    // out silently deletes a hook the user depends on.
+    const before =
+      '{\n  "hooks": {\n    "UserPromptSubmit": [\n      {\n' +
+      '        "hooks": [{ "type": "command", "command": "bash \\"chime.sh\\"" }]\n' +
+      '      }\n    ]\n  }\n}\n'
+    seed(before)
+    run()
+
+    undo()
+
+    expect(read()).toBe(before)
+  })
+
+  it('leaves other events alone', () => {
+    const before = '{\n  "hooks": {\n    "Stop": [{ "type": "command" }]\n  }\n}\n'
+    seed(before)
+    run()
+
+    undo()
+
+    expect(read()).toBe(before)
+  })
+
+  it('removes a hand-added second copy as well as the first', () => {
+    // Unreachable through init, which refuses to add a second — but a hand-edited file can
+    // hold two, and an undo that left one behind leaves the residue #39 exists to remove.
+    run()
+    const doubled = read().replace(
+      /"UserPromptSubmit": \[\n(\s+)(\{[\s\S]*?\n\1\})\n/,
+      '"UserPromptSubmit": [\n$1$2,\n$1$2\n',
+    )
+    seed(doubled)
+    expect(entries(read())).toHaveLength(2)
+
+    undo()
+
+    // Spliced rather than deleted — the doubled file is not byte-identical to what init writes,
+    // so the whole-file rule does not apply and both entries come out one at a time. The empty
+    // containers they leave go with them.
+    expect(read()).not.toContain('@dogear/cli')
+    expect(JSON.parse(read()) as unknown).toEqual({})
+  })
+
+  it('identifies dogear’s entry the same way the insert side does', () => {
+    // A user who raised the timeout or moved the entry still has dogear's hook. `wired()` and
+    // the removal are both derived from one `dogearIndex`, so they cannot drift apart — this
+    // is the assertion that would fail if they did.
+    seed(
+      '{\n  "hooks": {\n    "UserPromptSubmit": [\n      { "hooks": [{ "type": "command", ' +
+        '"command": "node", "args": ["node_modules/@dogear/cli/dist/cli.js", "hook"], ' +
+        '"timeout": 60 }] }\n    ]\n  }\n}\n',
+    )
+
+    undo()
+
+    expect(read()).not.toContain('@dogear/cli')
+  })
+
+  it('plans nothing when there is no settings.json', () => {
+    expect(hookRemoval.plan(root)).toBeUndefined()
+  })
+
+  it('plans nothing when dogear never wired this file', () => {
+    seed('{\n  "hooks": {\n    "Stop": []\n  }\n}\n')
+
+    expect(hookRemoval.plan(root)).toBeUndefined()
+  })
+
+  it('leaves an unparseable settings.json alone and says what to remove', () => {
+    // MCP is already gone by the time this runs, so the honest report is "the hook is still
+    // there, here is what it looks like" rather than a failure.
+    const broken = '{ "hooks": '
+    seed(broken)
+
+    const planned = undo()
+
+    expect(planned?.change).toBeUndefined()
+    expect(planned?.notes?.[0]).toContain('could not be parsed')
+    expect(read()).toBe(broken)
   })
 })

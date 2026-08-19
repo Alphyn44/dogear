@@ -179,7 +179,7 @@ describe('init()', () => {
     expect(isAsync(outcome)).toBe(false)
     if (isAsync(outcome)) return
 
-    for (const flag of ['--dry-run', '--agent=', '--no-hook']) {
+    for (const flag of ['--dry-run', '--agent=', '--no-hook', '--undo']) {
       expect(outcome.output).toContain(flag)
     }
   })
@@ -210,6 +210,65 @@ describe('init()', () => {
     expect(stdout).toContain('.vscode/mcp.json')
     // --no-hook, and no Claude Code among the agents either.
     expect(stdout).not.toContain('.claude/settings.json')
+  })
+
+  it('REFUSES --undo alongside --agent or --no-hook — E6 (#39)', () => {
+    // They choose what to wire, and undo unwires everything unconditionally — it has to, or a
+    // repository whose `.cursor/` has since been deleted keeps the entry init put there.
+    // Ignoring them would leave someone who typed `--undo --agent=cursor` believing they had
+    // asked for something narrower than what happened.
+    mkdirSync(join(root, '.git'))
+
+    for (const args of [
+      ['--undo', '--agent=cursor'],
+      ['--undo', '--no-hook'],
+      ['--agent=none', '--undo'],
+    ]) {
+      const outcome = init(root, args)
+
+      expect(isAsync(outcome)).toBe(false)
+      if (isAsync(outcome)) continue
+
+      expect(outcome.exitCode).toBe(1)
+      expect(outcome.output).toContain('--undo takes neither')
+    }
+  })
+
+  it('refuses --undo outside a git repository, exactly as init does', () => {
+    // The point of `--undo` being a flag on init rather than a command of its own: it reaches
+    // the same synchronous check, so there is no second refusal to keep in step with this one.
+    const outcome = init(root, ['--undo'])
+
+    expect(isAsync(outcome)).toBe(false)
+    if (isAsync(outcome)) return
+
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.output).toContain('no git repository')
+  })
+
+  it('undoes an init, reporting what it removed — E6 (#39)', async () => {
+    mkdirSync(join(root, '.git'))
+    await runCapturing(init(root, []))
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(true)
+
+    const { exitCode, stdout } = await runCapturing(init(root, ['--undo']))
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('deleted .mcp.json')
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+  })
+
+  it('reports what --undo --dry-run would remove, and removes none of it', async () => {
+    mkdirSync(join(root, '.git'))
+    await runCapturing(init(root, []))
+
+    const { exitCode, stdout } = await runCapturing(init(root, ['--undo', '--dry-run']))
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('dry run')
+    expect(stdout).toContain('would delete .mcp.json')
+    expect(existsSync(join(root, '.mcp.json'))).toBe(true)
   })
 
   it('lets --agent=none wire nothing while init still sets the repo up', async () => {

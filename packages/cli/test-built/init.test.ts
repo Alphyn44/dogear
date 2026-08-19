@@ -311,6 +311,78 @@ describe('the built `dogear init`', () => {
     expect(existsSync(join(root, '.claude'))).toBe(false)
   })
 
+  it('undoes itself end to end, through the real binary — E6 (#39)', async () => {
+    // The whole point of the ticket, in the arrangement a user actually has: two separate
+    // processes sharing nothing but the filesystem. Anything cached in a module rather than
+    // read off disk fails here and nowhere in ../src.
+    await runCli('init', root)
+    expect(existsSync(join(root, '.claude', 'settings.json'))).toBe(true)
+
+    const run = await runCli('init', root, ['--undo'])
+
+    expect(run.exitCode).toBe(0)
+    expect(run.stdout).toContain('deleted .claude/settings.json')
+    expect(run.stdout).toContain('deleted .mcp.json')
+    expect(run.stdout).toContain('deleted AGENTS.md')
+
+    // The hook is the residue that breaks something on every prompt. Nothing else on this list
+    // does, which is why it comes out first — and why its absence is the assertion that matters.
+    expect(existsSync(join(root, '.claude', 'settings.json'))).toBe(false)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+    expect(existsSync(join(root, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(join(root, '.gitignore'))).toBe(false)
+    expect(existsSync(join(root, QUEUE_DIR))).toBe(false)
+  })
+
+  it('reports nothing changed when undoing a repository that was never init’d', async () => {
+    const run = await runCli('init', root, ['--undo'])
+
+    expect(run.exitCode).toBe(0)
+    expect(run.stdout).toContain('nothing changed')
+  })
+
+  it('honours --undo --dry-run through the shim', async () => {
+    await runCli('init', root)
+
+    const run = await runCli('init', root, ['--undo', '--dry-run'])
+
+    expect(run.exitCode).toBe(0)
+    expect(run.stdout).toContain('dry run')
+    expect(run.stdout).toContain('would delete .mcp.json')
+    expect(existsSync(join(root, '.mcp.json'))).toBe(true)
+  })
+
+  it('refuses --undo with --agent, on stderr, writing nothing', async () => {
+    await runCli('init', root)
+
+    const run = await runCli('init', root, ['--undo', '--agent=cursor'])
+
+    expect(run.exitCode).toBe(1)
+    expect(run.stdout).toBe('')
+    expect(run.stderr).toContain('--undo takes neither')
+    expect(existsSync(join(root, '.mcp.json'))).toBe(true)
+  })
+
+  it('leaves a queue with pending annotations, and says why', async () => {
+    // #39's fourth criterion. The queue is the user's data — removing it is a separate act,
+    // not a side effect of removing dogear's configuration.
+    await runCli('init', root)
+    writeFileSync(
+      join(root, QUEUE_DIR, 'queue.json'),
+      `${JSON.stringify({
+        version: 1,
+        items: [{ id: 'x', comment: 'keep me', status: 'pending', createdAt: 'then' }],
+      })}\n`,
+    )
+
+    const run = await runCli('init', root, ['--undo'])
+
+    expect(run.exitCode).toBe(0)
+    expect(run.stdout).toContain('1 pending annotation ')
+    expect(existsSync(join(root, QUEUE_DIR, 'queue.json'))).toBe(true)
+    expect(existsSync(join(root, QUEUE_DIR, 'config.json'))).toBe(false)
+  })
+
   it('no longer advertises itself as unimplemented', async () => {
     // The usage footer is the first thing a new global install shows, and one that lies about
     // what is built is worse than no footer at all. Until E1 it named only `hook`, `mcp` and

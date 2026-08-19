@@ -64,6 +64,7 @@ export {
   REGISTRY_DIR,
   REGISTRY_FILE,
   REGISTRY_VERSION,
+  deregisterProject,
   deregisterServer,
   isProcessAlive,
   readRegistry,

@@ -1,10 +1,10 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import type { Agent } from './detect.js'
 import { CLI_ENTRY } from './detect.js'
-import { insertAt, stripBom } from './json-insert.js'
-import type { Plan, Step, Wiring } from './scaffold.js'
+import { insertAt, pruneEmpty, removeAt, stripBom } from './json-insert.js'
+import type { Plan, Step, Undo, Wiring } from './scaffold.js'
 
 /**
  * The MCP server, registered wherever the repository's agent will look — E3 (#28).
@@ -97,6 +97,127 @@ export function createMcpStep(wiring: Wiring): Step {
       return plan
     },
   }
+}
+
+/**
+ * Take the registration back out — E6 (#39). One {@link Undo} per target file.
+ *
+ * **Three entries rather than one, and that is the report's doing.** A `Plan` carries a single
+ * `Change` with a single past-tense summary, and undo has two verbs to use: `deleted` for a
+ * file that goes entirely and `removed` for one that is spliced. A repository with both
+ * `.mcp.json` (created by init, untouched) and `.cursor/mcp.json` (with servers of its own)
+ * needs one of each, and a single step could only have reported one — or joined them into a
+ * summary whose leading verb `--dry-run` would then convert wrongly. Splitting is what keeps
+ * every line honest. They share a `name`, which is internal; ./scaffold.test.ts pairs on it.
+ *
+ * **Driven by {@link TARGETS}, never by the {@link Wiring}.** Init picks its targets from
+ * resolved detection; undo cannot. Init with `--agent=cursor`, delete `.cursor/`, and detection
+ * now says `claude` — a wiring-driven undo would walk straight past the file it wrote. So all
+ * three are examined unconditionally, and a repository that never had one simply plans nothing.
+ * See {@link Undo} for the rest of that argument.
+ */
+export const mcpRemovals: readonly Undo[] = Object.values(TARGETS).map(createMcpRemoval)
+
+function createMcpRemoval(target: Target): Undo {
+  return {
+    name: 'mcp-registration',
+    plan: (root) => {
+      const path = join(root, ...target.file.split('/'))
+      const existing = readIfFile(path)
+      if (existing === undefined) return undefined
+
+      // Byte-identical to what init writes into a repository that had no config at all: init
+      // created this file, nobody has touched it since, and dogear's entry is the only thing in
+      // it. Deleting is the honest inverse — leaving `{"mcpServers": {}}` behind is litter that
+      // still says dogear was here. Anything else, down to a changed indent, is spliced.
+      if (existing === fresh(target)) {
+        return {
+          change: {
+            summary: `deleted ${target.file}`,
+            apply: () => discard(path, target, fresh(target)),
+          },
+        }
+      }
+
+      const parsed = parse(existing)
+      if (parsed === undefined) return { notes: [unreadableRemoval(target)] }
+      if (!registered(parsed, target)) return undefined
+
+      if (withoutServer(existing, target) === undefined) {
+        return { notes: [unremovable(target)] }
+      }
+
+      const plan: Plan = {
+        change: {
+          summary: `removed ${NAME} from ${target.file}`,
+          apply: () => {
+            // Re-read and re-splice, exactly as the insert side does and for the same reason.
+            const current = readIfFile(path)
+            if (current === undefined) return
+
+            const now = parse(current)
+            if (now === undefined || !registered(now, target)) return
+
+            const second = withoutServer(current, target)
+
+            if (second === undefined) {
+              throw new Error(
+                `${target.file} changed while dogear was working and can no longer be ` +
+                  'edited safely. Re-run dogear init --undo.',
+              )
+            }
+
+            writeFileSync(path, second, 'utf8')
+          },
+        },
+      }
+
+      return plan
+    },
+  }
+}
+
+/**
+ * The file with dogear's entry gone, and the container too if that emptied it.
+ *
+ * A `"mcpServers": {}` left behind is inert and still says dogear was here — see `pruneEmpty`,
+ * which is also where the one case it gets wrong is argued.
+ */
+function withoutServer(source: string, target: Target): string | undefined {
+  const removed = removeAt(source, [target.container, NAME])
+  return removed === undefined ? undefined : pruneEmpty(removed, [target.container])
+}
+
+/**
+ * Delete a file, having first confirmed it is still exactly what planning saw.
+ *
+ * Every other `apply` here re-reads to avoid writing over an edit; this one re-reads to avoid
+ * *deleting* one. A file that changed between plan and apply is no longer a file whose entire
+ * contents dogear wrote, so the premise for removing it whole has gone.
+ */
+function discard(path: string, target: Target, expected: string): void {
+  if (readIfFile(path) !== expected) {
+    throw new Error(
+      `${target.file} changed while dogear was working, so it was left alone rather than ` +
+        'deleted. Re-run dogear init --undo.',
+    )
+  }
+
+  rmSync(path)
+}
+
+function unreadableRemoval(target: Target): string {
+  return (
+    `${target.file} could not be parsed, so dogear left it alone and its "${NAME}" entry is ` +
+    `still registered under "${target.container}". Remove it by hand.`
+  )
+}
+
+function unremovable(target: Target): string {
+  return (
+    `${target.file} is not a shape dogear can edit safely, so it left it alone and its ` +
+    `"${NAME}" entry is still registered under "${target.container}". Remove it by hand.`
+  )
 }
 
 /**

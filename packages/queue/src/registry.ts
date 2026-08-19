@@ -386,6 +386,35 @@ export function deregisterServer(
 }
 
 /**
+ * Forget a repository entirely — `dogear init --undo`'s half of E6 (#39).
+ *
+ * The counterpart of {@link registerProject}, and it removes the **whole entry** rather than
+ * clearing `initialisedAt`. An undone repository is not a half-registered one: `dogear status`
+ * has no notion of a de-initialised repo, so leaving the entry behind would keep it in the list
+ * forever with nothing to explain why. If the plugin is still installed, the next dev server to
+ * start re-creates the entry through {@link registerServer} — which is correct, and is the same
+ * reason a hand-wired repository shows up there without ever having been init'd.
+ *
+ * Writes nothing when there is nothing to remove, exactly as {@link deregisterServer} does, so
+ * an undo on a repository that was never registered costs no IO and reports no change.
+ */
+export function deregisterProject(path: string, root: string, now = new Date()): void {
+  // Re-read HERE, immediately before the write, and never earlier. See the header.
+  const current = readRegistry(path)
+  const key = registryKey(root)
+  if (current.projects[key] === undefined) return
+
+  // Rebuilt without the key rather than `delete`d from the object we were handed: `projects` is
+  // typed readonly and the strict reader's result is shared with nothing, but a mutation here
+  // would be the one place in this file that edits state in place.
+  const projects = Object.fromEntries(
+    Object.entries(current.projects).filter(([existing]) => existing !== key),
+  )
+
+  writeRegistry(path, projects, now)
+}
+
+/**
  * Does this process still exist?
  *
  * Signal 0 performs the permission and existence checks without delivering anything, which

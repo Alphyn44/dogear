@@ -28,16 +28,38 @@
  *    printed snippet the user can paste.
  *
  * Deliberately not a JSON5/JSONC editor and deliberately not a dependency: `@dogear/cli` has
- * exactly one dependency and it is the MCP SDK. The whole surface is one function.
+ * exactly one dependency and it is the MCP SDK. The whole surface is two functions.
+ *
+ * ---
+ *
+ * **E6 (#39) added {@link removeAt}, and it is the mirror rather than a second implementation.**
+ * Undoing an init has to take dogear's entry back out of the same two files, under the same
+ * constraint and with more at stake: an insert that reformats is rude, and a *remove* that
+ * reformats is rude about bytes the user is keeping. Both functions share the scanner below —
+ * {@link memberAt}, {@link matching}, {@link stringAt} — so the two directions cannot develop
+ * different ideas about where a member begins.
+ *
+ * The one asymmetry worth naming: `insertAt`'s `path` names the **container** to insert into,
+ * and `removeAt`'s names the **member** to take out. There is no other way to say which member,
+ * and it means the two are not off-by-one versions of each other by accident.
  */
+
+/**
+ * A chain of object keys and array indices naming a value in the document.
+ *
+ * Numbers were added by E6, which has to reach an element of `hooks.UserPromptSubmit`. They are
+ * accepted anywhere in the chain rather than only at the end, because a scanner that special-
+ * cased the last segment would be a second set of rules to keep in step with the first.
+ */
+export type JsonPath = readonly (string | number)[]
 
 /**
  * Insert `snippet` as a new member of the container at `path`, preserving every other byte.
  *
- * `path` is a chain of object keys naming the container to insert into; `[]` is the document's
- * root object. The container may be an object or an array, and `snippet` has to match: a
- * `"key": value` pair for an object, a bare value for an array. Indentation is taken from the
- * members already there, so the result reads as though it had always been in the file.
+ * `path` names the container to insert into; `[]` is the document's root object. The container
+ * may be an object or an array, and `snippet` has to match: a `"key": value` pair for an
+ * object, a bare value for an array. Indentation is taken from the members already there, so
+ * the result reads as though it had always been in the file.
  *
  * Returns `undefined` when the path is absent, when the value at it is neither an object nor an
  * array, or when the spliced text would not parse.
@@ -50,7 +72,7 @@
  */
 export function insertAt(
   source: string,
-  path: readonly string[],
+  path: JsonPath,
   snippet: string,
 ): string | undefined {
   const span = locate(source, path)
@@ -62,6 +84,112 @@ export function insertAt(
   // honest way to claim the output is still JSON is to ask a parser. A caller that gets text
   // back has a guarantee; one that gets `undefined` has a fallback.
   return parseable(spliced) ? spliced : undefined
+}
+
+/**
+ * Remove the member at `path`, preserving every other byte — E6 (#39).
+ *
+ * `path` names the **member**, not its container: the last segment is the key or index to take
+ * out. `[]` is not a member and is declined; a document cannot remove itself.
+ *
+ * Returns `undefined` on the same terms as {@link insertAt} — an absent path, a segment whose
+ * kind does not match the container it names, or a result that would not parse.
+ *
+ * ```ts
+ * removeAt(source, ['mcpServers', 'dogear'])            // a key
+ * removeAt(source, ['hooks', 'UserPromptSubmit', 1])    // an array element
+ * ```
+ */
+export function removeAt(source: string, path: JsonPath): string | undefined {
+  const key = path.at(-1)
+  if (key === undefined) return undefined
+
+  const container = narrow(source, path.slice(0, -1))
+  if (container === undefined) return undefined
+
+  const span = interiorOf(source, container[0], container[1])
+  if (span === undefined) return undefined
+
+  const member = memberAt(source, container[0], container[1], key)
+  if (member === undefined) return undefined
+
+  const spliced = excise(source, span, member)
+
+  // Rule 2 again, and it is doing more work here than above: removing the wrong span produces
+  // text that is *usually* still valid JSON, so the parse check is a floor rather than a proof.
+  // What actually keeps the span right is that {@link memberAt} finds it with the same scanner
+  // `insertAt` places members with.
+  return parseable(spliced) ? spliced : undefined
+}
+
+/**
+ * Remove the member at `path` **if what is there is now empty**, otherwise change nothing.
+ *
+ * The cascade after a {@link removeAt} — E6 (#39). Taking dogear's hook out of
+ * `hooks.UserPromptSubmit` leaves `"UserPromptSubmit": []`, and taking its server out of
+ * `mcpServers` leaves `"mcpServers": {}`. Both are exactly the residue #39 exists to remove:
+ * dogear created those containers on the way in, and a settings file still carrying them still
+ * says dogear was here.
+ *
+ * **Safe because an empty hook container does nothing.** This is the one place undo removes
+ * something it cannot prove it wrote — a repository whose `settings.json` carried an empty
+ * `"UserPromptSubmit": []` *before* init loses it. That costs nothing at all: an empty array of
+ * hooks and an absent key are the same configuration, and the alternative is leaving visible
+ * litter in the common case to preserve a byte that has no meaning in the rare one.
+ *
+ * Never throws and never declines: an unparseable document, an absent path, a value that is not
+ * empty, or a splice that would not re-parse all return `source` untouched. It is a tidy-up
+ * pass, so having no effect is always an acceptable outcome.
+ */
+export function pruneEmpty(source: string, path: JsonPath): string {
+  let value: unknown
+  try {
+    value = JSON.parse(stripBom(source))
+  } catch {
+    return source
+  }
+
+  for (const segment of path) {
+    if (typeof value !== 'object' || value === null) return source
+    value = (value as Record<string, unknown>)[String(segment)]
+  }
+
+  const empty = Array.isArray(value)
+    ? value.length === 0
+    : typeof value === 'object' && value !== null && Object.keys(value).length === 0
+
+  return empty ? (removeAt(source, path) ?? source) : source
+}
+
+/**
+ * Cut `member` out of `span`, taking exactly one separator with it.
+ *
+ * **The comma goes with the member, and which one depends on where it sits.** A member with
+ * something before it takes the comma *behind* it — along with the whitespace and newline
+ * between them, which is what keeps the previous member's line from being left with a trailing
+ * comma and an empty line under it. A first member takes the comma *ahead* of it, and the
+ * whitespace after that comma too, so the member that becomes first inherits the indentation it
+ * already had rather than the departing member's.
+ *
+ * A container's last remaining member takes the container's whole interior with it, so
+ * `{\n  "a": 1\n}` becomes `{}` rather than a brace pair around a blank line.
+ *
+ * Every case is a pair of slices at indices into the original text, which is why CRLF survives
+ * without being mentioned: no line ending is ever rebuilt, only skipped over.
+ */
+function excise(source: string, span: Span, member: Member): string {
+  const before = lastNonSpace(source, span.open, member.start)
+  if (before >= span.open && source[before] === ',') {
+    return `${source.slice(0, before)}${source.slice(member.end)}`
+  }
+
+  const after = skipSpace(source, member.end, span.close)
+  if (after < span.close && source[after] === ',') {
+    const next = skipSpace(source, after + 1, span.close)
+    return `${source.slice(0, member.start)}${source.slice(next)}`
+  }
+
+  return `${source.slice(0, span.open)}${source.slice(span.close)}`
 }
 
 /**
@@ -97,6 +225,20 @@ interface Span {
   readonly outdent: string
   /** The leading whitespace of the first member, when there is one. */
   readonly indent: string | undefined
+}
+
+/**
+ * One member of a container: where it starts, where it ends, and where its value sits.
+ *
+ * {@link start} is the key's opening quote for an object member and the value itself for an
+ * array element — the first byte that belongs to *this* member and to nothing else, which is
+ * what {@link excise} needs. {@link value} is the narrower span a path walks down into.
+ */
+interface Member {
+  readonly start: number
+  /** Index just past the member's value. Never includes a separator. */
+  readonly end: number
+  readonly value: readonly [number, number]
 }
 
 /** The end-of-line sequence the file uses, taken from its first one. */
@@ -168,25 +310,31 @@ function isSpace(code: number): boolean {
   )
 }
 
+/** Find the container at `path` and describe its interior. */
+function locate(source: string, path: JsonPath): Span | undefined {
+  const span = narrow(source, path)
+  return span === undefined ? undefined : interiorOf(source, span[0], span[1])
+}
+
 /**
- * Find the container at `path` and describe its interior.
+ * The span of the value `path` names, `[0, length)` for an empty path.
  *
- * Walks the path one key at a time, each time narrowing to the value that key names. Returns
- * `undefined` the moment a key is missing or a value is a scalar — a path into a string is not
- * a container, and guessing what the user meant is exactly the guessing this module exists to
- * avoid.
+ * Walks one segment at a time, each time narrowing to the value that segment names. Returns
+ * `undefined` the moment a segment is missing or a value is a scalar — a path into a string is
+ * not a container, and guessing what the user meant is exactly the guessing this module exists
+ * to avoid.
  */
-function locate(source: string, path: readonly string[]): Span | undefined {
+function narrow(source: string, path: JsonPath): readonly [number, number] | undefined {
   let from = 0
   let to = source.length
 
-  for (const key of path) {
-    const value = valueOf(source, from, to, key)
-    if (value === undefined) return undefined
-    ;[from, to] = value
+  for (const segment of path) {
+    const member = memberAt(source, from, to, segment)
+    if (member === undefined) return undefined
+    ;[from, to] = member.value
   }
 
-  return interiorOf(source, from, to)
+  return [from, to]
 }
 
 /**
@@ -235,46 +383,67 @@ function lineOf(source: string, index: number): number {
 }
 
 /**
- * The span of the value `key` names, within the object occupying `[from, to)`.
+ * The member `segment` names, within the container occupying `[from, to)`.
  *
- * Only members at the object's own depth are considered, which is what keeps a nested
+ * Only members at the container's own depth are considered, which is what keeps a nested
  * `"hooks"` belonging to something else from being mistaken for the one asked for.
+ *
+ * **The segment's type chooses the container it will accept.** A string names an object member
+ * and a number an array element, so asking an array for a key — or an object for an index —
+ * declines rather than searching. That is not strictness for its own sake: a path is written by
+ * a caller that believes it knows the shape, and a mismatch means the file is not the shape it
+ * believed, which is the case {@link removeAt} has to report rather than improvise around.
  */
-function valueOf(
+function memberAt(
   source: string,
   from: number,
   to: number,
-  key: string,
-): readonly [number, number] | undefined {
+  segment: string | number,
+): Member | undefined {
+  const keyed = typeof segment === 'string'
   const start = skipSpace(source, from, to)
-  if (source[start] !== '{') return undefined
+  if (source[start] !== (keyed ? '{' : '[')) return undefined
 
   const close = matching(source, start, to)
   if (close === undefined) return undefined
 
   let index = start + 1
+  let position = 0
 
   while (index < close) {
     index = skipSpace(source, index, close)
     if (index >= close) return undefined
-    if (source[index] !== '"') return undefined
 
-    const name = stringAt(source, index, close)
-    if (name === undefined) return undefined
+    const memberStart = index
+    let key: string | undefined
 
-    const colon = skipSpace(source, name.end, close)
-    if (source[colon] !== ':') return undefined
+    if (keyed) {
+      if (source[index] !== '"') return undefined
 
-    const valueStart = skipSpace(source, colon + 1, close)
+      const name = stringAt(source, index, close)
+      if (name === undefined) return undefined
+
+      const colon = skipSpace(source, name.end, close)
+      if (source[colon] !== ':') return undefined
+
+      key = name.value
+      index = colon + 1
+    }
+
+    const valueStart = skipSpace(source, index, close)
     const valueEnd = endOfValue(source, valueStart, close)
     if (valueEnd === undefined) return undefined
 
-    if (name.value === key) return [valueStart, valueEnd]
+    if (keyed ? key === segment : position === segment) {
+      return { start: memberStart, end: valueEnd, value: [valueStart, valueEnd] }
+    }
 
     const next = skipSpace(source, valueEnd, close)
     if (next >= close) return undefined
     if (source[next] !== ',') return undefined
+
     index = next + 1
+    position += 1
   }
 
   return undefined

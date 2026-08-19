@@ -1,10 +1,10 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { createHookStep } from './hook-config.js'
-import { createMcpStep } from './mcp-config.js'
+import { createHookStep, hookRemoval } from './hook-config.js'
+import { createMcpStep, mcpRemovals } from './mcp-config.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
 
@@ -63,6 +63,23 @@ describe('the prompt hook across the formats a real settings.json comes in', () 
     readonly before: string
     /** A byte sequence the user wrote that must survive verbatim. */
     readonly keep: string
+    /**
+     * What undoing does to this shape. `identity` — the default, and what most rows are — is
+     * the strong claim: wiring and unwiring return the file byte for byte.
+     *
+     * The other two are the documented limits of the byte-identity rule, and both were found
+     * by running this matrix rather than predicted:
+     *
+     * - `emptied` — the file already carried an **empty** hook container, so undo takes it away
+     *   with dogear's own. See `pruneEmpty` in ./json-insert.ts: an empty container is inert
+     *   configuration, and leaving it is litter in the common case to preserve a byte with no
+     *   meaning in the rare one.
+     * - `deleted` — once wired, the file is byte-identical to what init writes into a
+     *   repository that had none, so undo cannot tell it apart from one init created and
+     *   removes it whole. Only reachable from a file that was `{}` or an empty container to
+     *   begin with, which is to say from a file that configured nothing.
+     */
+    readonly outcome?: 'emptied' | 'deleted'
   }[] = [
     {
       name: 'two-space, the conventional shape',
@@ -110,22 +127,26 @@ describe('the prompt hook across the formats a real settings.json comes in', () 
       name: 'an empty hooks object',
       before: '{\n  "marker": "keep me",\n  "hooks": {}\n}\n',
       keep: '  "marker": "keep me"',
+      outcome: 'emptied',
     },
     {
       name: 'an entirely empty object',
       before: '{}\n',
       keep: '',
+      outcome: 'deleted',
     },
     {
       name: 'an empty UserPromptSubmit array already present',
       before:
         '{\n  "marker": "keep me",\n  "hooks": {\n    "UserPromptSubmit": []\n  }\n}\n',
       keep: '  "marker": "keep me",',
+      outcome: 'emptied',
     },
     {
       name: 'a non-ASCII value the user wrote',
       before: '{\n  "marker": "café — ok",\n  "hooks": {}\n}\n',
       keep: '  "marker": "café — ok"',
+      outcome: 'emptied',
     },
   ]
 
@@ -157,6 +178,47 @@ describe('the prompt hook across the formats a real settings.json comes in', () 
 
     expect(hookPlan()).toBeUndefined()
     expect(settings()).toBe(after)
+  })
+
+  /**
+   * E6 (#39), and the strongest thing this matrix can say: across every shape a real
+   * `settings.json` comes in, wiring and then unwiring is the **identity**. A formatting
+   * assumption that only bends the file slightly survives every assertion above — the file
+   * still parses and still holds the entry — and fails here, because the bytes come back wrong.
+   */
+  it.each(cases)('unwires $name back to exactly what it was', ({ before, outcome }) => {
+    seedSettings(before)
+    hookPlan()?.change?.apply()
+    expect(settings()).not.toBe(before)
+
+    hookRemoval.plan(root)?.change?.apply()
+
+    if (outcome === 'deleted') {
+      expect(existsSync(join(root, '.claude', 'settings.json'))).toBe(false)
+      return
+    }
+
+    if (outcome === 'emptied') {
+      // The empty container it arrived with went too. The weaker claim still has to hold:
+      // valid JSON, nothing of dogear's left, and everything the user wrote still there.
+      expect(() => parsed()).not.toThrow()
+      expect(settings()).not.toContain('dogear')
+      expect(parsed().marker).toBe(before.includes('café') ? 'café — ok' : 'keep me')
+      return
+    }
+
+    expect(settings()).toBe(before)
+  })
+
+  it.each(cases)('leaves nothing of dogear in $name', ({ before, outcome }) => {
+    seedSettings(before)
+    hookPlan()?.change?.apply()
+    hookRemoval.plan(root)?.change?.apply()
+
+    if (outcome === 'deleted') return
+
+    expect(settings()).not.toContain('dogear')
+    expect(settings()).not.toContain('UserPromptSubmit')
   })
 })
 
@@ -194,7 +256,12 @@ describe('the prompt hook and the byte order mark', () => {
 })
 
 describe('the MCP registration across the same formats', () => {
-  const cases: readonly { readonly name: string; readonly before: string }[] = [
+  const cases: readonly {
+    readonly name: string
+    readonly before: string
+    /** See the hook matrix above for what each outcome means and why it is not `identity`. */
+    readonly outcome?: 'deleted'
+  }[] = [
     {
       name: 'four-space',
       before: '{\n    "mcpServers": {\n        "other": {}\n    }\n}\n',
@@ -203,8 +270,15 @@ describe('the MCP registration across the same formats', () => {
     { name: 'CRLF', before: '{\r\n  "mcpServers": {\r\n    "other": {}\r\n  }\r\n}\r\n' },
     { name: 'minified', before: '{"mcpServers":{"other":{}}}' },
     { name: 'a BOM', before: '﻿{\n  "mcpServers": {\n    "other": {}\n  }\n}\n' },
-    { name: 'an empty object', before: '{}\n' },
-    { name: 'an empty mcpServers', before: '{\n  "mcpServers": {}\n}\n' },
+    // Both configure nothing, and both come out of the merge byte-identical to what init writes
+    // into a repository with no `.mcp.json` at all — so undo cannot tell them from a file it
+    // created, and removes them whole.
+    { name: 'an empty object', before: '{}\n', outcome: 'deleted' },
+    {
+      name: 'an empty mcpServers',
+      before: '{\n  "mcpServers": {}\n}\n',
+      outcome: 'deleted',
+    },
   ]
 
   it.each(cases)('registers into $name and stays valid', ({ before }) => {
@@ -230,6 +304,25 @@ describe('the MCP registration across the same formats', () => {
     expect(createMcpStep(WIRING).plan(root, NO_DETECTION)).toBeUndefined()
     expect(readFileSync(join(root, '.mcp.json'), 'utf8')).toBe(after)
   })
+
+  it.each(cases)(
+    'unregisters $name back to exactly what it was',
+    ({ before, outcome }) => {
+      // E6 (#39) — the identity property, as above. The removals for `.cursor/` and `.vscode/`
+      // plan nothing here, since those files do not exist.
+      writeFileSync(join(root, '.mcp.json'), before, 'utf8')
+      createMcpStep(WIRING).plan(root, NO_DETECTION)?.change?.apply()
+
+      for (const step of mcpRemovals) step.plan(root)?.change?.apply()
+
+      if (outcome === 'deleted') {
+        expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+        return
+      }
+
+      expect(readFileSync(join(root, '.mcp.json'), 'utf8')).toBe(before)
+    },
+  )
 })
 
 describe('a settings.json that holds no JSON value at all', () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { insertAt } from './json-insert.js'
+import type { JsonPath } from './json-insert.js'
+import { insertAt, pruneEmpty, removeAt } from './json-insert.js'
 
 /**
  * The guard on E3's (#28) central promise: `dogear init` adds a member to the user's JSON and
@@ -284,5 +285,163 @@ describe("insertAt() against this repository's own settings.json shape", () => {
     )
     expect(result).toContain('    "allow": ["Read", "Glob"]')
     expect(preservesLines(source, result)).toBe(true)
+  })
+
+  it('removes what it added, leaving the file exactly as it found it', () => {
+    // E6 (#39). The strongest single statement either direction can make: on the one file
+    // shape the module was written for, insert-then-remove is the identity.
+    const added = insertAt(
+      source,
+      ['hooks', 'UserPromptSubmit'],
+      '{\n  "hooks": [{ "type": "command", "command": "node" }]\n}',
+    ) as string
+
+    expect(removeAt(added, ['hooks', 'UserPromptSubmit', 1])).toBe(source)
+  })
+})
+
+describe('removeAt() taking a member back out', () => {
+  const cases: readonly {
+    readonly name: string
+    readonly source: string
+    readonly path: JsonPath
+    readonly expected: string
+  }[] = [
+    {
+      name: 'the first of three keys',
+      source: '{\n  "a": 1,\n  "b": 2,\n  "c": 3\n}\n',
+      path: ['a'],
+      expected: '{\n  "b": 2,\n  "c": 3\n}\n',
+    },
+    {
+      name: 'the middle of three keys',
+      source: '{\n  "a": 1,\n  "b": 2,\n  "c": 3\n}\n',
+      path: ['b'],
+      expected: '{\n  "a": 1,\n  "c": 3\n}\n',
+    },
+    {
+      name: 'the last of three keys',
+      source: '{\n  "a": 1,\n  "b": 2,\n  "c": 3\n}\n',
+      path: ['c'],
+      expected: '{\n  "a": 1,\n  "b": 2\n}\n',
+    },
+    {
+      // The container collapses rather than being left around a blank line.
+      name: 'the only key',
+      source: '{\n  "a": 1\n}\n',
+      path: ['a'],
+      expected: '{}\n',
+    },
+    {
+      name: 'a nested key, leaving its siblings',
+      source: '{\n  "outer": {\n    "keep": 1,\n    "drop": 2\n  }\n}\n',
+      path: ['outer', 'drop'],
+      expected: '{\n  "outer": {\n    "keep": 1\n  }\n}\n',
+    },
+    {
+      name: 'the first array element',
+      source: '{\n  "list": [\n    1,\n    2\n  ]\n}\n',
+      path: ['list', 0],
+      expected: '{\n  "list": [\n    2\n  ]\n}\n',
+    },
+    {
+      name: 'the last array element',
+      source: '{\n  "list": [\n    1,\n    2\n  ]\n}\n',
+      path: ['list', 1],
+      expected: '{\n  "list": [\n    1\n  ]\n}\n',
+    },
+    {
+      name: 'a key from a minified document',
+      source: '{"a":1,"b":2}',
+      path: ['b'],
+      expected: '{"a":1}',
+    },
+    {
+      // Not one lone `\n` anywhere, which on Windows is the same class of damage as a reformat.
+      name: 'a key from a CRLF document',
+      source: '{\r\n  "a": 1,\r\n  "b": 2\r\n}\r\n',
+      path: ['b'],
+      expected: '{\r\n  "a": 1\r\n}\r\n',
+    },
+    {
+      name: 'a key from a document with a BOM, which stays',
+      source: '﻿{\n  "a": 1,\n  "b": 2\n}\n',
+      path: ['b'],
+      expected: '﻿{\n  "a": 1\n}\n',
+    },
+    {
+      // Rule 1 in the removal direction: the brace inside the string is not a closing brace.
+      name: 'a key beside a value containing braces and escaped quotes',
+      source: '{\n  "cmd": "bash \\"x } y\\"",\n  "drop": 1\n}\n',
+      path: ['drop'],
+      expected: '{\n  "cmd": "bash \\"x } y\\""\n}\n',
+    },
+  ]
+
+  it.each(cases)('removes $name', ({ source, path, expected }) => {
+    expect(removeAt(source, path)).toBe(expected)
+  })
+
+  it.each(cases)('leaves valid JSON after removing $name', ({ source, path }) => {
+    const result = removeAt(source, path) as string
+
+    expect(() => JSON.parse(result.replace(/^﻿/, ''))).not.toThrow()
+  })
+})
+
+describe('removeAt() declining', () => {
+  const cases: readonly {
+    readonly name: string
+    readonly source: string
+    readonly path: JsonPath
+  }[] = [
+    {
+      name: 'an empty path — a document cannot remove itself',
+      source: '{"a":1}',
+      path: [],
+    },
+    { name: 'a key that is not there', source: '{"a":1}', path: ['b'] },
+    { name: 'a path through a scalar', source: '{"a":1}', path: ['a', 'b'] },
+    { name: 'an index out of range', source: '{"a":[1]}', path: ['a', 5] },
+    // The segment's kind picks the container: asking an object for an index, or an array for
+    // a key, is a caller that believes the file is a shape it is not.
+    { name: 'an index into an object', source: '{"a":{"b":1}}', path: ['a', 0] },
+    { name: 'a key into an array', source: '{"a":[1]}', path: ['a', 'b'] },
+    {
+      name: 'a file with comments in it',
+      source: '{\n  // hi\n  "a": 1\n}',
+      path: ['a'],
+    },
+    { name: 'a document that is not JSON at all', source: 'nonsense', path: ['a'] },
+    { name: 'a root array', source: '[1, 2]', path: ['a'] },
+  ]
+
+  it.each(cases)('declines $name', ({ source, path }) => {
+    expect(removeAt(source, path)).toBeUndefined()
+  })
+})
+
+describe('pruneEmpty()', () => {
+  it('removes a container that emptied', () => {
+    expect(pruneEmpty('{\n  "a": {},\n  "b": 1\n}\n', ['a'])).toBe('{\n  "b": 1\n}\n')
+  })
+
+  it('removes an array that emptied', () => {
+    expect(pruneEmpty('{\n  "a": [],\n  "b": 1\n}\n', ['a'])).toBe('{\n  "b": 1\n}\n')
+  })
+
+  it('leaves a container that still holds something', () => {
+    const source = '{\n  "a": { "k": 1 },\n  "b": 1\n}\n'
+
+    expect(pruneEmpty(source, ['a'])).toBe(source)
+  })
+
+  it.each([
+    ['an absent path', '{"a":1}', ['b']],
+    ['an unparseable document', 'nonsense', ['a']],
+    ['a scalar', '{"a":1}', ['a']],
+  ] as const)('returns the source untouched for %s', (_name, source, path) => {
+    // Never declines and never throws: it is a tidy-up pass, so no effect is always acceptable.
+    expect(pruneEmpty(source, path)).toBe(source)
   })
 })

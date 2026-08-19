@@ -56,15 +56,24 @@ export function init(cwd: string, args: readonly string[] = []): Outcome {
   // An `Async` outcome of the byte-producing kind — the opposite of `dogear mcp`, which enters
   // this variant because it must write *nothing*. `write()` is shared with ./cli.ts so both
   // paths obey the rule that an empty output means zero bytes rather than a blank line.
+  //
+  // **`--undo` reaches its implementation through the same dynamic `import()`** — E6 (#39). It
+  // is a second entry point into ./scaffold.js, not a second module, so `dogear hook`'s module
+  // graph is exactly as it was: the teardown code loads only when someone types the flag.
   return {
-    run: async () =>
-      write(
-        (await import('./scaffold.js')).scaffold(gitRoot, {
-          dryRun: flags.dryRun,
-          agents: flags.agents,
-          hook: flags.hook,
-        }),
-      ),
+    run: async () => {
+      const scaffolding = await import('./scaffold.js')
+
+      return write(
+        flags.undo
+          ? scaffolding.unscaffold(gitRoot, { dryRun: flags.dryRun })
+          : scaffolding.scaffold(gitRoot, {
+              dryRun: flags.dryRun,
+              agents: flags.agents,
+              hook: flags.hook,
+            }),
+      )
+    },
   }
 }
 
@@ -83,8 +92,16 @@ type AgentFlag = (typeof AGENTS)[number]
  * for.
  *
  * Parsed here rather than in ./run.ts, which reads the command and hands the rest over. E6
- * (#39) adds `--undo` to this list, and a per-command flag table in the dispatcher would put
+ * (#39) added `--undo` to this list, and a per-command flag table in the dispatcher would put
  * every command's argument handling back in the file that exists to be short.
+ *
+ * **`--undo` refuses `--agent` and `--no-hook` rather than ignoring them** — E6 (#39). They
+ * select what to *wire*, and undo unwires all of it unconditionally (see `Undo` in
+ * ./scaffold.ts for why it cannot be narrowed). Silently ignoring them would leave someone who
+ * typed `--undo --agent=cursor` believing they had asked for something smaller than what
+ * happened, which is the same asymmetry that makes an unrecognised argument a failure here:
+ * an over-strict parser costs a re-typed command, and a lenient one costs the thing the flag
+ * was for.
  *
  * **E3 (#28) added `--agent` and `--no-hook`, and they are what the brief's "init is
  * interactive" turned into.** The brief describes init *asking* which agent you use; the
@@ -97,12 +114,17 @@ type AgentFlag = (typeof AGENTS)[number]
  * graph is unchanged and `dogear hook` still loads none of the init implementation — which is
  * the property the dynamic `import()` above exists to protect.
  */
-function readFlags(
-  args: readonly string[],
-):
-  | { ok: true; dryRun: boolean; agents: readonly Agent[] | undefined; hook: boolean }
+function readFlags(args: readonly string[]):
+  | {
+      ok: true
+      dryRun: boolean
+      undo: boolean
+      agents: readonly Agent[] | undefined
+      hook: boolean
+    }
   | { ok: false; error: string } {
   let dryRun = false
+  let undo = false
   let hook = true
 
   // `undefined` until `--agent` is seen even once. E3 (#28): the flag *replaces* detection, so
@@ -114,6 +136,11 @@ function readFlags(
   for (const arg of args) {
     if (arg === '--dry-run') {
       dryRun = true
+      continue
+    }
+
+    if (arg === '--undo') {
+      undo = true
       continue
     }
 
@@ -147,12 +174,25 @@ function readFlags(
       ok: false,
       error:
         `dogear init: unrecognised argument '${arg}'. ` +
-        'Flags are --dry-run (report and change nothing), --agent=<name> (repeatable; ' +
-        `${AGENTS.join('|')}) and --no-hook (skip Claude Code's prompt hook).`,
+        'Flags are --dry-run (report and change nothing), --undo (remove what init wrote), ' +
+        `--agent=<name> (repeatable; ${AGENTS.join('|')}) and --no-hook (skip Claude Code's ` +
+        'prompt hook).',
     }
   }
 
-  return { ok: true, dryRun, agents, hook }
+  // Checked after the loop rather than inside it, so the flags may be given in any order — the
+  // conflict is between what was asked for, not between where the words appeared.
+  if (undo && (agents !== undefined || !hook)) {
+    return {
+      ok: false,
+      error:
+        'dogear init: --undo takes neither --agent nor --no-hook. They choose what to wire, ' +
+        'and --undo removes all of it — including agents this repository no longer shows ' +
+        'signs of using, which is the whole point of not narrowing it.',
+    }
+  }
+
+  return { ok: true, dryRun, undo, agents, hook }
 }
 
 function isAgentFlag(value: string): value is AgentFlag {

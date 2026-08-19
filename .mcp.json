@@ -1,8 +1,1 @@
-{
-  "mcpServers": {
-    "dogear": {
-      "command": "node",
-      "args": ["node_modules/@dogear/cli/dist/cli.js", "mcp"]
-    }
-  }
-}
+{}
