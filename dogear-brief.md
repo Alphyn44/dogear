@@ -1008,8 +1008,10 @@ publishing is not a prerequisite for finding out whether the install works.
 
 ### Non-functional requirements
 
-- **Browsers:** Firefox, Chrome, Safari. Firefox is the point — it's what an extension
-  can't give you.
+- **Browsers:** Firefox, Chrome, Edge. Firefox is the point — it's what an extension
+  can't give you. **Safari is intended and not yet verified** — B8 (#35) is the story, and
+  until it closes the README claims the three above and not Safari. Corrected during G1,
+  which would otherwise have shipped a user-facing browser list this one disagreed with.
 - **Node:** `^20.19.0 || >=22.12.0`, matching Vite's own floor (Vite is at 8.2.1).
 - **Overhead:** the transform must not make dev startup or HMR noticeably slower.
   Measure before optimizing; the budget is "unnoticeable," not a number.

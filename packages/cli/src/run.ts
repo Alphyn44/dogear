@@ -98,7 +98,7 @@ export function usage(): string {
     '  prune    Drop resolved items from the queue',
     '  status   What is running and what is pending, across all repos',
     '',
-    'See https://github.com/Alphyn44/dogear/milestones',
+    'See https://github.com/Alphyn44/dogear',
   ].join('\n')
 }
 

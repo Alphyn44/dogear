@@ -437,8 +437,11 @@ are gone" assertion passes without testing anything. `teardown.test.ts` and
 notes above for why that is a global rather than a convention.
 
 **Three vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
-plus the hermetic `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`
-runs it on every turn that touches TypeScript. The other two need a build first:
+plus `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`
+runs it on every turn that touches TypeScript. Build-independent is the rule there, not
+hermeticity: `check-leak.test.ts` builds its own temp fixtures, while G1's
+`packaging.test.ts` and `packages/cli/src/docs.test.ts` read the repository's own committed
+files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other two need a build first:
 `scripts/gate/*.test.ts` reads real build output under `npm run check:leak`, and
 `packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`. Splitting
 on directory rather than filename means no config needs an `exclude` to stay out of another's
