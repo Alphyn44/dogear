@@ -2026,6 +2026,27 @@ No ESLint: with `strict` on and Prettier owning formatting, a linter's remaining
 project this size didn't justify the config surface. `lint` is defined as
 `format:check && typecheck` so the name still means something.
 
+**`@dogear/vite` depends on `@dogear/core` at `^0.1.0`, not `*` and not a pin. Settled
+during G2.**
+G2 (#43) was scoped as the `private` flag and the version, on the stated grounds that the
+manifests were otherwise written correctly when each package was created. They were, with one
+exception that only becomes wrong at the moment the flag drops: the dependency was `"*"`, a
+workspace wildcard that resolves to the local copy while developing and **publishes
+verbatim**, so any future `@dogear/core` — including one that changed the bundle contract —
+would satisfy an installed plugin.
+
+`^0.1.0` rather than an exact pin because this document already assumes the two version
+independently: the `hosts` entry above omits the key from the wire precisely so a plugin one
+release behind cannot override core's list, which presumes they can move separately. Under
+0.x semver `^0.1.0` is `>=0.1.0 <0.2.0` — core ships patches on its own, and a `0.2.0` that
+changes what the plugin serves at `<endpoint>/client.js` forces a plugin release, which is
+the coupling that genuinely exists.
+
+The consequence worth recording is that a wildcard is now a **test failure** rather than a
+convention: `scripts/packaging.test.ts` refuses `*`, `latest` and the `workspace:` protocol
+forms, because `*` is what `npm install -w` writes back and the regression would otherwise be
+silent until someone installed the published plugin.
+
 ---
 
 ## Still open

@@ -18,16 +18,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
  * E1's first acceptance criterion — `npm i -g @dogear/cli` puts `dogear` on PATH — checked as
  * far as it can be without publishing.
  *
- * `@dogear/cli` is still `private: true`; publishing is a release task with its own OIDC
- * workflow and no issue tracks it in M4. What a global install actually does, though, is a
+ * `@dogear/cli` is publishable since G2 (#43) but not yet published — G4 (#45) owns the OIDC
+ * workflow that does it. What a global install actually does, though, is a
  * short list, and all of it is observable here: npm reads `bin` from the manifest, symlinks
  * (or shims, on Windows) the named file onto PATH, and the OS runs it — which on POSIX means
  * the shebang has to be the first bytes of the file. This suite checks each of those, plus the
  * end that matters most: the binary, spawned as a subprocess with no workspace resolution
  * available to it, actually initializes a repository.
  *
- * The one thing left over is npm itself, and it is a manual smoke check recorded on #26:
- * `npm pack -w @dogear/cli` then `npm i -g ./dogear-cli-0.0.0.tgz`.
+ * The one thing left over is npm itself, and it is a manual smoke check recorded on #26 and
+ * since grown into G3 (#44): `npm pack -w @dogear/cli`, then `npm i -g` the tarball it
+ * writes.
  *
  * Runs under vitest.built.config.ts because it needs `npm run build` first.
  */
