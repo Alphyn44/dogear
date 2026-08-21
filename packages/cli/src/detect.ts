@@ -109,6 +109,23 @@ export interface DetectedApp {
    * production even when every bundle is clean. init reports it and does not move it.
    */
   readonly plugin: Declaration
+  /**
+   * Whether {@link DetectedApp.config} mentions dogear at all — G3 (#44).
+   *
+   * {@link DetectedApp.plugin} is a *manifest* fact and this is a *config* fact, and the
+   * install path needs both: `npm i -D @dogear/vite` makes the first true and changes nothing
+   * about the second. G3 walked into exactly that gap — the package installed, `dogear()` not
+   * in the `plugins` array, and `dogear init` reporting `nothing changed` with no snippet,
+   * because guidance keyed on the declaration alone. The overlay never loads in that state.
+   *
+   * **A substring test, deliberately not a parse.** ./guidance.ts refuses to *rewrite* a
+   * config because doing that safely means parsing it and a wrong guess is a dev server that
+   * will not start. Deciding whether to *print a hint* is a far cheaper question, and it fails
+   * cheaply in both directions: a stray mention in a comment costs a suppressed hint, and a
+   * missed one costs a redundant hint next to a config that already works. An unreadable
+   * config is `false`, which is the direction that prints.
+   */
+  readonly configured: boolean
 }
 
 export interface Detection {
@@ -466,6 +483,23 @@ function appAt(root: string, dir: string): DetectedApp | undefined {
     viteVersion: versionOf(manifest, 'vite'),
     manifestDir: nearest?.dir,
     plugin: declarationOf(manifest, PLUGIN),
+    configured: mentionsDogear(join(absolute, name)),
+  }
+}
+
+/**
+ * Does this Vite config reference dogear? See {@link DetectedApp.configured} for why a
+ * substring is the right instrument here and a parse is not.
+ *
+ * Word-bounded so `dogeared` or a path segment like `not-dogear-related` does not count, and
+ * case-insensitive because the import specifier, the plugin call and a comment may each spell
+ * it differently. Never throws — detection runs before every step.
+ */
+function mentionsDogear(path: string): boolean {
+  try {
+    return /\bdogear\b/i.test(readFileSync(path, 'utf8'))
+  } catch {
+    return false
   }
 }
 

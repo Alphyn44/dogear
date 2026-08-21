@@ -47,6 +47,31 @@ describe('the root README', () => {
   })
 })
 
+/**
+ * G3 (#44): both install surfaces must ask for the **local** `@dogear/cli`, not only the
+ * global one.
+ *
+ * Found by running the install path rather than by reading it. Every config `dogear init`
+ * writes — the MCP registration and Claude Code's prompt hook — names the repo-relative
+ * `node_modules/@dogear/cli/dist/cli.js`, so a reader who followed these files exactly ended
+ * up with a committed config pointing at a file that was never installed: the MCP server
+ * exited 1 on spawn, and the hook did the same on every prompt. `init` says so in a note; the
+ * pages a new user actually reads did not, and this is what keeps them saying it.
+ */
+describe('both READMEs on installing the CLI', () => {
+  // A `-D` install naming the package, whatever else shares the line — the pages write it as
+  // `npm i -D @dogear/vite @dogear/cli`, and which order those two appear in is prose.
+  const LOCAL = /npm i -D [^\n]*@dogear\/cli/
+
+  it.each([ROOT_README, CLI_README])('asks for a local @dogear/cli in %s', (path) => {
+    expect(read(path)).toMatch(LOCAL)
+  })
+
+  it.each([ROOT_README, CLI_README])('still asks for the global one in %s', (path) => {
+    expect(read(path)).toContain('npm i -g @dogear/cli')
+  })
+})
+
 describe('the @dogear/cli README', () => {
   const readme = read(CLI_README)
 

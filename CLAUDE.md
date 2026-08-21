@@ -263,8 +263,15 @@ uses `${CLAUDE_PROJECT_DIR}/…` because a hook's working directory is the sessi
 repo's. `test-built/init.test.ts` asserts both.
 
 **E8 added a second runner phase, and `dogear init` writes nothing for it.** `guidance.ts`
-prints the `vite.config` change and the install command for every app that does not declare
-`@dogear/vite`; it edits neither the config nor the manifest. The manifest half is the part
+prints the `vite.config` change and the install command for every app that is not fully wired;
+it edits neither the config nor the manifest. **Fully wired is two facts, not one** — G3 (#44)
+found init silent over an app that had the package and no `dogear()` in its config, because
+E8 keyed on `DetectedApp.plugin` (a *manifest* fact) alone. `DetectedApp.configured` is the
+other, a word-bounded substring test on the config file, and each half of the block prints only
+when its own half is missing — so an app with the package gets the snippet and is not told to
+install what it has. A substring rather than a parse because the failure is cheap in both
+directions; rewriting a config would not be, which is why guidance still refuses to. The
+manifest half is the part
 that looks like a shortcut and is not: no range init could write resolves while the packages
 are unpublished, a manifest edited without a lockfile update fails the next `npm ci`, and the
 edit does nothing anyway because the config's `import` fails until someone installs. So this

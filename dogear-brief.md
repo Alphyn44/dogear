@@ -643,9 +643,19 @@ Global once, then per repo — the model CodeGraph uses, for the same reason: th
 is machine-level, the configuration is repo-level.
 
 ```
-npm i -g @dogear/cli        # once per machine
-cd my-repo && dogear init   # once per repo
+npm i -g @dogear/cli                    # once per machine — `dogear` on PATH
+cd my-repo && dogear init               # once per repo
+npm i -D @dogear/vite @dogear/cli       # what init prints
 ```
+
+**`@dogear/cli` is installed twice, and the second one is not optional.** Everything step 3
+writes — the MCP registration and the prompt hook alike — points at the repo-relative
+`node_modules/@dogear/cli/dist/cli.js`, because those files are committed and an absolute
+path out of one machine's npm prefix is broken for everyone else who clones. So the global
+install provides the command you type and the local one provides the path those configs
+name. G3 (#44) found this by running the install path: without the local copy the MCP server
+does not start and the prompt hook fails on every prompt, which is why `init` says so — see
+the Decisions log.
 
 `dogear init` is non-interactive and idempotent. It:
 
@@ -847,7 +857,8 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 - Works with no server, no MCP, and no agent configuration.
 - Falls back to a hidden-textarea copy where `navigator.clipboard` is unavailable.
 
-**D5 — Stale items are obvious and disposable**
+**D5 — Stale items are obvious and disposable** *(matcher amended during G3 — see the
+Decisions log)*
 - An item is marked `stale` when its text snippet appears in **none** of the files it
   names, compared whitespace- and case-insensitively. Amended during D5 — the original
   criterion said "its named file", literally, and flagged every healthy item; see the
@@ -940,7 +951,9 @@ that named E4 for this work now name E7; see the Decisions log.
   `vite.config` change to make. It writes neither.
 - The install command matches the repository's package manager, and names the package the
   dependency belongs to — which in a monorepo is not always the app's own directory.
-- An app that already declares the plugin gets nothing. A repo with no Vite app gets nothing.
+- An app that already declares the plugin **and calls it in its config** gets nothing. An app
+  with only one of the two gets exactly the half it is missing. A repo with no Vite app gets
+  nothing. Amended during G3 (#44) — see the Decisions log.
 - `@dogear/vite` in `dependencies` rather than `devDependencies` is reported, not moved.
 
 Filed during E2, which found that install step 6 was in no story at all. Written as printing
@@ -1592,6 +1605,25 @@ names, and accept a five-word window rather than the whole snippet for snippets 
 that. Checking all the sites is not re-anchoring — the pin is never rewritten, and the
 decision above still stands; it only widens where we look before *flagging*.
 
+**A short snippet falls back to a narrower window rather than demanding the whole thing.
+Amended during G3 (#44).**
+D5 exempted short snippets from windowing, reasoning that below five words there is nothing
+to slide and a one-word window matches almost any file. The floor is right; the exemption was
+scoped by the wrong property. It assumed *short* meant *static*, and the third bullet above
+already says why that fails: `Count is {count}` renders as `Count is 0` — three words, and
+interpolated, so it took the whole-snippet path and could never satisfy it.
+
+G3 found this on the counter button of a stock `npm create vite` app, flagged stale against a
+file nobody had touched, with the agent duly reporting that a correct line number was
+"likely off". That is the false-stale direction this entry calls the one that matters, on the
+most-clicked element of the most-used React starter.
+
+A short snippet now tries the whole thing first and then falls back to a window of
+`words.length - 1`, floored at **two** — so `Count is 0` matches on `count is`. Two rather
+than one preserves D5's actual concern: a snippet of two words or fewer gets no fallback at
+all, so a vanished `Save changes` still flags rather than being rescued by whichever of its
+words survived elsewhere.
+
 The asymmetry is what drives every remaining choice. A **false stale** tells the agent to
 distrust a correct line number on every prompt, which teaches everyone to ignore the marker
 and makes the feature worse than absent. A **false fresh** is the status quo: a wrong line
@@ -2046,6 +2078,56 @@ The consequence worth recording is that a wildcard is now a **test failure** rat
 convention: `scripts/packaging.test.ts` refuses `*`, `latest` and the `workspace:` protocol
 forms, because `*` is what `npm install -w` writes back and the regression would otherwise be
 silent until someone installed the published plugin.
+
+**Being wired is two independent facts — a manifest declaration and a config that calls the
+plugin — and init checks both. Settled during G3.**
+E8 keyed `guidance()` on `DetectedApp.plugin` alone, which is a *manifest* fact, on the
+reasonable-sounding grounds that an app already declaring the plugin does not need telling to
+install it. True, and it answers the wrong question: `npm i -D @dogear/vite` makes the
+declaration true and changes nothing about the config. G3 (#44) did the two steps in that
+order and found init reporting `nothing changed` with no snippet over an app whose overlay
+could never load. It is the same trap E1 named — *check for the state you need, not for the
+path being occupied* — one level up.
+
+`DetectedApp.configured` is the second fact, and each half of the block is now printed only
+when its own half is missing: an app with the package and no plugin call gets the snippet and
+is **not** told to install what it already has, and the install line's `then,` lead — which
+only reads as a sequel to a snippet — becomes `install it` when it stands alone.
+
+It is a **substring test, not a parse**, and the asymmetry with `guidance.ts`'s refusal to
+rewrite a config is the point: rewriting safely requires parsing, and a wrong guess is a dev
+server that will not start, while deciding whether to *print a hint* fails cheaply in both
+directions — a stray mention in a comment costs a suppressed hint, a missed one costs a
+redundant hint beside a config that already works. An unreadable config reads as `false`,
+which is the direction that prints.
+
+**A missing local `@dogear/cli` is a detection *remark*, not a step note, and it speaks for the
+prompt hook too. Settled during G3.**
+E3 had `mcp-config.ts` note it, gated on `jobs.length > 0` — reasoning that "a repository whose
+configs are all already correct does not need telling how the CLI resolves." G3 (#44) walked
+the documented global-only install and found the hole: the config being correct and the path
+inside it resolving are different questions. The note fired once, on the run that created
+`.mcp.json`, and every re-run afterwards reported `nothing changed` over an MCP server that
+exited 1 with `MODULE_NOT_FOUND` on spawn. The warning was transient; the breakage was not.
+
+Re-keying it on a registration *existing* fixed the firing and broke the report: **step notes
+suppress `nothing changed`**, so a repository earning this on every run never got a verdict
+again — which is precisely the trap E2 already identified for its own remarks, and which the
+built-binary suite caught within one run of the change.
+
+The discriminator in `report()` settles where it belongs: *a step note qualifies what init did
+or declined to do; a remark describes the repository.* Init declined nothing here — it wrote
+the registration, correctly. What is wrong is the repository, and it stays wrong until someone
+installs the package. So it is a remark, computed in `scaffold()` from the resolved `Wiring`
+rather than folded into `Detection`, which would make the `agent:` findings line report a
+preference as an observation. It prints on every run and silences nothing.
+
+It also names the **prompt hook**, which had no warning of its own and is the worse of the two
+failures: an MCP server that will not start is silent until you ask for it, while a
+`UserPromptSubmit` entry pointing at a missing file fails on *every prompt the user types* —
+the same shape E6 (#39) was filed to prevent, arrived at from the other direction. The wording
+comes from `Wiring.hook`, so `--no-hook` is not told about a hook it declined, and
+`--agent=none` gets nothing at all because nothing then points at `CLI_ENTRY`.
 
 ---
 

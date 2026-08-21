@@ -172,19 +172,17 @@ describe('createMcpStep() when it cannot edit safely', () => {
   })
 })
 
-describe('createMcpStep() reporting a missing local CLI', () => {
-  it('notes it when there is something to register', () => {
-    const result = plan(['claude'], 'absent')
-
-    expect(result?.notes?.some((note) => note.includes('npm i -D @dogear/cli'))).toBe(
-      true,
-    )
-  })
-
-  it('says nothing when every config is already correct', () => {
-    seed('.mcp.json', '{\n  "mcpServers": {\n    "dogear": {}\n  }\n}\n')
-
-    expect(plan(['claude'], 'absent')).toBeUndefined()
+/**
+ * An absent local `@dogear/cli` used to be noted *here*, gated on a registration being
+ * written — so it fired on the run that created `.mcp.json` and never again. G3 (#44) moved it
+ * to ./scaffold.ts's `remarks()`: it describes the repository rather than what this step did,
+ * which is what lets it print on every run without suppressing `nothing changed`. The cases
+ * live in ./scaffold.test.ts now; this one pins that the step itself stays out of it.
+ */
+describe('createMcpStep() and a missing local CLI', () => {
+  it('says nothing either way — the remark is scaffold’s', () => {
+    expect(plan(['claude'], 'absent')?.notes ?? []).toEqual([])
+    expect(plan(['claude'], 'local')?.notes ?? []).toEqual([])
   })
 })
 

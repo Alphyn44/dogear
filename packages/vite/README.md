@@ -30,7 +30,8 @@ repository — it registers dogear's MCP server with your agent and writes this 
 change for you:
 
 ```sh
-npm i -g @dogear/cli
+npm i -g @dogear/cli    # `dogear` on your PATH
+npm i -D @dogear/cli    # so the committed MCP config resolves for everyone who clones
 dogear init
 ```
 

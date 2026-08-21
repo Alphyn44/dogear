@@ -21,9 +21,15 @@ cd my-repo
 dogear init
 ```
 
-Then follow the two lines `init` prints — `npm i -D @dogear/vite`, and a plugin entry in
-your `vite.config`. That is the browser half; see
+Then follow what `init` prints — `npm i -D @dogear/vite @dogear/cli`, and a plugin entry in
+your `vite.config`. The plugin is the browser half; see
 [`@dogear/vite`](https://www.npmjs.com/package/@dogear/vite).
+
+This package is installed **twice on purpose**: globally, so `dogear` is on your PATH, and
+locally, because the MCP server and prompt-hook entries `init` writes are committed and
+point at `node_modules/@dogear/cli/dist/cli.js`. That path is repo-relative so it resolves
+for everyone who clones the repository — an absolute path out of one machine's npm prefix
+would be broken for everyone else. Without the local copy the MCP server cannot start.
 
 ## Commands
 

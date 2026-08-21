@@ -26,6 +26,9 @@ function app(overrides: Partial<DetectedApp> = {}): DetectedApp {
     viteVersion: '^8.2.1',
     manifestDir: 'apps/web',
     plugin: 'absent',
+    // The unwired baseline: neither declared nor in the config. G3 (#44) made these two
+    // independent, so every case below says which of them it is varying.
+    configured: false,
     ...overrides,
   }
 }
@@ -135,7 +138,7 @@ describe('guidance() when there is nothing to say', () => {
     (plugin) => {
       // `runtime` is wrong and earns a note from ./scaffold.ts — but the import resolves, so
       // telling the user to install a package they already have would be the wrong correction.
-      expect(guidance(detection([app({ plugin })]))).toEqual([])
+      expect(guidance(detection([app({ plugin, configured: true })]))).toEqual([])
     },
   )
 
@@ -152,10 +155,40 @@ describe('guidance() when there is nothing to say', () => {
         config: `${name}/vite.config.ts`,
         manifestDir: name,
         plugin: 'dev',
+        configured: true,
       }),
     )
 
     expect(guidance(detection(apps))).toEqual([])
+  })
+})
+
+/**
+ * The install and the config edit are independent, and G3 (#44) walked into the gap: the
+ * package installed, `dogear()` never added, and init silent because it keyed on the manifest
+ * alone. Each half now earns exactly the half of the block that is missing.
+ */
+describe('guidance() when only one half is done', () => {
+  it('prints the snippet and no install for an app that has the package', () => {
+    const lines = guidance(detection([app({ plugin: 'dev', configured: false })]))
+
+    expect(lines).toContain('add dogear to apps/web/vite.config.ts:')
+    expect(lines.join('\n')).not.toContain('npm i -D')
+  })
+
+  it('prints the install and no snippet for a config that already calls dogear', () => {
+    const lines = guidance(detection([app({ plugin: 'absent', configured: true })]))
+
+    expect(lines).toContain('install it in apps/web: npm i -D @dogear/vite')
+    expect(lines.join('\n')).not.toContain('add dogear to')
+  })
+
+  it('says `then,` only when the install follows a snippet', () => {
+    // `then,` reads as a sequel. Standing alone above nothing, it refers to a step that is not
+    // there — which is why the lead is chosen from `configured` rather than fixed.
+    const both = guidance(detection([app()])).join('\n')
+
+    expect(both).toContain('then, in apps/web: npm i -D @dogear/vite')
   })
 })
 
@@ -183,7 +216,12 @@ describe('guidance() across several apps', () => {
 
   it('skips the wired ones and keeps the rest', () => {
     const mixed = [
-      app({ dir: 'wired', config: 'wired/vite.config.ts', plugin: 'dev' }),
+      app({
+        dir: 'wired',
+        config: 'wired/vite.config.ts',
+        plugin: 'dev',
+        configured: true,
+      }),
       ...apps(1),
     ]
     const lines = guidance(detection(mixed)).join('\n')

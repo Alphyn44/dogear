@@ -25,7 +25,7 @@ dogear init
 your agent, and prints the plugin install and the two-line `vite.config` change:
 
 ```sh
-npm i -D @dogear/vite
+npm i -D @dogear/vite @dogear/cli
 ```
 
 ```js
@@ -35,6 +35,12 @@ export default defineConfig({
   plugins: [dogear()],
 })
 ```
+
+`@dogear/cli` is installed twice on purpose. Globally, so `dogear` is on your PATH;
+locally, because the MCP server and prompt-hook entries `init` writes are **committed** and
+point at `node_modules/@dogear/cli/dist/cli.js` — a repo-relative path, so that they resolve
+for everyone who clones the repository rather than only on the machine that ran `init`.
+Without the local copy the MCP server cannot start.
 
 It is non-interactive and safe to re-run — it diffs against what is already there and
 reports only what changed. `dogear init --dry-run` shows you every change without writing

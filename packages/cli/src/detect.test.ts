@@ -62,6 +62,7 @@ describe('detect() on a single-package repository', () => {
         viteVersion: '^8.2.1',
         manifestDir: '',
         plugin: 'absent',
+        configured: false,
       },
     ])
   })
@@ -82,6 +83,7 @@ describe('detect() on a single-package repository', () => {
         viteVersion: '^8.2.1',
         manifestDir: '',
         plugin: 'absent',
+        configured: false,
       },
     ])
   })
@@ -206,6 +208,59 @@ describe('detect() and whether the plugin is already declared', () => {
   })
 })
 
+/**
+ * G3 (#44): a manifest declaration and a config that calls the plugin are different facts,
+ * and the install path produces the first without the second every time.
+ */
+describe('detect() and whether the config calls the plugin', () => {
+  const CONFIG = [
+    "import { dogear } from '@dogear/vite'",
+    'export default { plugins: [dogear()] }',
+  ].join('\n')
+
+  it('reports configured for a config that imports and calls it', () => {
+    file('vite.config.ts', CONFIG)
+
+    expect(detect(root).apps[0]?.configured).toBe(true)
+  })
+
+  it('reports not configured for a config that does not mention it', () => {
+    file('vite.config.ts', "import react from '@vitejs/plugin-react'\n")
+
+    expect(detect(root).apps[0]?.configured).toBe(false)
+  })
+
+  it('is independent of the manifest declaration, in both directions', () => {
+    manifest('package.json', {
+      workspaces: ['packages/*'],
+      devDependencies: { '@dogear/vite': '^1.0.0' },
+    })
+    manifest('packages/installed/package.json', {
+      devDependencies: { '@dogear/vite': '^1.0.0' },
+    })
+    manifest('packages/edited/package.json', {})
+    // Installed but never added to the config — the state G3 walked into.
+    file('packages/installed/vite.config.ts', '')
+    // Added to the config but never installed: the import fails, and init must say so.
+    file('packages/edited/vite.config.ts', CONFIG)
+
+    const byDir = Object.fromEntries(
+      detect(root).apps.map((app) => [app.dir, [app.plugin, app.configured]]),
+    )
+
+    expect(byDir).toEqual({
+      'packages/installed': ['dev', false],
+      'packages/edited': ['absent', true],
+    })
+  })
+
+  it('does not count a longer word that merely contains it', () => {
+    file('vite.config.ts', "import x from './dogeared-helpers.js'\n")
+
+    expect(detect(root).apps[0]?.configured).toBe(false)
+  })
+})
+
 describe('detect() and which package owns an app', () => {
   it('names the app’s own directory when it has a manifest', () => {
     manifest('package.json', {})
@@ -312,6 +367,7 @@ describe('detect() on a workspace', () => {
         viteVersion: '^8.2.1',
         manifestDir: 'examples/web',
         plugin: 'absent',
+        configured: false,
       },
     ])
   })

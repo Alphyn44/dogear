@@ -133,6 +133,19 @@ const WIRING = [
  * output the user is meant to act on, so a change to it should fail the cases that pin the
  * shape of the whole report.
  */
+/**
+ * A `vite.config.ts` that actually calls the plugin — the other half of being wired, and the
+ * one the shared fixture above deliberately lacks. G3 (#44) split the two: the fixture's empty
+ * config makes every case here the unwired baseline, and a case asserting silence has to set
+ * both this and the manifest declaration.
+ */
+const WIRED_CONFIG = [
+  "import { dogear } from '@dogear/vite'",
+  '',
+  'export default { plugins: [dogear()] }',
+  '',
+].join('\n')
+
 const BLOCK = [
   '',
   'add dogear to vite.config.ts:',
@@ -461,13 +474,30 @@ describe('scaffold() telling the user to install the plugin', () => {
     expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(before)
   })
 
-  it('says nothing once the plugin is declared', () => {
+  it('says nothing once the plugin is declared AND the config calls it', () => {
+    // Both halves, because G3 (#44) made them independent — the fixture's `vite.config.ts` is
+    // empty, and a declaration alone leaves an app whose overlay never loads.
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ devDependencies: { vite: '^8.2.1', '@dogear/vite': '^1.0.0' } }),
+    )
+    writeFileSync(join(root, 'vite.config.ts'), WIRED_CONFIG)
+
+    expect(scaffold(root).output).not.toContain('add dogear to')
+  })
+
+  it('still asks for the config edit when only the package is there', () => {
+    // The state the install path actually produces: `npm i -D @dogear/vite` and nothing else.
     writeFileSync(
       join(root, 'package.json'),
       JSON.stringify({ devDependencies: { vite: '^8.2.1', '@dogear/vite': '^1.0.0' } }),
     )
 
-    expect(scaffold(root).output).not.toContain('add dogear to')
+    const output = scaffold(root).output
+
+    expect(output).toContain('add dogear to vite.config.ts:')
+    // And does not tell them to install what they just installed.
+    expect(output).not.toContain('npm i -D @dogear/vite')
   })
 
   it('reports a runtime dependency as the leak it is, and does not move it', () => {
@@ -477,6 +507,7 @@ describe('scaffold() telling the user to install the plugin', () => {
       join(root, 'package.json'),
       JSON.stringify({ dependencies: { '@dogear/vite': '^1.0.0' } }),
     )
+    writeFileSync(join(root, 'vite.config.ts'), WIRED_CONFIG)
 
     const output = scaffold(root).output
 
@@ -669,13 +700,66 @@ describe('scaffold() wiring an agent — E3 (#28)', () => {
     expect(result.exitCode).toBe(0)
   })
 
-  it('notes a missing local CLI, since the path it wrote will not resolve yet', () => {
-    writeFileSync(
-      join(root, 'package.json'),
-      JSON.stringify({ devDependencies: { vite: '^8.2.1' } }),
-    )
+  /**
+   * G3 (#44). E3 noted this from ./mcp-config.ts, gated on a registration being *written* — so
+   * it fired once and never again, and a repository whose config was right but whose CLI was
+   * missing re-ran init, read `nothing changed`, and had an MCP server that exited 1 on spawn
+   * and a prompt hook that failed on every prompt. It is a remark now: it describes the
+   * repository, so it prints every run and silences nothing.
+   */
+  describe('and the local CLI the configs point at', () => {
+    /** The fixture declares `@dogear/cli`; these cases are about a repository that does not. */
+    function withoutCli(): void {
+      writeFileSync(
+        join(root, 'package.json'),
+        JSON.stringify({ devDependencies: { vite: '^8.2.1' } }),
+      )
+    }
 
-    expect(scaffold(root).output).toContain('npm i -D @dogear/cli')
+    it('says so on the run that writes the registration', () => {
+      withoutCli()
+
+      expect(scaffold(root).output).toContain('npm i -D @dogear/cli')
+    })
+
+    it('says so again on a re-run that changes nothing', () => {
+      withoutCli()
+      scaffold(root)
+
+      const output = scaffold(root).output
+
+      expect(output).toContain('npm i -D @dogear/cli')
+      // And still gives a verdict: a remark describes the repository, so unlike a step note it
+      // does not eat the only line answering the question the user asked.
+      expect(output).toContain('nothing changed')
+    })
+
+    it('names the prompt hook too, which has no warning of its own', () => {
+      withoutCli()
+
+      expect(scaffold(root).output).toContain(
+        'the MCP registration and the prompt hook both point',
+      )
+    })
+
+    it('names only the registration under --no-hook', () => {
+      withoutCli()
+
+      const output = scaffold(root, { hook: false }).output
+
+      expect(output).toContain('the MCP registration points')
+      expect(output).not.toContain('prompt hook')
+    })
+
+    it('says nothing when --agent=none wired nothing to point at it', () => {
+      withoutCli()
+
+      expect(scaffold(root, { agents: [] }).output).not.toContain('npm i -D @dogear/cli')
+    })
+
+    it('says nothing once the CLI is installed', () => {
+      expect(scaffold(root).output).not.toContain('npm i -D @dogear/cli')
+    })
   })
 
   it('reports the agent it detected above everything it changed', () => {
