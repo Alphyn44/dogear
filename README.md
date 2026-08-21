@@ -11,7 +11,7 @@ Nothing leaves localhost.
 Once per machine:
 
 ```sh
-npm i -g @dogear/cli
+npm i -g dogear-cli
 ```
 
 Once per repository:
@@ -25,20 +25,20 @@ dogear init
 your agent, and prints the plugin install and the two-line `vite.config` change:
 
 ```sh
-npm i -D @dogear/vite @dogear/cli
+npm i -D dogear-vite dogear-cli
 ```
 
 ```js
-import { dogear } from '@dogear/vite'
+import { dogear } from 'dogear-vite'
 
 export default defineConfig({
   plugins: [dogear()],
 })
 ```
 
-`@dogear/cli` is installed twice on purpose. Globally, so `dogear` is on your PATH;
+`dogear-cli` is installed twice on purpose. Globally, so `dogear` is on your PATH;
 locally, because the MCP server and prompt-hook entries `init` writes are **committed** and
-point at `node_modules/@dogear/cli/dist/cli.js` — a repo-relative path, so that they resolve
+point at `node_modules/dogear-cli/dist/cli.js` — a repo-relative path, so that they resolve
 for everyone who clones the repository rather than only on the machine that ran `init`.
 Without the local copy the MCP server cannot start.
 
@@ -63,10 +63,20 @@ any of them, and `dogear init --undo` takes them back out.
 | --- | --- |
 | `⏎` | queue the comment |
 | `⇧⏎` | newline |
-| `esc` | cancel the comment, or close the review panel |
+| `esc` | back out of one thing at a time — see below |
 | `⌘/Ctrl+⏎` | submit the batch, with the review panel open |
 | `Ctrl+Alt+P` | copy the batch to the clipboard instead — works from anywhere |
 | `Ctrl+Alt+D` | turn dogear off in this browser — works from anywhere |
+
+`esc` is a chain, most specific first: it cancels the batch note if you are editing it,
+then a comment you are editing in the panel, then an open comment box, then the panel
+itself. Each press undoes one layer, and dogear stops the event so your app does not also
+close a modal on it while dogear has focus.
+
+`Ctrl+Alt+D` is remembered for that origin, so a reload stays off. The way back is
+`__dogear.start()` in the browser console — the disable path prints that line for you, and
+the Disable button's tooltip says it too. `__dogear` also carries `stop()` and a `running`
+flag; `stop()` is this page only, while the chord is the stored preference.
 
 Step 5 is deliberate rather than a formality: there is no way to submit without opening
 the panel, so you always get a moment to review the batch and add a global instruction
@@ -92,13 +102,47 @@ Three ways, in order of preference:
 The browser never talks to your agent. It writes a file; the agent reads it. Either half
 can be broken, replaced, or driven by hand without the other noticing.
 
+All three send the same block, so an agent nobody wrote an adapter for still gets
+something it can act on:
+
+```
+<dogear-queue count="2">
+[1] 01991b1e-4c2f-7c3a-9f5e-2b6d0a1c4e88 — src/components/Button.tsx:20  (Button, via attribute)
+    app: web — http://localhost:5173/settings
+    selector: main > form > button.primary
+    text: "Save changes"
+    note: keep the existing spacing scale
+    comment: shade this darker on hover
+
+[2] 01991b1e-51a7-7d10-8c44-9e3f7a20b6d1 — src/Sidebar.tsx:48  ⚠ stale
+    selector: nav.sidebar > ul > li:nth-child(3)
+    text: "Billing"
+    comment: move this two tabs right
+</dogear-queue>
+
+These are annotations left by clicking elements in the running app. Each names where
+the element was seen; treat the location as a strong hint, not a constraint — if it
+does not match, locate the element by its selector or text instead.
+
+Items marked ⚠ stale no longer have their text snippet in any file they name — the
+line number is probably wrong; locate by selector or text instead.
+
+When you have addressed an item, call dogear_resolve with its id.
+```
+
+The location is a hint on purpose. Between the click and the agent reading it, the file
+may have been edited — so every annotation also carries a CSS selector and a text snippet,
+and an item whose snippet has gone missing is marked `⚠ stale` rather than trusted. The
+clipboard export closes with a different last line: its items never reached the queue, so
+they have no ids and nothing to resolve.
+
 ## Packages
 
 | Package | |
 | --- | --- |
-| [`@dogear/cli`](./packages/cli) | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status` |
-| [`@dogear/vite`](./packages/vite) | The dev-only plugin. Stamps source attributes, injects the overlay, serves the endpoint |
-| [`@dogear/core`](./packages/core) | The overlay itself. Framework-agnostic, and installed as a dependency of the plugin rather than directly |
+| [`dogear-cli`](./packages/cli) | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status` |
+| [`dogear-vite`](./packages/vite) | The dev-only plugin. Stamps source attributes, injects the overlay, serves the endpoint |
+| [`dogear-core`](./packages/core) | The overlay itself. Framework-agnostic, and installed as a dependency of the plugin rather than directly |
 
 The flow is **browser → HTTP POST → `<git-root>/.dogear/queue.json` → MCP server →
 agent**. The bridge is a file, never a socket, and one repository has one queue however
@@ -111,6 +155,50 @@ the injected script and the attribute transform together. Four further layers si
 it, including export conditions that resolve to a noop module, a CI check that fails on a
 leaked sentinel string, and a runtime hostname bail. See
 [the brief](./dogear-brief.md#keeping-it-out-of-production).
+
+## Troubleshooting
+
+dogear says what is wrong in the terminal your dev server is running in. Every line it
+prints starts with `[dogear]`, so that is the first place to look.
+
+**Nothing happens when I hold the modifier.** In rough order of likelihood:
+
+- **The plugin is not in your `vite.config`.** Adding `dogear-vite` to `package.json` is
+  half the wiring; the `plugins: [dogear()]` entry is the other half. `dogear init` prints
+  the snippet and will keep printing it until both are true.
+- **`[dogear] no .git found above …`** — the queue resolves from the git root, so dogear
+  disables itself outside a repository rather than guessing. `git init`, or start the dev
+  server from inside the repository.
+- **`[dogear] disabled by .dogear/config.json`** — someone committed `"enabled": false`.
+- **You are not on an allowed hostname.** This one is silent by design: a warning here
+  would fire on a deployed page in front of real users. dogear runs on `localhost`, the
+  loopback range, `*.local` and the private IPv4 ranges by default — so a dev server
+  reached through a public tunnel domain will not arm. Add the host to `hosts` in
+  `.dogear/config.json`.
+- **You pressed `Ctrl+Alt+D`.** It is remembered per origin, so a reload stays off. Run
+  `__dogear.start()` in the console. If `__dogear` is undefined the overlay never loaded,
+  which is one of the cases above rather than this one.
+- **`[dogear] dogear-core has not been built`** — only in a clone of this repository. The
+  plugin serves core's built bundle, so `npm run build -w dogear-core -w dogear-vite`
+  first, or use `npm run dev:example`, which does it for you.
+
+**The MCP server will not start.** Almost always the local install: the entries `dogear
+init` writes are committed and point at `node_modules/dogear-cli/dist/cli.js`, a
+repo-relative path, so `npm i -D dogear-cli` has to have happened in *this* repository. A
+global install alone puts `dogear` on your PATH and leaves that path unresolvable. `dogear
+init` says so in a note if the file is not there. npm, pnpm and yarn all link a direct
+dependency at the top level, so that path holds under each — the exception is Yarn's PnP
+linker, which has no `node_modules` at all and cannot support a committed path like this
+one.
+
+**My comments are not reaching the agent.** Check `.dogear/queue.json` at your **git
+root** — not your Vite root, which in a monorepo is a different directory. `dogear status`
+lists every repository you have run `init` in, what is pending in each, and which dev
+servers are live; it works from anywhere and never writes.
+
+**I edited `.dogear/config.json` and nothing changed.** It is read once, at startup.
+Restart the dev server. The `[dogear]` line naming the keys it picked up is the
+confirmation that it did.
 
 ## Requirements
 
@@ -143,7 +231,7 @@ plugin, and the plugin serves the overlay's **built** bundle — so both need bu
 before the example picks up a change:
 
 ```sh
-npm run build -w @dogear/core -w @dogear/vite
+npm run build -w dogear-core -w dogear-vite
 npm run dev:example
 ```
 

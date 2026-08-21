@@ -1,6 +1,6 @@
-import { findGitRoot, pendingOnly, queuePathFor, tryReadQueue } from '@dogear/queue'
+import { findGitRoot, pendingOnly, queuePathFor, tryReadQueue } from 'dogear-queue'
 
-import { formatQueue } from '@dogear/queue/format'
+import { formatQueue } from 'dogear-queue/format'
 import type { Result } from './run.js'
 import { findStale } from './stale.js'
 
@@ -67,7 +67,7 @@ export function hook(env: HookEnv, cwd: string): Result {
   const queuePath = queuePathFor(gitRoot)
   // The TOLERANT reader. The hook only ever reads, so it may swallow a corrupt file — and
   // must, since it cannot exit non-zero. A writer would use `readQueue` instead; see
-  // `@dogear/queue`'s header for why that distinction is load-bearing.
+  // `dogear-queue`'s header for why that distinction is load-bearing.
   const queue = tryReadQueue(queuePath)
   if (!queue.ok) {
     // The queue is there and unreadable. Say so on stderr and inject nothing: a corrupt

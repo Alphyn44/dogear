@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { validateBatch } from './batch.js'
 
 /**
- * Split out of ./annotation.test.ts when D1 moved annotation identity into `@dogear/queue`.
+ * Split out of ./annotation.test.ts when D1 moved annotation identity into `dogear-queue`.
  * Every assertion is unchanged; only the module under test moved.
  */
 

@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { Annotation } from '@dogear/queue'
-import { appendToQueue, queuePathFor, readQueue, stampAnnotation } from '@dogear/queue'
+import type { Annotation } from 'dogear-queue'
+import { appendToQueue, queuePathFor, readQueue, stampAnnotation } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { hook } from './hook.js'

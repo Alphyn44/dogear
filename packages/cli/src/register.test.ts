@@ -2,14 +2,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { RegistryEnv } from '@dogear/queue'
+import type { RegistryEnv } from 'dogear-queue'
 import {
   readRegistry,
   registerServer,
   registryKey,
   registryPath,
   shortenHome,
-} from '@dogear/queue'
+} from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { createDeregisterStep, createRegisterStep } from './register.js'
@@ -176,7 +176,7 @@ describe('createDeregisterStep — E6 (#39)', () => {
 
   it('warns that a live dev server is still serving the overlay', () => {
     // Undo removes configuration, not the installed plugin. A dev server already up still has
-    // @dogear/vite loaded and will recreate the queue on the next click.
+    // dogear-vite loaded and will recreate the queue on the next click.
     registerServer(path, root, { origin: 'http://localhost:5173', pid: process.pid })
 
     const note = undo()?.notes?.[0]

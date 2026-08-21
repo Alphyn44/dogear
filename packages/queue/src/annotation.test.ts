@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createUuidv7, stampAnnotation, uuidv7 } from './annotation.js'
 
 /**
- * Moved from `@dogear/vite` with the code it covers. `validateBatch`'s suite stayed behind
+ * Moved from `dogear-vite` with the code it covers. `validateBatch`'s suite stayed behind
  * as `packages/vite/src/batch.test.ts`, because the POST body it validates is the plugin's
  * wire contract rather than anything this package knows about.
  */

@@ -1,4 +1,4 @@
-import type { StoredAnnotation } from '@dogear/queue'
+import type { StoredAnnotation } from 'dogear-queue'
 import {
   pendingOnly,
   pruneQueue,
@@ -6,8 +6,8 @@ import {
   resolveInQueue,
   tryReadQueue,
   withApp,
-} from '@dogear/queue'
-import { formatQueue } from '@dogear/queue/format'
+} from 'dogear-queue'
+import { formatQueue } from 'dogear-queue/format'
 
 import { findStale } from './stale.js'
 
@@ -26,7 +26,7 @@ import { findStale } from './stale.js'
  *
  * **Which reader each one uses is not a style choice.** `pending` reads tolerantly, because
  * a hand-broken entry should cost that entry rather than hide the other nine from the agent.
- * `resolve` and `prune` go through `@dogear/queue`'s writers, which read *strictly* — a
+ * `resolve` and `prune` go through `dogear-queue`'s writers, which read *strictly* — a
  * tolerant read drops malformed entries, so writing one back would silently delete them.
  *
  * **Errors are returned, never thrown.** {@link callTool} is the single boundary: a throw

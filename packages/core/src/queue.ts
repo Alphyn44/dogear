@@ -32,7 +32,7 @@ export interface QueuedViewport {
  * An annotation as the browser assembles it.
  *
  * **A draft, because four of the brief's Annotation fields are not ours to write.**
- * `@dogear/vite`'s `stampAnnotation()` sets `id` (a UUIDv7), `status`, `createdAt` and
+ * `dogear-vite`'s `stampAnnotation()` sets `id` (a UUIDv7), `status`, `createdAt` and
  * `resolvedAt` over whatever the client sends, client-fields-first, so a batch cannot write
  * itself into the queue pre-resolved. Generating an `id` here would produce a v4 that the
  * server discards — or worse, one that survives into `queue.json` and breaks the
@@ -107,7 +107,7 @@ export interface Queue {
 /**
  * A comment the server will accept, or `null`.
  *
- * The rule is @dogear/vite's `validateBatch`: a non-empty, trimmed string, or the **entire
+ * The rule is dogear-vite's `validateBatch`: a non-empty, trimmed string, or the **entire
  * batch** is rejected. Both paths that put a comment into the queue go through this — B3's
  * (#10) Enter and B4's (#11) in-place edit — so the two cannot drift into disagreeing about
  * what an empty comment means.

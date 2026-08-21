@@ -1,4 +1,4 @@
-import { findGitRoot } from '@dogear/queue'
+import { findGitRoot } from 'dogear-queue'
 
 import type { Result } from './run.js'
 import { prune as pruneTool } from './tools.js'

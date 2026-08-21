@@ -7,7 +7,7 @@ import {
   pendingOnly,
   queuePathFor,
   tryReadQueue,
-} from '@dogear/queue'
+} from 'dogear-queue'
 
 import type { Step, Undo } from './scaffold.js'
 
@@ -16,7 +16,7 @@ import type { Step, Undo } from './scaffold.js'
  *
  * E1's only step, and the smallest one that is genuinely load-bearing: every later step
  * and every queue write puts a file inside this directory. `QUEUE_DIR` comes from
- * `@dogear/queue` rather than a second `'.dogear'` literal here — that constant is what
+ * `dogear-queue` rather than a second `'.dogear'` literal here — that constant is what
  * `queuePathFor` builds on, so init and the writers cannot disagree about where the
  * directory is.
  *

@@ -52,7 +52,7 @@ function fakeServer(serverRoot: string, log: ServerLog): ViteDevServer {
     config: {
       root: serverRoot,
       logger: {
-        // Dropped rather than recorded: whether `@dogear/core` has been built is
+        // Dropped rather than recorded: whether `dogear-core` has been built is
         // environmental, not something any case here is about. `npm test` is deliberately
         // build-independent, so this warning is absent on a machine that has run
         // `npm run build` and present in CI, which runs the suites first — and an
@@ -218,7 +218,7 @@ describe('transformIndexHtml (A1)', () => {
       property: 'attrs.type',
       read: (tag: HtmlTagDescriptor) => tag.attrs?.['type'],
       expected: 'module',
-      why: 'the body is an ES module importing @dogear/core from the dev server',
+      why: 'the body is an ES module importing dogear-core from the dev server',
     },
     {
       property: 'attrs.data-dogear',
@@ -425,8 +425,8 @@ describe('config precedence (E7)', () => {
     })
 
     it('is absent from the wire when the file does not', () => {
-      // Not merely equal to the defaults — *absent*. Sending @dogear/vite's copy of the list
-      // would pin it, so a plugin one version behind @dogear/core would keep overriding core's
+      // Not merely equal to the defaults — *absent*. Sending dogear-vite's copy of the list
+      // would pin it, so a plugin one version behind dogear-core would keep overriding core's
       // defaults with a stale list it never chose. Omitted means "core decides".
       withConfigOf({ version: 1, modifier: 'ctrl' }, () => {
         expect(injectedConfig(configured())).not.toHaveProperty('hosts')

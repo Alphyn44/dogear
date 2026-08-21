@@ -7,7 +7,7 @@
  * falls out of the assertion diff for free.
  *
  * The sentinel is imported from core's SOURCE by relative path rather than through the
- * package name. Going through `@dogear/core` would hit the exports map, whose `default`
+ * package name. Going through `dogear-core` would hit the exports map, whose `default`
  * condition resolves to the noop — and the noop deliberately does not carry the sentinel.
  * The relative import also keeps this script build-independent, so `npm run typecheck`
  * never has to wait on `npm run build`.
@@ -43,6 +43,29 @@ export interface ScanResult {
   readonly findings: readonly Finding[]
 }
 
+/**
+ * Every dogear package specifier, published or not.
+ *
+ * This list exists because G5's rename cost the gate its cheapest rule. The old needle was
+ * the scope prefix `@dogear/`, which covered a package added later for free. Unscoped, the
+ * equivalent prefix is `dogear-` — and that is a **substring of `data-dogear-src` and
+ * `data-dogear-component`**, whose rules sit in the table below, so every fixture carrying
+ * one attribute would report two findings. It is also a substring of the gated-import
+ * fixture's marker, which would make this general rule shadow layer 2's bespoke one and
+ * muddy which layer failed.
+ *
+ * So the rule names each package, and an explicit list is a list that can go stale:
+ * `scripts/packaging.test.ts` asserts every published name appears here. `dogear-queue` is
+ * in it too — it is never published, but it is inlined into all three bundles, so its
+ * specifier surviving into production output means the same thing.
+ */
+export const PACKAGE_SPECIFIERS = [
+  'dogear-core',
+  'dogear-vite',
+  'dogear-cli',
+  'dogear-queue',
+] as const
+
 export const RULES: readonly Rule[] = [
   {
     name: 'sentinel',
@@ -64,11 +87,11 @@ export const RULES: readonly Rule[] = [
     needle: 'data-dogear-component',
     why: "C5's JSX transform stamps this in dev only; production DOM must never carry it",
   },
-  {
+  ...PACKAGE_SPECIFIERS.map((specifier) => ({
     name: 'package-specifier',
-    needle: '@dogear/',
+    needle: specifier,
     why: 'an unresolved import or a surviving sourcemap path — dogear was in the module graph',
-  },
+  })),
 ]
 
 /** Bytes inspected when deciding whether a file is binary. */
@@ -126,13 +149,21 @@ export function scanManifest(manifestPath: string): Finding[] {
     dependencies?: Record<string, string>
   }
 
-  return Object.keys(manifest.dependencies ?? {})
-    .filter((name) => name === 'dogear' || name.startsWith('@dogear/'))
-    .map((name) => ({
-      rule: 'runtime-dependency',
-      file: displayPath(manifestPath),
-      detail: `"${name}" is listed in dependencies — dogear must only ever be a devDependency`,
-    }))
+  return (
+    Object.keys(manifest.dependencies ?? {})
+      // `dogear` is not one of ours — it is an unrelated hapi plugin — but a manifest that
+      // depends on it in production is either a typo for one of these or something nobody
+      // meant, and the check is deliberately conservative about which.
+      .filter(
+        (name) =>
+          name === 'dogear' || (PACKAGE_SPECIFIERS as readonly string[]).includes(name),
+      )
+      .map((name) => ({
+        rule: 'runtime-dependency',
+        file: displayPath(manifestPath),
+        detail: `"${name}" is listed in dependencies — dogear must only ever be a devDependency`,
+      }))
+  )
 }
 
 /**

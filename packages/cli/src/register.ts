@@ -1,4 +1,4 @@
-import type { RegistryEnv, ServerRecord } from '@dogear/queue'
+import type { RegistryEnv, ServerRecord } from 'dogear-queue'
 import {
   deregisterProject,
   isProcessAlive,
@@ -7,7 +7,7 @@ import {
   registryPath,
   shortenHome,
   tryReadRegistry,
-} from '@dogear/queue'
+} from 'dogear-queue'
 
 import type { Step, Undo } from './scaffold.js'
 
@@ -21,7 +21,7 @@ import type { Step, Undo } from './scaffold.js'
  *
  * **It writes the repository's existence and nothing else.** The origin of a dev server
  * cannot be known here: there is no dev server when init runs, and Vite settles on a port
- * only once it is listening. `@dogear/vite` fills that half in, and either half may create
+ * only once it is listening. `dogear-vite` fills that half in, and either half may create
  * the entry — see `registerProject` and `registerServer`.
  *
  * **A factory, like E3's three steps**, because the registry path depends on `DOGEAR_HOME`
@@ -89,7 +89,7 @@ export function createRegisterStep(env: RegistryEnv): Step {
  * then fails part way through would leave `dogear status` unable to point at the mess.
  *
  * **A running dev server earns a note, and it is not pedantry.** Undo removes configuration, not
- * the installed plugin: a `vite dev` that is already up still has `@dogear/vite` loaded, is
+ * the installed plugin: a `vite dev` that is already up still has `dogear-vite` loaded, is
  * still injecting the overlay, still serving the endpoint, and will recreate `.dogear/queue.json`
  * the next time someone clicks. Nothing undo can do reaches into that process, so the only
  * honest move is to say so.
@@ -139,7 +139,7 @@ function running(servers: readonly ServerRecord[]): readonly string[] | undefine
   return live.map(
     (record) =>
       `a dev server is still running at ${record.origin} (pid ${record.pid}). It has ` +
-      '@dogear/vite loaded and will keep serving the overlay — and recreating the queue — ' +
+      'dogear-vite loaded and will keep serving the overlay — and recreating the queue — ' +
       'until you restart it.',
   )
 }

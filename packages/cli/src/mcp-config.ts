@@ -78,7 +78,7 @@ export function createMcpStep(wiring: Wiring): Step {
         else jobs.push(outcome)
       }
 
-      // An absent local `@dogear/cli` is **not** noted here. It is a fact about the repository
+      // An absent local `dogear-cli` is **not** noted here. It is a fact about the repository
       // rather than about what this step did, so it belongs with ./scaffold.ts's `remarks()` —
       // see `cliNotInstalled` there, and G3 (#44) in the Decisions log for the round trip.
       if (jobs.length === 0) return notes.length === 0 ? undefined : { notes }

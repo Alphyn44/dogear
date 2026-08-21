@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import type { ServerResponse } from 'node:http'
 
 /**
- * Serving @dogear/core's dev bundle over the dev server.
+ * Serving dogear-core's dev bundle over the dev server.
  *
  * Split from ./endpoint.ts so that file keeps owning *routing*, which is its stated job, and
  * does not quietly grow into a static file server. The routing table lives there; the bytes
@@ -18,7 +18,7 @@ import type { ServerResponse } from 'node:http'
 const JAVASCRIPT = 'text/javascript; charset=utf-8'
 
 /**
- * What the browser gets when @dogear/core has not been built.
+ * What the browser gets when dogear-core has not been built.
  *
  * **A 200 with a valid module, not a 5xx.** A non-200 on a module import surfaces in DevTools
  * as an opaque MIME or network error naming a URL the developer has never heard of; a stub
@@ -30,8 +30,8 @@ const JAVASCRIPT = 'text/javascript; charset=utf-8'
  * It deliberately carries no sentinel: there is nothing here to leak and nothing to scan for.
  */
 const MISSING_BUNDLE_STUB = `console.warn(
-  '[dogear] @dogear/core has not been built, so the overlay is not available. ' +
-    'Run \`npm run build -w @dogear/core\` and reload.',
+  '[dogear] dogear-core has not been built, so the overlay is not available. ' +
+    'Run \`npm run build -w dogear-core\` and reload.',
 )
 `
 
@@ -63,7 +63,7 @@ function send(res: ServerResponse, payload: string, contentType: string): void {
   res.setHeader('Content-Type', contentType)
   res.setHeader('Content-Length', Buffer.byteLength(payload))
   // `no-store`, matching every other dogear response. The file changes whenever someone runs
-  // `npm run build -w @dogear/core`, and a cached stale overlay is a confusing hour. Doing
+  // `npm run build -w dogear-core`, and a cached stale overlay is a confusing hour. Doing
   // better would mean an ETag off mtime — machinery for a 3 KB same-origin dev asset. The
   // real wins of serving it as a file rather than inlining it (no blob in every HTML
   // response, a working sourcemap, a readable tag in view-source) all survive without it.

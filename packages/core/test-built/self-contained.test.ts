@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
  * overlay into a `chunk-XXXX.js` and rewrote `dist/client.js` to open with
  * `import { init } from "./chunk-XXXX.js"`.
  *
- * @dogear/vite serves that file as a **single response** at `<endpoint>/client.js`. A sibling
+ * dogear-vite serves that file as a **single response** at `<endpoint>/client.js`. A sibling
  * import sends the browser to `<endpoint>/chunk-XXXX.js`, which the endpoint answers with its
  * 404 — so the overlay silently never loads. Every existing suite passed: the endpoint tests
  * serve a synthetic two-line bundle, and the injection tests only inspect HTML. Nothing but a
@@ -27,7 +27,7 @@ const dist = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist')
 /** Static `import`/`export … from` specifiers, which are what a browser would go and fetch. */
 const SPECIFIER = /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s*["']([^"']+)["']/g
 
-describe('dist/client.js — the file @dogear/vite serves', () => {
+describe('dist/client.js — the file dogear-vite serves', () => {
   const source = readFileSync(join(dist, 'client.js'), 'utf8')
 
   it('has been built', () => {

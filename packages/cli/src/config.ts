@@ -1,6 +1,6 @@
 import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 
-import { CONFIG_FILE, QUEUE_DIR, QUEUE_VERSION, configPathFor } from '@dogear/queue'
+import { CONFIG_FILE, QUEUE_DIR, QUEUE_VERSION, configPathFor } from 'dogear-queue'
 
 import type { Step, Undo } from './scaffold.js'
 
@@ -21,7 +21,7 @@ import type { Step, Undo } from './scaffold.js'
  * from "a config that opted into every default".
  *
  * **Any regular file at this path satisfies the step**, whatever is in it — including
- * empty, including unparseable. This is `@dogear/queue`'s "reads may tolerate, writes must
+ * empty, including unparseable. This is `dogear-queue`'s "reads may tolerate, writes must
  * refuse" rule reaching one level up: the file is a project decision someone may have
  * hand-edited, and an init that rewrote a broken config would destroy the evidence of
  * whatever broke it. A parse error belongs to whoever *reads* the file (E7), where there

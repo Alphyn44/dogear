@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 
+import { formatQueue } from 'dogear-queue/format'
 import { describe, expect, it } from 'vitest'
 
 import { COMMANDS, usage } from './run.js'
@@ -8,7 +9,7 @@ import { COMMANDS, usage } from './run.js'
  * G1 (#42): the prose that names the CLI's commands cannot go stale silently.
  *
  * This is a source rule rather than a behaviour test, in the shape ./format.test.ts's
- * counterpart in @dogear/queue established. It exists because the drift it guards *already
+ * counterpart in dogear-queue established. It exists because the drift it guards *already
  * happened*: the root README shipped four of the five commands for the whole of M1–M4, and
  * `hook` — the one an agent runs, and therefore the one nobody types and nobody misses —
  * was the one left out. Fixing that once fixes one release; pinning it fixes every release
@@ -35,7 +36,7 @@ describe('the root README', () => {
 
   // A table row of backticked names — `` `init`, `hook`, … `` — so the match is the name
   // as code, not the word appearing loose in a sentence about initialisation.
-  it.each(COMMANDS)('names `%s` in the @dogear/cli row', (command) => {
+  it.each(COMMANDS)('names `%s` in the dogear-cli row', (command) => {
     expect(readme).toContain(`\`${command}\``)
   })
 
@@ -48,31 +49,90 @@ describe('the root README', () => {
 })
 
 /**
- * G3 (#44): both install surfaces must ask for the **local** `@dogear/cli`, not only the
+ * G3 (#44): both install surfaces must ask for the **local** `dogear-cli`, not only the
  * global one.
  *
  * Found by running the install path rather than by reading it. Every config `dogear init`
  * writes — the MCP registration and Claude Code's prompt hook — names the repo-relative
- * `node_modules/@dogear/cli/dist/cli.js`, so a reader who followed these files exactly ended
+ * `node_modules/dogear-cli/dist/cli.js`, so a reader who followed these files exactly ended
  * up with a committed config pointing at a file that was never installed: the MCP server
  * exited 1 on spawn, and the hook did the same on every prompt. `init` says so in a note; the
  * pages a new user actually reads did not, and this is what keeps them saying it.
  */
 describe('both READMEs on installing the CLI', () => {
   // A `-D` install naming the package, whatever else shares the line — the pages write it as
-  // `npm i -D @dogear/vite @dogear/cli`, and which order those two appear in is prose.
-  const LOCAL = /npm i -D [^\n]*@dogear\/cli/
+  // `npm i -D dogear-vite dogear-cli`, and which order those two appear in is prose.
+  const LOCAL = /npm i -D [^\n]*dogear-cli\b/
 
-  it.each([ROOT_README, CLI_README])('asks for a local @dogear/cli in %s', (path) => {
+  it.each([ROOT_README, CLI_README])('asks for a local dogear-cli in %s', (path) => {
     expect(read(path)).toMatch(LOCAL)
   })
 
   it.each([ROOT_README, CLI_README])('still asks for the global one in %s', (path) => {
-    expect(read(path)).toContain('npm i -g @dogear/cli')
+    expect(read(path)).toContain('npm i -g dogear-cli')
   })
 })
 
-describe('the @dogear/cli README', () => {
+/**
+ * G6 (#51): the `<dogear-queue>` block the root README shows must be the block dogear emits.
+ *
+ * It is the one piece of documentation that is also an interface. The clipboard path —
+ * `Ctrl+Alt+P` — works with no server, no MCP and nothing installed but the plugin, which
+ * means the only thing telling a reader what their agent will receive is this example. A
+ * hand-written one drifts the first time the formatter's shape changes, and the drift is
+ * invisible: every test still passes, and the page quietly documents a format nobody emits.
+ *
+ * So the example is rendered by {@link formatQueue} here and compared against the file. When
+ * this fails, the diff *is* the corrected block — paste it into the README.
+ */
+describe('the root README on what the agent receives', () => {
+  const rendered = formatQueue(
+    [
+      {
+        id: '01991b1e-4c2f-7c3a-9f5e-2b6d0a1c4e88',
+        status: 'pending',
+        comment: 'shade this darker on hover',
+        createdAt: '2026-08-21T10:14:03.000Z',
+        app: 'web',
+        url: 'http://localhost:5173/settings',
+        note: 'keep the existing spacing scale',
+        sites: [
+          {
+            file: 'src/components/Button.tsx',
+            line: 20,
+            component: 'Button',
+            via: 'attribute',
+          },
+        ],
+        element: { selector: 'main > form > button.primary', text: 'Save changes' },
+      },
+      {
+        id: '01991b1e-51a7-7d10-8c44-9e3f7a20b6d1',
+        status: 'pending',
+        comment: 'move this two tabs right',
+        createdAt: '2026-08-21T10:14:31.000Z',
+        sites: [{ file: 'src/Sidebar.tsx', line: 48 }],
+        element: { selector: 'nav.sidebar > ul > li:nth-child(3)', text: 'Billing' },
+      },
+    ] as never,
+    { stale: new Set(['01991b1e-51a7-7d10-8c44-9e3f7a20b6d1']) },
+  )
+
+  it('shows the block verbatim', () => {
+    expect(read(ROOT_README)).toContain(rendered)
+  })
+
+  it('shows one that is worth showing — several sites, a note, and a stale marker', () => {
+    // Guards the fixture rather than the README. An example trimmed to one bare item would
+    // keep the test above passing while documenting none of the fields a reader needs to
+    // recognise, and `⚠ stale` is the one that changes what an agent should do.
+    expect(rendered).toContain('⚠ stale')
+    expect(rendered).toContain('note:')
+    expect(rendered).toContain('app:')
+  })
+})
+
+describe('the dogear-cli README', () => {
   const readme = read(CLI_README)
 
   // `dogear <command>` rather than the bare name: this file documents commands you run,

@@ -13,7 +13,7 @@
  * without adding the panel to the list.
  */
 
-import { formatQueue } from '@dogear/queue/format'
+import { formatQueue } from 'dogear-queue/format'
 
 import type { Badge } from './badge.js'
 import { createBadge } from './badge.js'
@@ -113,7 +113,7 @@ export interface Session {
    *
    * Exposed so B3's (#10) first criterion can be tested against the annotation that was
    * actually assembled rather than against the badge's rendering of a count. It is not part
-   * of `@dogear/core`'s public surface: `init()` returns a teardown, and ./index.ts exports
+   * of `dogear-core`'s public surface: `init()` returns a teardown, and ./index.ts exports
    * neither this type nor `createSession`.
    */
   readonly queue: Queue

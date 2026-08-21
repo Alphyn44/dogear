@@ -145,7 +145,7 @@ describe('resolveHosts', () => {
     { why: 'a list of nulls', value: [null] },
   ])('falls back to the defaults for $why', ({ value }) => {
     // Wholesale, not per-entry: dropping the bad entries would silently *widen* a list its
-    // author was narrowing. @dogear/vite does the per-entry dropping, in a terminal where it
+    // author was narrowing. dogear-vite does the per-entry dropping, in a terminal where it
     // can name what it dropped — so anything malformed by the time it reaches here was
     // hand-written onto the query parameter.
     const options = { hosts: value } as unknown as InitOptions

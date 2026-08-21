@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve as resolvePath, sep } from 'node:path'
 
-import type { StoredAnnotation } from '@dogear/queue'
+import type { StoredAnnotation } from 'dogear-queue'
 
 /**
  * Staleness — D5 (#24).
@@ -11,7 +11,7 @@ import type { StoredAnnotation } from '@dogear/queue'
  * the moment someone re-added the snippet. See the brief's Decisions log.
  *
  * This module owns every line that touches the filesystem, and `formatQueue` — now over in
- * @dogear/queue, at the `./format` subpath — owns every line that renders. That split is not
+ * dogear-queue, at the `./format` subpath — owns every line that renders. That split is not
  * tidiness: D4's (#23) clipboard export runs the same formatter in a *browser*, which has no
  * `node:fs` and no repository. It passes no set and renders no markers, and nothing had to be
  * unpicked when it landed. Staleness stays here, in the CLI, because it is a fact about a

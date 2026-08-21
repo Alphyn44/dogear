@@ -21,13 +21,13 @@ import { describe, expect, it } from 'vitest'
  */
 
 /**
- * The repo root, where `node_modules/@dogear/core` is the workspace symlink. Resolution of
+ * The repo root, where `node_modules/dogear-core` is the workspace symlink. Resolution of
  * a bare specifier is relative to the importing file, and for `node -e` that is `cwd`.
  */
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
 /**
- * Import `@dogear/core` in a fresh Node process under an explicit condition set, and report
+ * Import `dogear-core` in a fresh Node process under an explicit condition set, and report
  * whether what came back was the noop.
  *
  * `--conditions` is the only honest way to test this. Vitest's own `resolve.conditions` is
@@ -40,7 +40,7 @@ function resolveIsNoop(conditions: readonly string[]): Promise<string> {
     ...conditions.map((condition) => `--conditions=${condition}`),
     '--input-type=module',
     '-e',
-    "const m = await import('@dogear/core'); process.stdout.write(String(m.IS_NOOP))",
+    "const m = await import('dogear-core'); process.stdout.write(String(m.IS_NOOP))",
   ]
 
   return new Promise((resolve, reject) => {
@@ -52,7 +52,7 @@ function resolveIsNoop(conditions: readonly string[]): Promise<string> {
         if (error) {
           reject(
             new Error(
-              `resolving @dogear/core with [${conditions.join(', ')}] failed: ` +
+              `resolving dogear-core with [${conditions.join(', ')}] failed: ` +
                 `${error.message}\n${stderr}`,
             ),
           )
@@ -64,7 +64,7 @@ function resolveIsNoop(conditions: readonly string[]): Promise<string> {
   })
 }
 
-describe("Node's resolution of @dogear/core (F1, layer 3)", () => {
+describe("Node's resolution of dogear-core (F1, layer 3)", () => {
   it.each([
     {
       why: 'Vite sets this during serve, and it is the only path to the live overlay',

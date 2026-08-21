@@ -4,12 +4,16 @@ import type { DetectedApp, Detection, Manager } from './detect.js'
  * What `dogear init` tells you to do yourself — E8 (#41), the brief's install step 6.
  *
  * **This writes nothing, and that is the ticket rather than a limitation of it.** Step 6 used
- * to say init *adds* `@dogear/vite` to devDependencies. Three things make writing it wrong:
- * both dogear packages are unpublished, so no range init could write would resolve; a manifest
- * edited without a matching lockfile update fails the next `npm ci`; and the edit accomplishes
- * nothing on its own, because the config's `import` fails until someone runs an install anyway.
- * Printing the command needs no version-derivation logic, cannot desync a lockfile, and is
- * correct the day the packages ship. See the brief's Decisions log.
+ * to say init *adds* `dogear-vite` to devDependencies. Two things make writing it wrong, and
+ * neither expires: a manifest edited without a matching lockfile update fails the next
+ * `npm ci`, and the edit accomplishes nothing on its own, because the config's `import` fails
+ * until someone runs an install anyway. Printing the command needs no version-derivation
+ * logic and cannot desync a lockfile.
+ *
+ * A third reason held only until G4 published the packages — no range init could write would
+ * have resolved — and it is recorded here because it is the one that made the decision look
+ * temporary. It was not: the other two are why this still prints rather than writes. See the
+ * brief's Decisions log.
  *
  * **So this is a runner phase, not a {@link import('./scaffold.js').Step}** — the same shape,
  * and for the same reason, as E2's detection remarks: nothing plans it, nothing applies it,
@@ -67,7 +71,7 @@ export function guidance(detection: Detection): readonly string[] {
  * halves that are actually missing.
  *
  * The two are independent, which G3 (#44) found by doing them one at a time. `npm i -D
- * @dogear/vite` satisfies the second and leaves the first exactly as it was, so an app that
+ * dogear-vite` satisfies the second and leaves the first exactly as it was, so an app that
  * has the package and not the plugin call needs the snippet and emphatically does not need
  * telling to install what it already has.
  */
@@ -79,7 +83,7 @@ function block(app: DetectedApp, manager: Manager): readonly string[] {
       '',
       `add dogear to ${app.config}:`,
       '',
-      "  import { dogear } from '@dogear/vite'",
+      "  import { dogear } from 'dogear-vite'",
       '',
       '  export default defineConfig({',
       '    plugins: [dogear()],',
@@ -91,7 +95,7 @@ function block(app: DetectedApp, manager: Manager): readonly string[] {
     // `then,` only reads as a sequel to the snippet above it. Standing alone it is an
     // instruction in its own right, and says so.
     const lead = app.configured ? `install it ${where(app)}` : `then, ${where(app)}`
-    lines.push('', `${lead}: ${INSTALL[manager]} @dogear/vite`)
+    lines.push('', `${lead}: ${INSTALL[manager]} dogear-vite`)
   }
 
   return lines

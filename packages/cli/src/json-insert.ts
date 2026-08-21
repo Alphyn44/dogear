@@ -27,7 +27,7 @@
  *    is what lets a `Step` plan around them. See ./mcp-config.ts, where declining becomes a
  *    printed snippet the user can paste.
  *
- * Deliberately not a JSON5/JSONC editor and deliberately not a dependency: `@dogear/cli` has
+ * Deliberately not a JSON5/JSONC editor and deliberately not a dependency: `dogear-cli` has
  * exactly one dependency and it is the MCP SDK. The whole surface is two functions.
  *
  * ---

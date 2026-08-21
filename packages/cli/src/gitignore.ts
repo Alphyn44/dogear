@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { CONFIG_FILE, QUEUE_DIR } from '@dogear/queue'
+import { CONFIG_FILE, QUEUE_DIR } from 'dogear-queue'
 
 import type { GitQueries } from './git.js'
 import { git } from './git.js'

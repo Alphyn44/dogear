@@ -6,8 +6,8 @@
  * string below is ABSENT from the output. If dead-code elimination did its job, the whole
  * branch went with it and the marker went too.
  *
- * The marker is why this fixture exists at all. Scanning the output for `@dogear/` would
- * pass even on a build that shipped dogear: the exports map sends a production build to
+ * The marker is why this fixture exists at all. Scanning the output for a package specifier
+ * would pass even on a build that shipped dogear: the exports map sends a production build to
  * `dist/noop.js`, and the noop carries neither the sentinel nor a package specifier, so a
  * bundled-inline noop is invisible to those rules. A literal that lives *inside* the gated
  * block is not.
@@ -25,7 +25,7 @@
 document.body.textContent = 'dogear F1 layer 2 fixture'
 
 if (import.meta.env.DEV) {
-  import('@dogear/core').then((core) => {
+  import('dogear-core').then((core) => {
     document.title = `dogear-layer2-marker-must-not-ship:${core.IS_NOOP}`
   })
 }

@@ -11,8 +11,8 @@ import { randomBytes } from 'node:crypto'
  * impersonate, an item written by a different dev server in the same repo.
  *
  * **Request validation is deliberately NOT here.** `validateBatch` and `PROTOCOL_VERSION`
- * describe the shape of an HTTP POST body, which is `@dogear/vite`'s wire contract and is
- * mirrored by `@dogear/core`'s `submit.ts` on the other side of it — they live in
+ * describe the shape of an HTTP POST body, which is `dogear-vite`'s wire contract and is
+ * mirrored by `dogear-core`'s `submit.ts` on the other side of it — they live in
  * `packages/vite/src/batch.ts`. This package is read and written by the MCP server too,
  * and the CLI has no HTTP surface at all; giving it one by association would be the kind
  * of layering mistake that is invisible until someone tries to reuse it.

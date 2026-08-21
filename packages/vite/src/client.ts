@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 
 /**
- * The plugin half of the browser contract: where @dogear/core's dev client lives on disk, and
+ * The plugin half of the browser contract: where dogear-core's dev client lives on disk, and
  * the `<script>` that loads it.
  *
  * M0 inlined a three-line payload here. B1 (#8) replaced it with an inline module that
@@ -36,7 +36,7 @@ import { dirname, join } from 'node:path'
  * dogear's copy of core's `Modifier`, and the same duplication the brief already settled for
  * SENTINEL — see its Decisions log entry.
  *
- * Importing `@dogear/core` by name resolves through the exports map to `dist/`, so
+ * Importing `dogear-core` by name resolves through the exports map to `dist/`, so
  * `npm run typecheck` would need a prior `npm run build`; typecheck runs on every turn that
  * touches a `.ts` file, which makes that a permanent cost. A relative import of core's source
  * is unavailable too: `tsconfig.build.json` sets `rootDir: "src"` and declaration emit rejects
@@ -74,7 +74,7 @@ export interface ClientConfig {
    * F3's allow-list, when `.dogear/config.json` sets one — E7 (#40).
    *
    * **Optional, and absent unless the file said so.** Sending the plugin's own copy of the
-   * defaults would *pin* them: a repo whose `@dogear/vite` is a version behind `@dogear/core`
+   * defaults would *pin* them: a repo whose `dogear-vite` is a version behind `dogear-core`
    * would keep overriding core's list with a stale one, having never expressed an opinion
    * about it. That is precisely the failure the brief's E4 entry rejects for writing defaults
    * into the config file, and it applies identically here. Omitted means "core decides",
@@ -98,9 +98,9 @@ export interface ClientDist {
 const resolveFrom = createRequire(import.meta.url)
 
 /**
- * Find @dogear/core's dev bundle, or `undefined` if it has not been built.
+ * Find dogear-core's dev bundle, or `undefined` if it has not been built.
  *
- * **Resolving `@dogear/core/package.json`, not `@dogear/core`.** Resolving the package name
+ * **Resolving `dogear-core/package.json`, not `dogear-core`.** Resolving the package name
  * from Node names no `development` condition, so it falls through the exports map to
  * `dist/noop.js` — the inert build, which is exactly what we do not want to serve. Reading
  * the manifest's location and joining `dist/index.js` reaches the live build deliberately,
@@ -109,7 +109,7 @@ const resolveFrom = createRequire(import.meta.url)
  * A dedicated `./dev` subpath on core's exports would have been tidier to read and was
  * rejected for it: that would be a second live entry point any bundler could follow into a
  * production graph, which is precisely the hole F1's layer 3 exists to close. `./package.json`
- * exposes a manifest, not code, so `@dogear/core` still resolves to the noop for every
+ * exposes a manifest, not code, so `dogear-core` still resolves to the noop for every
  * consumer under every condition but `development`.
  */
 /**
@@ -124,13 +124,13 @@ const resolveFrom = createRequire(import.meta.url)
  * copied substring would let the two drift apart silently.
  */
 export const UNBUILT_CORE_WARNING =
-  '[dogear] @dogear/core has not been built, so the overlay will not load. ' +
-  'Run `npm run build -w @dogear/core`.'
+  '[dogear] dogear-core has not been built, so the overlay will not load. ' +
+  'Run `npm run build -w dogear-core`.'
 
 export function resolveCoreDist(): ClientDist | undefined {
   let manifest: string
   try {
-    manifest = resolveFrom.resolve('@dogear/core/package.json')
+    manifest = resolveFrom.resolve('dogear-core/package.json')
   } catch {
     return undefined
   }

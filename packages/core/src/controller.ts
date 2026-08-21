@@ -36,7 +36,7 @@ export interface Controller {
    *
    * Exposed for the same reason `Session.queue` is: so the disable/re-enable cycle can be
    * tested against the annotations that actually survived rather than against a badge's
-   * rendering of a count. Not part of `@dogear/core`'s public surface — ./index.ts exports
+   * rendering of a count. Not part of `dogear-core`'s public surface — ./index.ts exports
    * neither this type nor `createController`.
    */
   readonly queue: Queue

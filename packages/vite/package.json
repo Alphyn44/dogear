@@ -1,5 +1,5 @@
 {
-  "name": "@dogear/vite",
+  "name": "dogear-vite",
   "version": "0.1.0",
   "type": "module",
   "description": "Dev-only Vite plugin for dogear. Stamps source attributes, injects the overlay, serves the endpoint.",
@@ -16,9 +16,6 @@
     "dist",
     "README.md"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -30,15 +27,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@dogear/core": "^0.1.0",
+    "dogear-core": "^0.1.0",
     "magic-string": "^0.30.21"
   },
   "peerDependencies": {
     "vite": "^8.0.0"
   },
   "devDependencies": {
-    "@dogear/queue": "*",
     "@vitejs/plugin-react": "^6.0.5",
+    "dogear-queue": "*",
     "vite": "^8.2.1"
   }
 }

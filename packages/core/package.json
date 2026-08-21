@@ -1,5 +1,5 @@
 {
-  "name": "@dogear/core",
+  "name": "dogear-core",
   "version": "0.1.0",
   "type": "module",
   "description": "Overlay UI, source resolution, and clipboard export for dogear. Framework-agnostic.",
@@ -17,9 +17,6 @@
     "dist",
     "README.md"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -34,6 +31,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@dogear/queue": "*"
+    "dogear-queue": "*"
   }
 }

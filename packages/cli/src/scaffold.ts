@@ -222,7 +222,7 @@ export interface Wiring {
   readonly agents: readonly Agent[]
   /** Whether to write Claude Code's prompt hook. */
   readonly hook: boolean
-  /** Whether `@dogear/cli` resolves from inside the repo, for the registration's note. */
+  /** Whether `dogear-cli` resolves from inside the repo, for the registration's note. */
   readonly cli: Cli
 }
 
@@ -674,7 +674,7 @@ function noViteConfig(): readonly string[] {
 }
 
 /**
- * The local `@dogear/cli` the committed configs point at — G3 (#44).
+ * The local `dogear-cli` the committed configs point at — G3 (#44).
  *
  * **A remark rather than a step note, and the round trip is the interesting part.** E3 had
  * ./mcp-config.ts note it, gated on a registration being *written* — so it fired once, on the
@@ -705,7 +705,7 @@ function cliNotInstalled(wiring: Wiring): readonly string[] {
 
   return [
     `${surfaces} at ${CLI_ENTRY}, which is not installed here. Run ` +
-      '`npm i -D @dogear/cli` so the path resolves for everyone who clones this repository.',
+      '`npm i -D dogear-cli` so the path resolves for everyone who clones this repository.',
   ]
 }
 
@@ -725,7 +725,7 @@ function jsxOnly(floored: readonly DetectedApp[]): readonly string[] {
 }
 
 /**
- * `@dogear/vite` in `dependencies` rather than `devDependencies` — E8 (#41).
+ * `dogear-vite` in `dependencies` rather than `devDependencies` — E8 (#41).
  *
  * **Reported, never moved.** This is the manifest half of the leak `scripts/check-leak.ts`
  * exists to catch: a dev-only plugin in `dependencies` installs in production even when every
@@ -742,7 +742,7 @@ function runtimeDependency(apps: readonly DetectedApp[]): readonly string[] {
     .join(', ')
 
   return [
-    `@dogear/vite is a runtime dependency in ${named}. It is dev-only — move it to ` +
+    `dogear-vite is a runtime dependency in ${named}. It is dev-only — move it to ` +
       'devDependencies so it cannot install in production.',
   ]
 }

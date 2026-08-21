@@ -8,7 +8,7 @@ import type { StoredAnnotation } from './queue.js'
 import { pendingOnly, queuePathFor, tryReadQueue, withApp } from './queue.js'
 
 /**
- * Moved from `@dogear/cli`, where this was `readQueue`'s suite before the two readers met in
+ * Moved from `dogear-cli`, where this was `readQueue`'s suite before the two readers met in
  * one module. Every assertion is the same; only the symbol changed, to `tryReadQueue`.
  * ./tolerance.test.ts is what now guards the relationship between the two.
  */

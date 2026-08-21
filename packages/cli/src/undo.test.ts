@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-import { QUEUE_DIR, queuePathFor, registryKey, registryPath } from '@dogear/queue'
+import { QUEUE_DIR, queuePathFor, registryKey, registryPath } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { scaffold, unscaffold } from './scaffold.js'
@@ -71,7 +71,7 @@ function seedLivedInRepo(): void {
     join(root, 'package.json'),
     `${JSON.stringify(
       {
-        devDependencies: { vite: '^8.2.1', '@dogear/cli': '^0.1.0' },
+        devDependencies: { vite: '^8.2.1', 'dogear-cli': '^0.1.0' },
         dependencies: { react: '^19.2.0' },
       },
       null,
@@ -184,7 +184,7 @@ describe('undoing an init on a repository that has one', () => {
     expect(output).not.toContain('vite:')
     expect(output).not.toContain('framework:')
     expect(output).not.toContain('agent:')
-    expect(output).not.toContain('npm i -D @dogear/vite')
+    expect(output).not.toContain('npm i -D dogear-vite')
   })
 })
 

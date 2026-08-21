@@ -3,7 +3,7 @@
  * production".
  *
  * Nothing emits this yet. A1's injected `<script>` is its first real carrier, at which
- * point core gains a `./sentinel` subpath export so @dogear/vite can reach it. Until
+ * point core gains a `./sentinel` subpath export so dogear-vite can reach it. Until
  * then this is a constant waiting for its consumer, not dead code: `scripts/check-leak.ts`
  * already imports it, and the whole leak check is defined in terms of it.
  *

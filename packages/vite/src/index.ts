@@ -5,7 +5,7 @@ import {
   QUEUE_DIR,
   registerServer,
   registryPath,
-} from '@dogear/queue'
+} from 'dogear-queue'
 import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
 import { createFilter } from 'vite'
 
@@ -169,7 +169,7 @@ interface Stamping {
  * already-compiled `jsx()` calls. `stamp.integration.test.ts` is what holds that ordering
  * in place — it asserts the attribute survives into the compiled output.
  *
- * Note there is no production/noop `exports` split here, unlike @dogear/core. This
+ * Note there is no production/noop `exports` split here, unlike dogear-core. This
  * package is a devDependency that is only ever imported by a Vite config, so it has
  * no path into an application bundle to defend.
  */

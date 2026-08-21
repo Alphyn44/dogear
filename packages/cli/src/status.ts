@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 
-import type { Project, RegistryEnv, ServerRecord } from '@dogear/queue'
+import type { Project, RegistryEnv, ServerRecord } from 'dogear-queue'
 import {
   findGitRoot,
   isProcessAlive,
@@ -11,7 +11,7 @@ import {
   shortenHome,
   tryReadQueue,
   tryReadRegistry,
-} from '@dogear/queue'
+} from 'dogear-queue'
 
 import type { Result } from './run.js'
 
@@ -35,7 +35,7 @@ import type { Result } from './run.js'
  * fatal: there is nothing left to show, so it reports and exits non-zero exactly as `prune`
  * does on a corrupt queue. A single repository's queue that will not parse, or whose directory
  * has been deleted, costs that repository's line and nothing else — one broken repo must not
- * hide the other nine. That is `@dogear/queue`'s "reads may tolerate" rule at the granularity
+ * hide the other nine. That is `dogear-queue`'s "reads may tolerate" rule at the granularity
  * it was written for, and it is why `tryReadQueue` is used here, making this its third caller
  * after `dogear hook` and `dogear_pending`.
  *

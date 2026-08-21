@@ -1,5 +1,5 @@
 /**
- * The one place in @dogear/core allowed to call `addEventListener`.
+ * The one place in dogear-core allowed to call `addEventListener`.
  *
  * B6's (#13) settled rule is "detach, don't ignore" — an event handler that runs and decides
  * to do nothing is still an event handler that ran, and it still shows up in the behaviour

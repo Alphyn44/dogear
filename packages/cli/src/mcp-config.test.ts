@@ -65,7 +65,7 @@ describe('createMcpStep() on a repository with no config', () => {
     const parsed = JSON.parse(run([agent], file)) as Record<string, unknown>
 
     expect(parsed[key]).toEqual({
-      dogear: { command: 'node', args: ['node_modules/@dogear/cli/dist/cli.js', 'mcp'] },
+      dogear: { command: 'node', args: ['node_modules/dogear-cli/dist/cli.js', 'mcp'] },
     })
   })
 
@@ -173,7 +173,7 @@ describe('createMcpStep() when it cannot edit safely', () => {
 })
 
 /**
- * An absent local `@dogear/cli` used to be noted *here*, gated on a registration being
+ * An absent local `dogear-cli` used to be noted *here*, gated on a registration being
  * written — so it fired on the run that created `.mcp.json` and never again. G3 (#44) moved it
  * to ./scaffold.ts's `remarks()`: it describes the repository rather than what this step did,
  * which is what lets it print on every run without suppressing `nothing changed`. The cases

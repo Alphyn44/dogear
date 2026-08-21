@@ -405,16 +405,16 @@ describe('formatQueue', () => {
 
 describe('the browser-safety rule', () => {
   /**
-   * A source rule, in the shape @dogear/core's ./listeners.test.ts established, and it is the
+   * A source rule, in the shape dogear-core's ./listeners.test.ts established, and it is the
    * only mechanical thing standing between an ordinary-looking edit and a dead overlay.
    *
-   * @dogear/core reaches this module at the `./format` export subpath and tsup inlines it into
+   * dogear-core reaches this module at the `./format` export subpath and tsup inlines it into
    * `client.js`, which runs in a browser. A `node:` import here would build fine, typecheck
    * fine, and pass every suite in this package — the failure surfaces only when a dev server
    * serves the bundle and the page throws on load. Nothing else in `npm run verify` looks.
    *
    * Deliberately narrow: it guards this one file, because this one file is the only part of
-   * @dogear/queue a browser ever loads. `./queue.ts` next door imports `node:fs` and should.
+   * dogear-queue a browser ever loads. `./queue.ts` next door imports `node:fs` and should.
    */
   it('imports nothing from node:', () => {
     const source = readFileSync(new URL('./format.ts', import.meta.url), 'utf8')

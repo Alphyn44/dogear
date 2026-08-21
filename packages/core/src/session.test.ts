@@ -486,7 +486,7 @@ describe('B3 — comment and queue', () => {
     expect(session.queue.items).toEqual([
       {
         key: expect.any(Number),
-        // Trimmed, because @dogear/vite's validateBatch rejects the whole batch on a
+        // Trimmed, because dogear-vite's validateBatch rejects the whole batch on a
         // comment that is not a non-empty trimmed string.
         comment: 'shade this darker',
         // Present and empty: nothing in this fixture's ancestry is stamped, and C2 (#16)

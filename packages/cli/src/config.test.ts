@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { QUEUE_DIR, configPathFor } from '@dogear/queue'
+import { QUEUE_DIR, configPathFor } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { configFile, configRemoval } from './config.js'

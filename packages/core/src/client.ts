@@ -1,5 +1,5 @@
 /**
- * The dev-server client entry — the file @dogear/vite actually serves.
+ * The dev-server client entry — the file dogear-vite actually serves.
  *
  * This exists because of F4 (#34). dogear used to bootstrap itself from an **inline**
  * `<script>` that imported `init` and called it. Any project serving a strict

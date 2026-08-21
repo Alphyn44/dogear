@@ -6,15 +6,15 @@ import { fileURLToPath } from 'node:url'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import type { Annotation } from '@dogear/queue'
-import { appendToQueue, queuePathFor, stampAnnotation } from '@dogear/queue'
+import type { Annotation } from 'dogear-queue'
+import { appendToQueue, queuePathFor, stampAnnotation } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 /**
  * The two binaries agree about one queue file — D2 (#21).
  *
  * ../src/agreement.test.ts makes this claim in a single process, which proves the file
- * contract but not much else: both halves import the same `@dogear/queue` module instance,
+ * contract but not much else: both halves import the same `dogear-queue` module instance,
  * so a bug that lived in shared state rather than on disk would go unnoticed.
  *
  * Here `dogear mcp` and `dogear hook` are genuinely separate processes that never speak to

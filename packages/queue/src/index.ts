@@ -1,5 +1,5 @@
 /**
- * `@dogear/queue` — the shared home for everything that touches
+ * `dogear-queue` — the shared home for everything that touches
  * `<git-root>/.dogear/queue.json`.
  *
  * **Why this package exists.** Before D1 there was one writer (the Vite plugin) and one

@@ -9,14 +9,14 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import type { Annotation } from '@dogear/queue'
+import type { Annotation } from 'dogear-queue'
 import {
   appendToQueue,
   queuePathFor,
   readQueue,
   resolveInQueue,
   stampAnnotation,
-} from '@dogear/queue'
+} from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { prune } from './prune.js'
@@ -25,7 +25,7 @@ import { prune as pruneTool } from './tools.js'
 /**
  * `dogear prune` — D6 (#25).
  *
- * The operation itself is `pruneQueue`, and `@dogear/queue`'s queue.write.test.ts already
+ * The operation itself is `pruneQueue`, and `dogear-queue`'s queue.write.test.ts already
  * covers what it does to the file: resolved items go, pending ones stay, unknown statuses
  * survive, a corrupt queue is refused, and nothing is written when nothing changed. None of
  * that is re-asserted here except where it passes through the *command* — this file is about

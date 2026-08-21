@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 
-import { CONFIG_FILE, configPathFor, QUEUE_DIR } from '@dogear/queue'
+import { CONFIG_FILE, configPathFor, QUEUE_DIR } from 'dogear-queue'
 
 import type { Modifier } from './client.js'
 import { MODIFIERS } from './client.js'
@@ -36,8 +36,12 @@ import { normaliseEndpoint } from './endpoint.js'
  * and `agent` belongs to `dogear init` rather than the plugin. All three are *recognised*, so
  * a file carrying them is correct and must not be warned about — which is the only reason
  * this list is separate from the set below.
+ *
+ * Exported for ./docs.test.ts, which asserts the package README documents every one of them.
+ * G6 (#51) put that table in the README because the brief — where the list lived until then —
+ * is not in the published tarball, so an npm reader had no way to learn `hosts` existed.
  */
-const RECOGNISED = new Set([
+export const RECOGNISED_KEYS = [
   'version',
   'enabled',
   'modifier',
@@ -48,7 +52,9 @@ const RECOGNISED = new Set([
   'hosts',
   'agent',
   'app',
-])
+] as const
+
+const RECOGNISED = new Set<string>(RECOGNISED_KEYS)
 
 /** The only schema version that exists. Anything else is a file from a future dogear. */
 const VERSION = 1
@@ -273,7 +279,7 @@ function asPatterns(value: unknown): readonly string[] | string | undefined {
  * E4 added the original in `packages/cli/src/json-insert.ts` for exactly this reason: several
  * Windows editors write a leading U+FEFF and `JSON.parse` throws on it, so a perfectly valid
  * `config.json` would be reported as unreadable. That copy is unreachable from here —
- * `@dogear/cli` is a bin package with no `exports` field — and one line is not worth a new
+ * `dogear-cli` is a bin package with no `exports` field — and one line is not worth a new
  * shared module. It is stripped for the parse only; nothing here writes the file back.
  */
 function stripBom(source: string): string {

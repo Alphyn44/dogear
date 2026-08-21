@@ -59,13 +59,13 @@ describe('guidance() when an app is not wired', () => {
       '',
       'add dogear to apps/web/vite.config.ts:',
       '',
-      "  import { dogear } from '@dogear/vite'",
+      "  import { dogear } from 'dogear-vite'",
       '',
       '  export default defineConfig({',
       '    plugins: [dogear()],',
       '  })',
       '',
-      'then, in apps/web: npm i -D @dogear/vite',
+      'then, in apps/web: npm i -D dogear-vite',
     ])
   })
 
@@ -85,9 +85,9 @@ describe('guidance() when an app is not wired', () => {
 
 describe('guidance() and the install command', () => {
   it.each([
-    ['npm', 'then, in apps/web: npm i -D @dogear/vite'],
-    ['pnpm', 'then, in apps/web: pnpm add -D @dogear/vite'],
-    ['yarn', 'then, in apps/web: yarn add -D @dogear/vite'],
+    ['npm', 'then, in apps/web: npm i -D dogear-vite'],
+    ['pnpm', 'then, in apps/web: pnpm add -D dogear-vite'],
+    ['yarn', 'then, in apps/web: yarn add -D dogear-vite'],
   ] as const)('uses the %s form', (manager, expected) => {
     expect(guidance(detection([app()], manager))).toContain(expected)
   })
@@ -97,7 +97,7 @@ describe('guidance() and the install command', () => {
     // command is the one place init can get this wrong at scale — every user copies it.
     for (const manager of ['npm', 'pnpm', 'yarn'] as const) {
       expect(guidance(detection([app()], manager)).join('\n')).toMatch(
-        / -D @dogear\/vite$/m,
+        / -D dogear-vite$/m,
       )
     }
   })
@@ -113,13 +113,13 @@ describe('guidance() and the install command', () => {
     })
 
     expect(guidance(detection([nested]))).toContain(
-      'then, in apps/web: npm i -D @dogear/vite',
+      'then, in apps/web: npm i -D dogear-vite',
     )
   })
 
   it('says “at the repo root” for a root manifest rather than naming an empty path', () => {
     expect(guidance(detection([app({ manifestDir: '' })]))).toContain(
-      'then, at the repo root: npm i -D @dogear/vite',
+      'then, at the repo root: npm i -D dogear-vite',
     )
   })
 
@@ -127,7 +127,7 @@ describe('guidance() and the install command', () => {
     // An install there creates the package.json the repository was always going to need, and it
     // is where the user is standing.
     expect(guidance(detection([app({ manifestDir: undefined })]))).toContain(
-      'then, at the repo root: npm i -D @dogear/vite',
+      'then, at the repo root: npm i -D dogear-vite',
     )
   })
 })
@@ -179,7 +179,7 @@ describe('guidance() when only one half is done', () => {
   it('prints the install and no snippet for a config that already calls dogear', () => {
     const lines = guidance(detection([app({ plugin: 'absent', configured: true })]))
 
-    expect(lines).toContain('install it in apps/web: npm i -D @dogear/vite')
+    expect(lines).toContain('install it in apps/web: npm i -D dogear-vite')
     expect(lines.join('\n')).not.toContain('add dogear to')
   })
 
@@ -188,7 +188,7 @@ describe('guidance() when only one half is done', () => {
     // there — which is why the lead is chosen from `configured` rather than fixed.
     const both = guidance(detection([app()])).join('\n')
 
-    expect(both).toContain('then, in apps/web: npm i -D @dogear/vite')
+    expect(both).toContain('then, in apps/web: npm i -D dogear-vite')
   })
 })
 

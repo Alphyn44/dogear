@@ -8,7 +8,7 @@ A Vite plugin, an overlay, and an MCP server. No extension, no IDE change.
 
 - **Product name:** dogear (lowercase, everywhere — code, comments, docs, UI strings)
 - **Repository:** `dogear`
-- **Packages:** `@dogear/cli`, `@dogear/core`, `@dogear/vite`
+- **Packages:** `dogear-cli`, `dogear-core`, `dogear-vite`
 - **License:** MIT — a personal project built in the open.
 
 ---
@@ -88,13 +88,13 @@ Don't over-explain basics.
 
 | Package | Responsibility |
 |---|---|
-| `@dogear/core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
-| `@dogear/vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
-| `@dogear/cli` | `dogear` on PATH: `init` (with `--undo` since E6), `hook`, `mcp`, `prune`, `status` — all implemented since E5. |
-| `@dogear/queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. Also E5's machine-level registry. **Private, source-only, never published** — see below. |
+| `dogear-core` | Overlay UI, source resolution, clipboard export, POSTs to a configurable endpoint. Framework-agnostic — knows nothing about Vite. |
+| `dogear-vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
+| `dogear-cli` | `dogear` on PATH: `init` (with `--undo` since E6), `hook`, `mcp`, `prune`, `status` — all implemented since E5. |
+| `dogear-queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. Also E5's machine-level registry. **Private, source-only, never published** — see below. |
 
-**`@dogear/queue` has no build and is not published.** Its `exports` points straight at
-`src/index.ts`; `@dogear/vite`, `@dogear/cli` and `@dogear/core` list it as a **devDependency**
+**`dogear-queue` has no build and is not published.** Its `exports` points straight at
+`src/index.ts`; `dogear-vite`, `dogear-cli` and `dogear-core` list it as a **devDependency**
 and their tsup configs set `noExternal` so it is inlined at build time. Two consequences worth
 knowing: the published install story is still three packages with no new runtime
 dependency, and `npm run typecheck` keeps working with **no prior build** — which it must,
@@ -104,7 +104,7 @@ the trap `examples/react-app` already documents.
 
 **The formatter lives here too, and it is the one module a browser loads.** `formatQueue`
 renders the `<dogear-queue>` block for all three callers — `dogear hook`, `dogear_pending`, and
-D4's clipboard export in `@dogear/core`. The third is why it moved out of `@dogear/cli`: core
+D4's clipboard export in `dogear-core`. The third is why it moved out of `dogear-cli`: core
 declares no dependencies and cli is a bin package with no `exports` field, so a shared file
 there was unreachable. It sits behind a **separate `./format` export subpath**, deliberately not
 re-exported from `index.ts`, because the main entry imports `node:fs` and core inlines whatever
@@ -113,7 +113,7 @@ module** — a violation builds, typechecks and passes every Node-side suite, an
 an overlay that throws on page load. `format.test.ts` guards it with a source rule, in the shape
 `packages/core/src/listeners.test.ts` established.
 
-**Two readers in `@dogear/queue`, and the rule is not stylistic: reads may tolerate, writes
+**Two readers in `dogear-queue`, and the rule is not stylistic: reads may tolerate, writes
 must refuse.** `readQueue` throws; `tryReadQueue` never does and is *derived* from it.
 Tolerant reads **drop** malformed entries, so writing one back would silently delete a
 hand-broken item — every writer therefore uses `readQueue`. `dogear hook`, `dogear_pending`
@@ -257,7 +257,7 @@ for each, plus that CRLF files gain no lone `\n`.
 
 **Everything E3 writes points at `node <path>`, never `dogear`** — a global npm bin on Windows is
 a `.cmd` shim the exec form cannot run. The MCP configs use the repo-relative
-`node_modules/@dogear/cli/dist/cli.js` (an absolute global path would be committed and broken for
+`node_modules/dogear-cli/dist/cli.js` (an absolute global path would be committed and broken for
 everyone else who clones; `Detection.cli` earns a note when it is not installed yet), and the hook
 uses `${CLAUDE_PROJECT_DIR}/…` because a hook's working directory is the session's, not the
 repo's. `test-built/init.test.ts` asserts both.
@@ -310,8 +310,8 @@ so `//evil.com` would have fetched core from a third-party host.
 **`hosts` is the one key with no plugin option, and it is omitted from the wire rather than
 defaulted onto it.** It is F3's allow-list — repo-wide safety configuration, so the repo-wide
 committed file is where it belongs. `ClientConfig.hosts` is absent unless the file set one,
-because serialising `@dogear/vite`'s copy of `DEFAULT_HOSTS` would *pin* it: a plugin a
-version behind `@dogear/core` would keep overriding core's list on behalf of a project that
+because serialising `dogear-vite`'s copy of `DEFAULT_HOSTS` would *pin* it: a plugin a
+version behind `dogear-core` would keep overriding core's list on behalf of a project that
 never chose one. In core it is resolved by **`resolveHosts`, deliberately not by
 `resolveOptions`** — `ResolvedOptions` is `createSession`'s parameter and every field on it is
 one the session reads, while the list is consumed once by the guard before a session exists.
@@ -370,7 +370,7 @@ The brief has the full reasoning; the code is authoritative on mechanism.
 Node `^20.19.0 || >=22.12.0` (Vite's own floor). One `npm install` at the repo root
 resolves all five workspaces.
 
-**`@modelcontextprotocol/sdk` is `@dogear/cli`'s only dependency**, and it is reached
+**`@modelcontextprotocol/sdk` is `dogear-cli`'s only dependency**, and it is reached
 through a **dynamic** import in `src/mcp.ts` so it never enters the module graph of
 `dogear hook` — which runs on every prompt the user types, under a 10s ceiling with a 2s
 budget asserted in `test-built/hook.test.ts`. That is why the CLI's `tsup.config.ts` sets
@@ -402,19 +402,40 @@ Two things that will bite otherwise:
   `useCaseSensitiveFileNames` under TypeScript 7. So every `tsup.config.ts` sets
   `dts: false`, and each publishable package carries a `tsconfig.build.json` for
   declaration emit. JS emit is esbuild and was never affected.
-- **`typecheck` excludes `examples/react-app`.** The example resolves `@dogear/vite`
+- **`typecheck` excludes `examples/react-app`.** The example resolves `dogear-vite`
   through its exports map to `dist/`, so typechecking it requires a build first — and
   `stop-verify.sh` runs `typecheck` on every turn that touches TypeScript. Use
   `npm run typecheck:example` after a build, or just `npm run verify`.
 
+**Nothing in `verify` parses the workflow files.** `.prettierignore` excludes `*.yml`, so
+`format:check` never sees them and there is no repo-local YAML validation at all — the only
+parser that reads `.github/workflows/` is GitHub's, at push time. On the release path that
+is *after* the tag exists, which is why the nine steps live in a reusable `verify.yml` that
+`ci.yml` calls: every push to an open pull request exercises the same plumbing `release.yml`
+depends on, so the only untested part of a release is the publish job itself.
+
+**`release.yml`'s filename is part of the publish credential.** Each package's
+trusted-publisher configuration on npmjs.com names the repository, the workflow filename and
+the allowed action; renaming or moving the file revokes publishing, and the failure is an
+auth error that does not mention the filename.
+
+**The release tag is a trigger, not a manifest.** `git tag v0.1.0` starts the run; what
+publishes is decided by comparing each `package.json` version against the registry and
+skipping what is already there. That keeps core and vite versioning independently, per G2's
+decision, and makes a partially-failed run re-runnable. An `npm view` failure that is *not*
+an E404 fails the job on purpose — publishing against a registry that could not be read is
+how a version gets silently skipped and never published at all. Note that npm reports a
+missing *version* of an existing package with E404 too, exactly as it reports a missing
+package; the workflow's comment records this because it is easy to assume otherwise.
+
 The example consumes the **built** plugin, never its source — and since B1 the plugin serves
-`@dogear/core`'s **built** bundle at `<endpoint>/client.js`, so the overlay needs a build too.
+`dogear-core`'s **built** bundle at `<endpoint>/client.js`, so the overlay needs a build too.
 `dev:example` therefore builds both first. Rebuild by hand after touching either package:
-`npm run build -w @dogear/core -w @dogear/vite`. Skipping it is not silent: the route answers
+`npm run build -w dogear-core -w dogear-vite`. Skipping it is not silent: the route answers
 with a stub module that names the command, and `configureServer` logs the same thing.
 
-`@dogear/vite` depends on `@dogear/core` to find that bundle, and resolves
-`@dogear/core/package.json` rather than the package name — resolving the name from Node names
+`dogear-vite` depends on `dogear-core` to find that bundle, and resolves
+`dogear-core/package.json` rather than the package name — resolving the name from Node names
 no `development` condition, so it lands on `dist/noop.js`. A `./dev` subpath would read better
 and was rejected: it would be a second live entry point a bundler could follow into
 production, which is the hole F1 layer 3 exists to close.
@@ -447,7 +468,7 @@ notes above for why that is a global rather than a convention.
 plus `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`
 runs it on every turn that touches TypeScript. Build-independent is the rule there, not
 hermeticity: `check-leak.test.ts` builds its own temp fixtures, while G1's
-`packaging.test.ts` and `packages/cli/src/docs.test.ts` read the repository's own committed
+`packaging.test.ts` and the two `docs.test.ts` suites read the repository's own committed
 files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other two need a build first:
 `scripts/gate/*.test.ts` reads real build output under `npm run check:leak`, and
 `packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`. Splitting
@@ -456,10 +477,30 @@ way. They are kept separate rather than merged because `check:leak` is a *gate* 
 question (did the sentinel leak into production?) — folding a behavioural suite into it would
 make the name lie.
 
-**The leak sentinel is internal to `@dogear/core` on purpose.** `packages/core/src/sentinel.ts`
+**The leak sentinel is internal to `dogear-core` on purpose.** `packages/core/src/sentinel.ts`
 is not re-exported from `index.ts`, because `noop.ts` mirrors index's public surface and
 the noop is exactly what production resolves to. Exporting it would push the sentinel into
 every correct production build and make the leak check fire on a healthy repo.
+
+**The leak gate names each package rather than matching a prefix, and that is G5's one
+real cost.** The `package-specifier` rule used to be the scope prefix `@dogear/`, which
+covered a package added later for free. Unscoped, the equivalent prefix is `dogear-` — and
+that string sits inside `data-dogear-src` and `data-dogear-component`, whose rules are in the
+same table, so every stamped attribute would report two findings and the report would name
+two rules for one bug. `PACKAGE_SPECIFIERS` in `scripts/check-leak.ts` is the explicit list
+that replaced it; `check-leak.test.ts` asserts no needle is a substring of another, and
+`scripts/packaging.test.ts` asserts every published name is in the list. An explicit list is
+a list that can go stale, and those two are what stop it.
+
+**Two `docs.test.ts` suites, and they are source rules rather than behaviour tests.**
+`packages/cli/src/docs.test.ts` pins the command list on both READMEs and — since G6 — renders
+the root README's `<dogear-queue>` example through `formatQueue` and asserts the file contains
+it verbatim, so the one piece of documentation that is also an interface cannot drift.
+`packages/vite/src/docs.test.ts` pins the `.dogear/config.json` key table against
+`RECOGNISED_KEYS`, and reads `DEFAULT_HOSTS` out of `packages/core/src/host.ts` **as text**:
+the plugin deliberately keeps no copy of that list (serialising one would pin it — see
+`ClientConfig.hosts`), and importing `dogear-core` would resolve through its exports map to
+`dist/` and put a build on `npm test`'s critical path.
 
 ---
 

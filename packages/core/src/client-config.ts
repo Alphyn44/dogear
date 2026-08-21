@@ -3,14 +3,14 @@
  *
  * Split from ./client.ts, which **self-starts on import**: it mounts an overlay as a side
  * effect, so nothing may import it to reach a helper. This module is pure, so both core's own
- * tests and @dogear/vite's drift test can drive the real decoder rather than a
+ * tests and dogear-vite's drift test can drive the real decoder rather than a
  * reimplementation of it.
  */
 
 import type { InitOptions } from './options.js'
 
 /**
- * The query parameter @dogear/vite encodes config into.
+ * The query parameter dogear-vite encodes config into.
  *
  * One JSON parameter rather than one per field. The decoded object then stays structurally
  * identical to the one the plugin builds, so the assignability proof in the plugin's

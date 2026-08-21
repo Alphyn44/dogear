@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { readRegistry, registryKey, registryPath } from '@dogear/queue'
+import { readRegistry, registryKey, registryPath } from 'dogear-queue'
 import type { Plugin, ViteDevServer } from 'vite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 

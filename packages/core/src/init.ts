@@ -19,7 +19,7 @@ import { createSession } from './session.js'
  * What cannot travel on {@link InitOptions} — either because it is a function, or because it
  * has to **outlive one session**.
  *
- * Options cross from @dogear/vite as JSON on a query string, so that type can only hold data,
+ * Options cross from dogear-vite as JSON on a query string, so that type can only hold data,
  * and only data that survives `JSON.stringify`. B6 (#13) needs two things that do not: a
  * callback, and the batch itself.
  *
@@ -65,7 +65,7 @@ export interface InitContext {
  * listener and every node, so "detach, don't ignore" is true from the first day rather than
  * retrofitted onto handlers that were written assuming they could early-return. B6 adds a
  * toggle, a keyboard shortcut, and `localStorage` on top of this; it does not have to touch
- * anything below it. @dogear/vite exposes the result as `window.__dogear.stop`, so the
+ * anything below it. dogear-vite exposes the result as `window.__dogear.stop`, so the
  * property is provable by hand in a console today.
  *
  * Calling the teardown twice is safe.
@@ -89,7 +89,7 @@ export function init(options?: InitOptions, context?: InitContext): Teardown {
   // nothing" means, it has to mean it before anything observable has happened. Silent too —
   // a host that passed `enabled: false` does not need telling.
   //
-  // Note @dogear/vite never reaches this: a disabled plugin injects no script, so there is
+  // Note dogear-vite never reaches this: a disabled plugin injects no script, so there is
   // no page to bail on. This is the library entry's path.
   if (!resolved.enabled) return () => {}
 

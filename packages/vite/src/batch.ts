@@ -1,13 +1,13 @@
-import type { AnnotationInput } from '@dogear/queue'
+import type { AnnotationInput } from 'dogear-queue'
 
 /**
  * Validation for the `POST <endpoint>/annotations` request body.
  *
  * Split out of ./annotation.ts when D1 moved annotation identity and lifecycle into
- * `@dogear/queue`. This half stayed behind deliberately: it describes the shape of an HTTP
- * request, which is the *plugin's* wire contract — mirrored by `@dogear/core`'s `submit.ts`
+ * `dogear-queue`. This half stayed behind deliberately: it describes the shape of an HTTP
+ * request, which is the *plugin's* wire contract — mirrored by `dogear-core`'s `submit.ts`
  * on the sending side — and has nothing to say about the queue file. The MCP server links
- * against `@dogear/queue` and has no HTTP surface at all; giving it one by association is
+ * against `dogear-queue` and has no HTTP surface at all; giving it one by association is
  * the kind of layering mistake that stays invisible until someone tries to reuse it.
  */
 

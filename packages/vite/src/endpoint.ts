@@ -7,7 +7,7 @@ import {
   queuePathFor,
   readQueue,
   stampAnnotation,
-} from '@dogear/queue'
+} from 'dogear-queue'
 import type { Connect } from 'vite'
 
 import { validateBatch } from './batch.js'
@@ -16,7 +16,7 @@ import { sendClientBundle, sendMissingBundleStub, sendSourcemap } from './client
 
 /**
  * The HTTP half of the pipe: `POST <endpoint>/annotations` → `.dogear/queue.json`, plus
- * `GET <endpoint>/client.js`, which is how @dogear/core reaches the browser at all (B1, #8).
+ * `GET <endpoint>/client.js`, which is how dogear-core reaches the browser at all (B1, #8).
  *
  * `GET <endpoint>/queue` and `POST <endpoint>/prune` are both in the brief's endpoint table
  * and neither is built, for the same reason: nothing calls them. B5 found no caller for the
@@ -53,7 +53,7 @@ export interface EndpointOptions {
   /** Base path, already normalised by {@link normaliseEndpoint}. */
   readonly endpoint: string
   /**
-   * Where @dogear/core's dev build is, or `undefined` if it has not been built.
+   * Where dogear-core's dev build is, or `undefined` if it has not been built.
    *
    * `undefined` is served as a stub module rather than an error — see
    * {@link sendMissingBundleStub}.
@@ -161,7 +161,7 @@ export function createEndpoint(options: EndpointOptions): Connect.NextHandleFunc
         // DevTools already knows how to ignore quietly.
         sendJson(res, 404, {
           ok: false,
-          error: `${pathname} is not available — @dogear/core was built without a sourcemap`,
+          error: `${pathname} is not available — dogear-core was built without a sourcemap`,
         })
       }
       return
@@ -288,7 +288,7 @@ function countPending(queuePath: string): number {
  * with `server.https`. Trusting the forwarded header instead would let a client describe the
  * server's own identity, and buys nothing: F3's runtime guard only lets dogear run on
  * loopback, `*.localhost` and `*.local`, so the reverse-proxy hostnames that header exists
- * for never have an overlay to submit from. See @dogear/core's host.ts.
+ * for never have an overlay to submit from. See dogear-core's host.ts.
  *
  * `undefined` when there is no usable `Host` — an HTTP/1.0 client may send none. The field
  * is then absent rather than `http://undefined`.

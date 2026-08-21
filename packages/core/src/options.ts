@@ -2,9 +2,9 @@
  * What a host passes into {@link import('./init.js').init}, and the resolved form the rest
  * of core reads.
  *
- * The types here are the *contract with @dogear/vite*, which cannot import them. The plugin
+ * The types here are the *contract with dogear-vite*, which cannot import them. The plugin
  * hand-writes a copy in `packages/vite/src/client.ts` for the same reason it hand-writes
- * SENTINEL — resolving `@dogear/core` by name goes through the exports map to `dist/`, which
+ * SENTINEL — resolving `dogear-core` by name goes through the exports map to `dist/`, which
  * would make `npm run typecheck` depend on a prior `npm run build`, and a relative import
  * into this directory is refused by the plugin's `rootDir: "src"`. See the brief's Decisions
  * log. The copy is guarded: `packages/vite/src/client.test.ts` imports this file relatively
@@ -38,7 +38,7 @@ export interface InitOptions {
    * The brief's Config block (`modifier`) is a `.dogear/config.json` key — E4 (#29) writes
    * that file, E7 (#40) reads it. Plugin options win over the file, so this is the layer that
    * wins
-   * either way: E7 layers the file *underneath* @dogear/vite's `modifier` option, and
+   * either way: E7 layers the file *underneath* dogear-vite's `modifier` option, and
    * neither reaches past this.
    */
   readonly modifier?: Modifier
@@ -54,7 +54,7 @@ export interface InitOptions {
    * B6's (#13) hard off. Default `true`.
    *
    * `false` makes {@link import('./init.js').init} bail before a listener or a node exists,
-   * beside F3's host guard. **@dogear/vite never sends this** — a disabled plugin injects no
+   * beside F3's host guard. **dogear-vite never sends this** — a disabled plugin injects no
    * script at all, so there is nothing in the browser to configure. It is here for the
    * library entry, and so that "enabled: false has the same effect from config" is true at
    * both levels rather than only at the one that happens to be wired.
@@ -68,11 +68,11 @@ export interface InitOptions {
    *
    * **It replaces the defaults rather than extending them**, which is the contract ./host.ts
    * has always documented and E7 (#40) is what finally supplies it: `.dogear/config.json`'s
-   * `hosts` key, layered by @dogear/vite and serialised onto the config parameter. An empty
+   * `hosts` key, layered by dogear-vite and serialised onto the config parameter. An empty
    * array is honoured as "nowhere" rather than read as absent.
    *
    * Unlike every other field here, this one has no plugin option above it. It is repo-wide
-   * safety configuration and belongs in the repo-wide committed file; @dogear/vite omits the
+   * safety configuration and belongs in the repo-wide committed file; dogear-vite omits the
    * key entirely when that file does not set one, so the fallback below is what runs in the
    * ordinary case.
    */
@@ -110,7 +110,7 @@ export const MODIFIERS: readonly Modifier[] = Object.freeze([
 export const DEFAULT_MODIFIER: Modifier = 'alt'
 
 /**
- * dogear's copy of @dogear/vite's `DEFAULT_ENDPOINT`, and the same duplication `MODIFIERS`
+ * dogear's copy of dogear-vite's `DEFAULT_ENDPOINT`, and the same duplication `MODIFIERS`
  * already carries — the two halves cannot import each other (exports map, `rootDir`), so
  * `packages/vite/src/client.test.ts` guards the pair against drift.
  */
@@ -119,7 +119,7 @@ export const DEFAULT_ENDPOINT = '/__dogear'
 /**
  * Apply defaults, and fall back rather than throw on a value that is not a {@link Modifier}.
  *
- * The split is deliberate and mirrors `normaliseEndpoint`, which @dogear/vite validates in
+ * The split is deliberate and mirrors `normaliseEndpoint`, which dogear-vite validates in
  * `configureServer` precisely so a bad option cannot take down a build. The *plugin* throws
  * on a bad `modifier`, at config time, in a terminal, where a developer is looking. Core is
  * the browser half: a dev tool that throws during page load has broken the app it was
@@ -162,7 +162,7 @@ export function resolveOptions(options: InitOptions | undefined): ResolvedOption
  * not a safety list — dropping the bad entries would silently *widen* whatever the author was
  * narrowing. Silent because the one page that can reach this code is a page where every
  * structural layer already failed, and a console line there would announce a dev tool on the
- * one page it must be invisible on (see ./host.ts). Reporting belongs to @dogear/vite, which
+ * one page it must be invisible on (see ./host.ts). Reporting belongs to dogear-vite, which
  * reads the file in a terminal, drops bad entries where it can name them, and sends only what
  * survived — so anything malformed *here* was hand-written onto the query parameter.
  *

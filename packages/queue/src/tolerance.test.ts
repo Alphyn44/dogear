@@ -10,7 +10,7 @@ import { queuePathFor, readQueue, tryReadQueue } from './queue.js'
  * The relationship between the two readers.
  *
  * This replaces `packages/cli/src/parity.test.ts`, which compared the CLI's reader against
- * `@dogear/vite`'s copy and failed if they ever drifted. D1 merged the copies into one
+ * `dogear-vite`'s copy and failed if they ever drifted. D1 merged the copies into one
  * module, so most of that file became vacuous — it would have been comparing a module to
  * itself. The guarantee it protected did not go away with it, though. It changed shape:
  *
