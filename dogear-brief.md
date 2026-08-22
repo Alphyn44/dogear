@@ -2207,11 +2207,21 @@ than ours. Settled during G4.**
 A trusted publisher is configured *on a package*, and npm has no way to configure one for a
 package that does not exist yet (npm/cli#8544; `npm trust` says so outright). PyPI allows
 it; npm does not. So each package is bootstrapped by hand — a throwaway `0.0.1` published
-interactively under a **non-default dist-tag**, the trusted publisher configured, then the
-real `0.1.0` published by the workflow with provenance. The non-default tag matters: a first
-publish without `--tag` sets `latest`, and until the workflow runs a plain `npm i
-dogear-vite` would install the placeholder. With no `latest` at all, that install errors
-instead of succeeding wrongly.
+interactively, the trusted publisher configured against the new package page, then the real
+`0.1.0` published by the workflow with provenance.
+
+**The placeholder takes `latest` and there is no way to stop it.** G4 planned to publish it
+under `--tag bootstrap` so the package would carry no `latest` at all, and a plain
+`npm i dogear-vite` would then error rather than install a placeholder. That is not how the
+registry behaves: every package must have a `latest`, so the **first** publish claims it
+whatever `--tag` says, and `latest` cannot afterwards be removed. Found by running it.
+
+What actually covers the window is smaller and sufficient: the placeholder is `npm
+deprecate`d, so anyone who installs it in the days before the release gets a warning naming
+the version to use, and the tagged release moves `latest` to `0.1.0` on its own. The
+exposure is a package nobody has been told exists. `--tag bootstrap` is still passed — it
+costs nothing and is correct for any *later* out-of-band publish — but it is not what makes
+this safe.
 
 This does not weaken the "no stored credential" rule — the bootstrap is a human at a
 terminal with 2FA, not a secret in the repository. What it costs is that the very first
