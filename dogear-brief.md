@@ -2269,6 +2269,13 @@ optional:**
 - Trusted publishing needs no stored credential and **emits provenance attestations
   automatically** — no `--provenance` flag. Provenance is a meaningful trust signal for a
   tool people install into their build pipeline.
+- **Provenance requires a public source repository, and this one is private.** GitHub
+  withdrew support for provenance from private repositories in July 2023, and trusted
+  publishing does not exempt it: the attestation names a repository and a commit that a
+  verifier has to be able to reach. A release from a private repository therefore either
+  fails or, worse, publishes without provenance and says nothing — so **M7's P5 (#63)
+  gates the first tag**, not the other way round. Found while scoping M6, before a tag
+  existed to be embarrassed by.
 - Trusted-publisher configurations created **after 20 May 2026** must explicitly select at
   least one allowed action. Ours are, so each config names `npm publish` rather than
   relying on the old implicit default.
