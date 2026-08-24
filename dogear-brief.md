@@ -2202,6 +2202,21 @@ the packages that made it are skipped rather than colliding; and tagging without
 publishes nothing and goes green, which is why the job emits a warning line and a
 step-summary table rather than a silent success.
 
+**Reopened by #64, and the first release is the evidence against the tag.** All three
+`0.1.0` packages record `gitHead = 0e4ee643`, a commit that is not reachable from `main`:
+it lived on `m5-release`, PR #52 was squash-merged, and the branch commits went with it. So
+the published packages point at a commit that is not in the repository's history. It still
+resolves on github.com, because GitHub retains commits referenced by a pull request, but
+`git cat-file -e` fails in a fresh clone.
+
+Nothing caught that and nothing could have, because tagging happens outside CI and outside
+review, against whatever commit is checked out. The decision above is about *what*
+publishes, and it stands. What #64 questions is what does the *triggering*: a merge to
+`main` is reviewed, has a visible `"version"` diff and three green CI legs, while a tag push
+has none of those. The version comparison already behaves correctly under either trigger,
+so the change is small; the objection is that it would run a job holding `id-token: write`
+on every merge rather than on rare tags, which is answerable by splitting the job.
+
 **The first publish of each package cannot use OIDC, and that is npm's constraint rather
 than ours. Settled during G4.**
 A trusted publisher is configured *on a package*, and npm has no way to configure one for a
@@ -2272,10 +2287,13 @@ optional:**
 - **Provenance requires a public source repository, and this one is private.** GitHub
   withdrew support for provenance from private repositories in July 2023, and trusted
   publishing does not exempt it: the attestation names a repository and a commit that a
-  verifier has to be able to reach. A release from a private repository therefore either
-  fails or, worse, publishes without provenance and says nothing — so **M7's P5 (#63)
-  gates the first tag**, not the other way round. Found while scoping M6, before a tag
-  existed to be embarrassed by.
+  verifier has to be able to reach. **`0.1.0` proved the worse of the two failure modes.**
+  The release did not fail; it published cleanly and skipped the attestation in silence, so
+  `dist.attestations` is empty on all three packages while `_npmUser` correctly reads
+  `npm-oidc-no-reply@github.com`. OIDC worked, provenance did not, and nothing reported it.
+  Attestations are made at publish time and cannot be added later, so `0.1.0` can never
+  carry one: **G4's provenance criterion is met by the first release published after M7's
+  P5 (#63) flips the repository**, not by anything that can be done to what is already out.
 - Trusted-publisher configurations created **after 20 May 2026** must explicitly select at
   least one allowed action. Ours are, so each config names `npm publish` rather than
   relying on the old implicit default.
@@ -2288,6 +2306,28 @@ optional:**
 - The configuration names the **workflow filename**. `release.yml` is part of the publish
   credential: moving or renaming it breaks publishing with an auth error that does not
   mention the file.
+
+**Dependency updates are a signal, not a queue of pull requests. Settled during M7.**
+Three things travel under the name Dependabot and only one of them opens routine pull
+requests. Alerts are a repository setting and pure signal. Security updates are a setting
+too, and open a pull request only when there is a real advisory. Version updates are
+`.github/dependabot.yml`, and they open pull requests on a calendar whether or not anything
+is wrong.
+
+`dependabot.yml` therefore covers **`github-actions` and not `npm`**. For npm it would be
+mostly churn: the devDependencies are tsup, vitest, prettier, typescript and happy-dom, all
+of which move constantly, `npm run verify` already fails if any of them breaks something,
+and a genuine vulnerability still arrives through security updates. For `github-actions` the
+risk is different in kind rather than degree: the workflows pin `actions/checkout@v5` and
+`actions/setup-node@v5` by *major* tag, a major tag is mutable, and `release.yml` holds
+`id-token: write` against a live trusted publisher, so an action changing underneath us is
+the one supply-chain shape that could publish as us.
+
+What replaces npm version updates is #65: a report on every pull request, ranked by severity
+**and by whether the package ships**. Only `magic-string`, `dogear-core` and
+`@modelcontextprotocol/sdk` ever reach a user, so a raw `npm audit` number weights a
+build-tooling advisory the same as a shipped one, which is how a report becomes something
+people learn to ignore.
 
 ---
 

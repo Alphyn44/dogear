@@ -40,12 +40,20 @@ Also in scope:
 - **Anything that leaves localhost.** dogear makes no outbound requests at all: no
   telemetry, no analytics, no version check. A code path that contacts a remote host is a
   bug regardless of what it sends.
-- **What `dogear init` writes.** It edits `.mcp.json`, `.claude/settings.json`, your agent
-  rules file and `.gitignore`, and those edits are committed. A crafted repository state
-  that makes it write something a user would not expect is in scope.
+- **What `dogear init` writes.** It edits `.mcp.json`, `.cursor/mcp.json`,
+  `.vscode/mcp.json`, `.claude/settings.json`, your agent rules file, `.gitignore` and
+  `.dogear/config.json`, and those edits are committed. It also writes
+  `~/.dogear/projects.json`, which is **outside the repository**. A crafted repository state
+  that makes it write something a user would not expect, or write anywhere else, is in scope.
 - **The release pipeline.** Publishing uses OIDC trusted publishing with no stored
   credential. Anything that could cause a package to publish from a source other than a
   tagged commit on this repository is the highest-severity report you could send.
+
+  Note that `0.1.0` was published before this repository became public, and provenance
+  requires a public source repository, so those three versions carry **no attestation**.
+  `npm audit signatures` finding nothing for `0.1.0` is expected rather than a finding.
+  Attestations are made at publish time and cannot be added afterwards, so the first release
+  published after the repository went public is the first one that has them.
 
 ## What is not in scope
 

@@ -10,8 +10,8 @@ permissions:
 
 jobs:
   # The nine steps live in ./verify.yml so that release.yml runs exactly these, in exactly
-  # this order, rather than a copy of them. Nothing in `npm run verify` parses YAML —
-  # .prettierignore excludes it — so a push to a pull request is the only thing that proves
+  # this order, rather than a copy of them. Nothing in `npm run verify` parses YAML, since
+  # .prettierignore excludes it, so a push to a pull request is the only thing that proves
   # this plumbing works. That is why it is a shared file and not an inline duplicate.
   verify:
     uses: ./.github/workflows/verify.yml

@@ -8,11 +8,14 @@ that changes behaviour wants an issue first.** Not to gate you. The answer is so
 that a thing is deliberately out of scope, because the brief's Decisions log is largely a
 record of obvious approaches that were tried and rejected for a stated reason, and finding
 that out after you have spent an evening on it is a bad trade for everyone. Agreeing the
-shape in an issue takes a few messages.
+shape in an issue takes a few messages. Use a blank issue for that: the User story template
+is the maintainer's own tracking format and expects a story ID from the brief.
 
 ## Getting set up
 
-Node `^20.19.0 || >=22.12.0`. One install at the root resolves all five workspaces.
+Node `^20.19.0 || >=22.12.0`. One install at the root resolves all five workspaces: the
+three published packages, the private `dogear-queue` that the other three inline at build
+time, and the example app.
 
 ```sh
 npm install
@@ -32,7 +35,9 @@ contracts, user stories with acceptance criteria, and a Decisions log explaining
 fork went the way it did. Most "why on earth is it done like that" questions are answered
 there, usually because the obvious approach was tried and rejected for a stated reason.
 
-Three rules the brief and `CLAUDE.md` spell out, and which reviews will hold you to:
+Three rules the brief spells out, and which reviews will hold you to. (There is also a
+[`CLAUDE.md`](./CLAUDE.md) at the root. It is instructions for coding agents working on this
+repository, written in the project's own shorthand, and it is not the place to start.)
 
 - **The code is the source of truth; the brief is the spec.** If they disagree, that is a
   bug in one of them, so say so rather than quietly picking a side.
@@ -63,5 +68,6 @@ changes are better agreed first.
 
 ## Security
 
-Do not open a public issue for a vulnerability. See [SECURITY.md](./SECURITY.md), which
-also describes what is and is not in scope for a dev-only tool.
+Do not open a public issue for a vulnerability. Report it privately, as
+[SECURITY.md](./SECURITY.md) describes; it also sets out what is and is not in scope for a
+dev-only tool, and covers what to do if private reporting is unavailable to you.

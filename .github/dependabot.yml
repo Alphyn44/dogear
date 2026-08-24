@@ -1,39 +1,29 @@
 version: 2
 
-updates:
-  # The npm ecosystem. One entry covers the workspaces too, because Dependabot reads the root
-  # manifest's `workspaces` array and resolves the lockfile as a whole, which is the only
-  # correct way to update a repository with a single root `package-lock.json`. Separate
-  # per-package entries would each try to patch that one lockfile and conflict.
-  - package-ecosystem: npm
-    directory: '/'
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      # Dev tooling moves constantly and none of it ships to a user: tsup, vitest,
-      # prettier, typescript, happy-dom and the type packages. Grouped so a quiet week is
-      # one pull request rather than six, each of which costs a full nine-step verify run.
-      dev-tooling:
-        dependency-type: development
-        update-types:
-          - minor
-          - patch
-    ignore:
-      # Vite is a peerDependency with a deliberate floor, and `engines` is pinned to Vite's
-      # own Node range. A major here is a decision about what dogear supports, not an
-      # upgrade to take automatically. It belongs in a story, with the README, the brief
-      # and the CI matrix moving together.
-      - dependency-name: vite
-        update-types: ['version-update:semver-major']
+# Only github-actions, and deliberately not npm.
+#
+# Three things get conflated under "Dependabot" and only one of them opens routine pull
+# requests. Alerts and security updates are repository settings: the first is pure signal
+# with no pull requests at all, the second opens one only when there is an actual advisory.
+# This file is the third kind, version updates, which open pull requests on a schedule
+# whether or not anything is wrong.
+#
+# For npm that is mostly churn. The devDependencies here are tsup, vitest, prettier,
+# typescript and happy-dom, all of which move constantly, and `npm run verify` already
+# fails if any of them breaks something. A real vulnerability still arrives through
+# security updates, which fire on advisories rather than on a calendar.
+#
+# github-actions is different, and it is the reason this file exists at all. The workflows
+# pin actions/checkout@v5 and actions/setup-node@v5 by MAJOR tag, and a major tag is
+# mutable: it moves when the action publishes. So the risk is not a version going stale,
+# it is an action changing underneath us. That matters more here than in most repositories
+# because release.yml holds `id-token: write` against a live npm trusted publisher, and a
+# compromised action in that job could publish as us.
+#
+# Monthly, because there are two actions and they do not move often.
 
-  # Not optional, and arguably the more important of the two. The workflows pin
-  # actions/checkout@v5 and actions/setup-node@v5 by MAJOR tag, and a major tag is mutable:
-  # it moves when the action publishes. Dependabot on this ecosystem is what surfaces an
-  # advisory against a tag that changed underneath us, which matters more here than for most
-  # repositories: release.yml holds `id-token: write` against a live npm trusted publisher,
-  # so a compromised action in that job could publish as us.
+updates:
   - package-ecosystem: github-actions
     directory: '/'
     schedule:
-      interval: weekly
+      interval: monthly
