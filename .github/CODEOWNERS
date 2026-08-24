@@ -1,0 +1,10 @@
+# Every path, one owner.
+#
+# This does not gate anything: enforcement needs branch protection to require review from
+# code owners, and GitHub does not accept a maintainer's review of their own pull request,
+# so on a single-maintainer repository that setting would make `main` unmergeable. See #60.
+#
+# What it does earn its place for is the public case: an outside contributor's pull request
+# automatically requests review from the owner named here, rather than sitting unnoticed.
+
+* @Alphyn44

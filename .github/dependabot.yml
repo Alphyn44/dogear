@@ -1,0 +1,29 @@
+version: 2
+
+# Only github-actions, and deliberately not npm.
+#
+# Three things get conflated under "Dependabot" and only one of them opens routine pull
+# requests. Alerts and security updates are repository settings: the first is pure signal
+# with no pull requests at all, the second opens one only when there is an actual advisory.
+# This file is the third kind, version updates, which open pull requests on a schedule
+# whether or not anything is wrong.
+#
+# For npm that is mostly churn. The devDependencies here are tsup, vitest, prettier,
+# typescript and happy-dom, all of which move constantly, and `npm run verify` already
+# fails if any of them breaks something. A real vulnerability still arrives through
+# security updates, which fire on advisories rather than on a calendar.
+#
+# github-actions is different, and it is the reason this file exists at all. The workflows
+# pin actions/checkout@v5 and actions/setup-node@v5 by MAJOR tag, and a major tag is
+# mutable: it moves when the action publishes. So the risk is not a version going stale,
+# it is an action changing underneath us. That matters more here than in most repositories
+# because release.yml holds `id-token: write` against a live npm trusted publisher, and a
+# compromised action in that job could publish as us.
+#
+# Monthly, because there are two actions and they do not move often.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: monthly

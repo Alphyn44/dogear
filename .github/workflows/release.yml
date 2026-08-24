@@ -10,7 +10,7 @@ name: Release
 # The tag is a TRIGGER, not an instruction. What publishes is decided by comparing each
 # manifest's version against the registry, so:
 #   - dogear-core and dogear-vite keep versioning independently (G2's decision), and
-#   - a partially-failed run is re-runnable — whatever made it through is skipped.
+#   - a partially-failed run is re-runnable, since whatever made it through is skipped.
 on:
   push:
     tags: ['v*']
@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   # G4: "Publishing runs only after `npm run verify` passes in the same workflow." The full
-  # three-version matrix, deliberately — a release is the one build where proving the
+  # three-version matrix, deliberately: a release is the one build where proving the
   # `engines` floors is worth the extra minutes.
   verify:
     uses: ./.github/workflows/verify.yml
@@ -29,7 +29,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
 
-    # Job-level, because permissions do NOT inherit from the workflow block above — and BOTH
+    # Job-level, because permissions do NOT inherit from the workflow block above, and BOTH
     # entries are needed. Declaring only `id-token: write` here REPLACES the workflow's
     # `contents: read`, and actions/checkout then cannot read the repository.
     permissions:
@@ -54,7 +54,7 @@ jobs:
 
       # Trusted publishing needs npm >= 11.5.1. Node 24 ships npm 11.x, but the exact patch
       # drifts with the runner image, so this is a floor check rather than an assumption. An
-      # older npm does not report a version problem — it looks for a token that does not
+      # older npm does not report a version problem. It looks for a token that does not
       # exist and fails with ENEEDAUTH, on a workflow that otherwise looks correct.
       - name: Ensure npm >= 11.5.1
         run: |
@@ -62,7 +62,7 @@ jobs:
           need=11.5.1
           have=$(npm --version)
           if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
-            echo "npm $have is below $need — upgrading"
+            echo "npm $have is below $need, upgrading"
             npm install -g npm@latest
           fi
           npm --version
@@ -86,7 +86,7 @@ jobs:
             packages/cli/dist/cli.js
           do
             if [ ! -s "$file" ]; then
-              echo "::error::$file is missing or empty — the build did not produce a publishable tarball"
+              echo "::error::$file is missing or empty. The build did not produce a publishable tarball"
               exit 1
             fi
           done
@@ -95,10 +95,10 @@ jobs:
       # `workspaces` array is ["packages/*", "examples/*"], so a workspaces-wide publish
       # would name dogear-queue and dogear-example-react. Both are `private: true` and npm
       # would skip them, but "happens to be skipped" is a weaker guarantee than "never
-      # named" — and scripts/packaging.test.ts is what keeps that `private` there.
+      # named", and scripts/packaging.test.ts is what keeps that `private` there.
       #
       # No --provenance flag: trusted publishing emits attestations on its own. No
-      # --access either — the packages are unscoped, so they are public by default.
+      # --access either, since the packages are unscoped and so public by default.
       - name: Publish packages whose version is not yet on the registry
         run: |
           set -euo pipefail
@@ -116,7 +116,7 @@ jobs:
             set -e
 
             # Three outcomes, and conflating them is the bug this block exists to avoid.
-            # Verified against the real registry rather than assumed — npm reports a missing
+            # Verified against the real registry rather than assumed. npm reports a missing
             # *version* of an existing package the same way it reports a missing package:
             #
             #   exit 0, output      -> that exact version is published. Skip; this is success.
@@ -129,7 +129,7 @@ jobs:
             #                          registry we could not read is how a version gets
             #                          silently skipped and never published at all.
             if [ $status -eq 0 ] && [ -n "$view" ]; then
-              echo "skip     $name@$version — already published"
+              echo "skip     $name@$version (already published)"
               skipped="$skipped $name@$version"
               continue
             fi
@@ -155,7 +155,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Advisory, and last so it cannot stop a good publish. The tag is a trigger by design,
-      # so a mismatch is not an error — but `git tag v0.2.0` when nobody bumped a manifest
+      # so a mismatch is not an error, but `git tag v0.2.0` when nobody bumped a manifest
       # publishes nothing and goes green, which is worth one line saying so.
       - name: Note whether the tag matches any manifest version
         if: always()
@@ -167,4 +167,4 @@ jobs:
               exit 0
             fi
           done
-          echo "::warning::tag ${GITHUB_REF_NAME} matches no manifest version. The tag is only a trigger, so this is not an error — but check that you bumped what you meant to."
+          echo "::warning::tag ${GITHUB_REF_NAME} matches no manifest version. The tag is only a trigger, so this is not an error, but check that you bumped what you meant to."

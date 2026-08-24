@@ -6,7 +6,7 @@ name: verify
 # workflow". A called workflow's jobs run inside the caller's run, so `needs: verify` in
 # release.yml is a real gate rather than a hope about a previous run. Duplicating the steps
 # into release.yml instead would create a second copy of an ordering this repo justifies in
-# comments — and the copy that is exercised once per release is the one that would drift.
+# comments, and the copy exercised once per release is the one that would drift.
 on:
   workflow_call:
     inputs:
@@ -24,14 +24,14 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      # Don't cancel the other versions when one fails — knowing whether a break is
+      # Don't cancel the other versions when one fails. Knowing whether a break is
       # version-specific is most of the diagnosis.
       fail-fast: false
       matrix:
         # The intersection of Vite's engines (^20.19.0 || >=22.12.0) and vitest's
         # (^20.0.0 || ^22.0.0 || >=24.0.0). The two floors are the lowest versions we
         # claim to support in package.json `engines`; 24 is what development happens on.
-        # Node 21 and 23 are correctly excluded — vitest does not support them.
+        # Node 21 and 23 are correctly excluded, since vitest does not support them.
         node: ${{ fromJSON(inputs.node-versions) }}
 
     name: verify (node ${{ matrix.node }})
@@ -64,7 +64,7 @@ jobs:
       # through its exports map to dist/ rather than to source.
       - run: npm run typecheck:example
 
-      # Builds the consumer app — this is what the leak check below scans.
+      # Builds the consumer app, which is what the leak check below scans.
       - run: npm run build:example
 
       # F1 layer 2: production-builds a fixture that gates a dynamic import of core behind

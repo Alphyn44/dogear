@@ -428,6 +428,29 @@ how a version gets silently skipped and never published at all. Note that npm re
 missing *version* of an existing package with E404 too, exactly as it reports a missing
 package; the workflow's comment records this because it is easy to assume otherwise.
 
+**The trigger is under review in #64, and the first release is the argument.** All three
+`0.1.0` packages record `gitHead = 0e4ee643`, which is not reachable from `main`: it lived
+on `m5-release` and PR #52 was squash-merged. A tag push happens outside CI and outside
+review, so nothing caught it. What *publishes* would not change under a merge trigger, since
+the registry comparison already skips everything on a merge that bumps nothing; what changes
+is that the version diff becomes reviewable. The objection to weigh is that it puts a job
+holding `id-token: write` on every merge instead of on rare tags, which #64 answers by
+splitting the decision out of the privileged job.
+
+**`0.1.0` has no provenance and never can.** The repository was private when it published,
+GitHub withdrew provenance for private repositories in July 2023, and attestations are made
+at publish time. `dist.attestations` is empty on all three while `_npmUser` reads
+`npm-oidc-no-reply@github.com`, so OIDC worked and only the attestation was skipped, in
+silence. The first release after the repository goes public is what satisfies that criterion.
+
+**`.github/dependabot.yml` covers `github-actions` only, and that is deliberate.** npm
+version updates would be churn against a `verify` gate that already catches breakage, and a
+real advisory still arrives through Dependabot security updates, which are a repository
+setting rather than this file. The actions ecosystem is different in kind: the workflows pin
+by *major* tag, major tags are mutable, and `release.yml` holds a publishing credential.
+#65 is what replaces the npm half, reporting audit results per pull request ranked by
+whether the package actually ships.
+
 The example consumes the **built** plugin, never its source — and since B1 the plugin serves
 `dogear-core`'s **built** bundle at `<endpoint>/client.js`, so the overlay needs a build too.
 `dev:example` therefore builds both first. Rebuild by hand after touching either package:
