@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { findGitRoot } from './git-root.js'
 
 /**
- * Merged from the identical copies that lived in `@dogear/cli` and `@dogear/vite` before
+ * Merged from the identical copies that lived in `dogear-cli` and `dogear-vite` before
  * D1 gave the walk a shared home. The two differed only in comment wording and in which
  * caller their walk-up case was named for; both of those cases are kept below, because
  * they document the two distinct entry points and cost nothing to run.

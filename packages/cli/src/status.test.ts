@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { RegistryEnv } from '@dogear/queue'
+import type { RegistryEnv } from 'dogear-queue'
 import {
   QUEUE_DIR,
   queuePathFor,
@@ -11,7 +11,7 @@ import {
   registryPath,
   shortenHome,
   writeQueue,
-} from '@dogear/queue'
+} from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { RepoStatus } from './status.js'

@@ -6,10 +6,10 @@ export default defineConfig({
   // - index.ts  — the library surface, what the exports map's `development` condition points
   //               at, and what a consumer would import by name.
   // - noop.ts   — emitted as a real file because `production`/`default` route to it.
-  // - client.ts — the dev-server client, served verbatim by @dogear/vite at
+  // - client.ts — the dev-server client, served verbatim by dogear-vite at
   //               `<endpoint>/client.js`. Deliberately absent from the exports map: it
   //               self-starts on import and carries the sentinel, neither of which has any
-  //               business being reachable by `import '@dogear/core/…'`.
+  //               business being reachable by `import 'dogear-core/…'`.
   entry: ['src/index.ts', 'src/noop.ts', 'src/client.ts'],
   format: ['esm'],
   platform: 'browser',
@@ -21,7 +21,7 @@ export default defineConfig({
   //
   // With three entries sharing modules, tsup's default is to hoist the common code into a
   // `chunk-XXXX.js` and have each entry import it. `client.js` is served over HTTP by
-  // @dogear/vite as a single file at `<endpoint>/client.js` — so a sibling import would send
+  // dogear-vite as a single file at `<endpoint>/client.js` — so a sibling import would send
   // the browser to `<endpoint>/chunk-XXXX.js`, which the endpoint answers with a 404, and the
   // overlay would never load. Nothing in `npm test` can see that: every suite that touches
   // the route serves a synthetic bundle. `test-built/self-contained.test.ts` is the guard.
@@ -30,17 +30,17 @@ export default defineConfig({
   // They are never loaded together — one is the library entry, the other is the dev client.
   splitting: false,
 
-  // D4's clipboard export reaches `@dogear/queue/format` — the one module in that package a
+  // D4's clipboard export reaches `dogear-queue/format` — the one module in that package a
   // browser may load. It must be INLINED, and `splitting: false` above is exactly why: the
-  // bare specifier would otherwise survive into `client.js`, which @dogear/vite serves as a
-  // single file over HTTP, and the browser would ask the endpoint for `/@dogear/queue/format`
+  // bare specifier would otherwise survive into `client.js`, which dogear-vite serves as a
+  // single file over HTTP, and the browser would ask the endpoint for `/dogear-queue/format`
   // and get a 404. `test-built/self-contained.test.ts` is the guard.
   //
   // Belt and braces rather than strictly required today: tsup externalises `dependencies` by
   // default and core declares none, so this would bundle regardless. Stated anyway, for the
-  // reason @dogear/vite's config gives — the cost of that default changing is a broken
+  // reason dogear-vite's config gives — the cost of that default changing is a broken
   // publish nobody notices.
-  noExternal: ['@dogear/queue'],
+  noExternal: ['dogear-queue'],
 
   // Declarations come from `tsc --emitDeclarationOnly` (see tsconfig.build.json and
   // the package's `build` script), NOT from tsup.

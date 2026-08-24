@@ -77,7 +77,7 @@ describe('the consumer manifest', () => {
 
 describe('the gated dynamic import (F1, layer 2)', () => {
   // Layer 2 is the defense for a consumer who cannot use our Vite plugin and writes
-  // `if (import.meta.env.DEV) { import('@dogear/core') }` by hand. The claim is that a
+  // `if (import.meta.env.DEV) { import('dogear-core') }` by hand. The claim is that a
   // bundler eliminates it statically. Nothing else in this repo exercises that path — the
   // example app goes through the plugin, which is layer 1.
 
@@ -104,8 +104,8 @@ describe('the gated dynamic import (F1, layer 2)', () => {
   })
 
   it('eliminated the gated block entirely', () => {
-    // The assertion layer 2 actually rests on. Scanning for `@dogear/` would not settle it:
-    // a production build resolves the specifier through the exports map to the noop, and
+    // The assertion layer 2 actually rests on. Scanning for a package specifier would not
+    // settle it: a production build resolves it through the exports map to the noop, and
     // the noop carries neither the sentinel nor a package specifier — so a noop bundled
     // inline would be invisible to every other rule in this file. A literal from inside the
     // dead branch is not.

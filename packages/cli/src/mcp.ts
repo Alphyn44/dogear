@@ -1,4 +1,4 @@
-import { findGitRoot } from '@dogear/queue'
+import { findGitRoot } from 'dogear-queue'
 
 import type { Outcome } from './run.js'
 

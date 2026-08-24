@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { queuePathFor, readQueue } from '@dogear/queue'
+import { queuePathFor, readQueue } from 'dogear-queue'
 import type { ViteDevServer } from 'vite'
 import { createServer } from 'vite'
 import { afterEach, describe, expect, it } from 'vitest'

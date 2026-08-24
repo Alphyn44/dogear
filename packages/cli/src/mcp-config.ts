@@ -78,10 +78,9 @@ export function createMcpStep(wiring: Wiring): Step {
         else jobs.push(outcome)
       }
 
-      // Only worth saying when something is actually being registered. A repository whose
-      // configs are all already correct does not need telling how the CLI resolves.
-      if (jobs.length > 0 && wiring.cli === 'absent') notes.push(missingCli())
-
+      // An absent local `dogear-cli` is **not** noted here. It is a fact about the repository
+      // rather than about what this step did, so it belongs with ./scaffold.ts's `remarks()` —
+      // see `cliNotInstalled` there, and G3 (#44) in the Decisions log for the round trip.
       if (jobs.length === 0) return notes.length === 0 ? undefined : { notes }
 
       const plan: Plan = {
@@ -312,13 +311,6 @@ function unplaceable(target: Target): string {
     `${target.file} is not a shape dogear can edit safely, so it left it alone. Add a ` +
     `"${NAME}" entry under "${target.container}": {"command": "node", "args": ` +
     `["${CLI_ENTRY}", "mcp"]}`
-  )
-}
-
-function missingCli(): string {
-  return (
-    `the registration points at ${CLI_ENTRY}, which is not installed here. Run ` +
-    '`npm i -D @dogear/cli` so the path resolves for everyone who clones this repository.'
   )
 }
 

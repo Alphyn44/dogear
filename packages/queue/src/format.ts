@@ -8,15 +8,15 @@ import type { StoredAnnotation } from './queue.js'
  * `dogear mcp` (D1), `dogear hook` (D3), and D4's (#23) clipboard export — and the hook is a
  * trigger rather than a second implementation.
  *
- * **It lives in @dogear/queue, and the third caller is why.** The first two are `@dogear/cli`
- * and could have shared a file there; `@dogear/core` is the browser half, declares no
+ * **It lives in dogear-queue, and the third caller is why.** The first two are `dogear-cli`
+ * and could have shared a file there; `dogear-core` is the browser half, declares no
  * dependencies of its own, and cannot import a bin package. Moving the formatter down to the
  * package that already owns {@link StoredAnnotation} gives all three one copy instead of two
  * and a drift test.
  *
  * **This file must never import a `node:` module.** It is reachable at the `./format` export
  * subpath — deliberately separate from `.`, whose `./index.js` pulls in `node:fs` — and
- * @dogear/core inlines it into `client.js`, which runs in a browser. A single `node:` import
+ * dogear-core inlines it into `client.js`, which runs in a browser. A single `node:` import
  * here is an overlay that fails to load, and nothing in the Node-side suites would see it.
  * ./format.test.ts guards the rule mechanically.
  *
@@ -39,7 +39,7 @@ import type { StoredAnnotation } from './queue.js'
 /**
  * Re-exported so the `./format` subpath is self-sufficient.
  *
- * @dogear/core needs this type to build what it passes in, and reaching for it through the
+ * dogear-core needs this type to build what it passes in, and reaching for it through the
  * package's `.` entry would name the module graph that imports `node:fs` from a file bundled
  * for a browser. Type-only, so it erases entirely — but a value import written there by
  * mistake would not, and the point of the separate subpath is that the mistake is unavailable.

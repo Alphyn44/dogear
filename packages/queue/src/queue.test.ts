@@ -16,7 +16,7 @@ import { stampAnnotation } from './annotation.js'
 import { appendToQueue, queuePathFor, readQueue, tempPathFor } from './queue.js'
 
 /**
- * Moved verbatim from `@dogear/vite` when D1 gave the queue a shared home. Nothing here
+ * Moved verbatim from `dogear-vite` when D1 gave the queue a shared home. Nothing here
  * changed but the import paths — in particular `RE-READS immediately before writing, so a
  * second dev server is not erased`, which guards the rule that silently eats another
  * process's annotations when it is broken. ./queue.write.test.ts carries its siblings for

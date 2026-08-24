@@ -377,7 +377,7 @@ describe('the batch across a disable', () => {
 describe('the options flag', () => {
   it('builds nothing when the host passed enabled: false', () => {
     // A separate axis from the stored preference: this is the project's choice, and it wins.
-    // @dogear/vite never gets here — a disabled plugin injects no script — so this is the
+    // dogear-vite never gets here — a disabled plugin injects no script — so this is the
     // library entry's path.
     const controller = createController({ enabled: false })
 

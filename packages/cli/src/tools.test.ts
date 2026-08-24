@@ -9,8 +9,8 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import type { StoredAnnotation } from '@dogear/queue'
-import { queuePathFor, readQueue } from '@dogear/queue'
+import type { StoredAnnotation } from 'dogear-queue'
+import { queuePathFor, readQueue } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { TOOLS, callTool, pending, prune, resolve } from './tools.js'

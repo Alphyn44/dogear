@@ -17,11 +17,11 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "npm run build -w @dogear/core -w @dogear/vite -w @dogear/cli",
+    "build": "npm run build -w dogear-core -w dogear-vite -w dogear-cli",
     "build:example": "npm run build -w dogear-example-react",
     "build:fixtures": "vite build packages/core/test-built/fixtures/gated-import --logLevel warn",
-    "dev:example": "npm run build -w @dogear/core -w @dogear/vite && npm run dev -w dogear-example-react",
-    "typecheck": "npm run typecheck -w @dogear/queue -w @dogear/core -w @dogear/vite -w @dogear/cli && tsc --noEmit -p scripts/tsconfig.json",
+    "dev:example": "npm run build -w dogear-core -w dogear-vite && npm run dev -w dogear-example-react",
+    "typecheck": "npm run typecheck -w dogear-queue -w dogear-core -w dogear-vite -w dogear-cli && tsc --noEmit -p scripts/tsconfig.json",
     "typecheck:example": "npm run typecheck -w dogear-example-react",
     "test": "vitest run",
     "test:built": "vitest run --config vitest.built.config.ts",

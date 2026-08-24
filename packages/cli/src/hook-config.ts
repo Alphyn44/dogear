@@ -341,7 +341,7 @@ function write(root: string, path: string, contents: string): void {
  *
  * Identified by what it *runs* rather than by an exact match on the entry: a user who raised
  * the timeout or moved the entry within the array still has dogear's hook, and re-adding it
- * would give them two. `@dogear/cli` in the path plus `hook` in the arguments is the narrowest
+ * would give them two. `dogear-cli` in the path plus `hook` in the arguments is the narrowest
  * pair that cannot match anything else.
  */
 function wired(parsed: Parsed): boolean {
@@ -380,7 +380,7 @@ function isDogear(command: Parsed): boolean {
   if (!Array.isArray(args)) return false
 
   const text = args.filter((arg): arg is string => typeof arg === 'string')
-  return text.some((arg) => arg.includes('@dogear/cli')) && text.includes('hook')
+  return text.some((arg) => arg.includes('dogear-cli')) && text.includes('hook')
 }
 
 function unreadable(): string {

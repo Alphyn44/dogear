@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve as resolvePath, sep } from 'node:path'
 
-import type { StoredAnnotation } from '@dogear/queue'
+import type { StoredAnnotation } from 'dogear-queue'
 
 /**
  * Staleness — D5 (#24).
@@ -11,7 +11,7 @@ import type { StoredAnnotation } from '@dogear/queue'
  * the moment someone re-added the snippet. See the brief's Decisions log.
  *
  * This module owns every line that touches the filesystem, and `formatQueue` — now over in
- * @dogear/queue, at the `./format` subpath — owns every line that renders. That split is not
+ * dogear-queue, at the `./format` subpath — owns every line that renders. That split is not
  * tidiness: D4's (#23) clipboard export runs the same formatter in a *browser*, which has no
  * `node:fs` and no repository. It passes no set and renders no markers, and nothing had to be
  * unpicked when it landed. Staleness stays here, in the CLI, because it is a fact about a
@@ -44,8 +44,11 @@ import type { StoredAnnotation } from '@dogear/queue'
 /**
  * How many consecutive words must survive for an item to count as fresh.
  *
- * Only relevant to snippets *longer* than this that also contain an interpolation — short
- * static labels ("Overview", "Click log") take the whole-snippet path below and never see it.
+ * The window size for snippets *longer* than this. Shorter ones try the whole snippet first
+ * and then fall back to a narrower window — see {@link FLOOR}, and G3's note in
+ * {@link appearsIn} for why this comment could not go on saying that short labels are static
+ * ones and never reach a window at all.
+ *
  * What it really measures is how long a static run the matcher demands: too small and a
  * generic run like "the comment box should" matches unrelated markup, too large and a sentence
  * broken by two interpolations is flagged wrongly. Five is the middle of a narrow band; the
@@ -128,12 +131,42 @@ export function appearsIn(snippet: string, normalizedFile: string): boolean {
 
   const words = needle.split(' ')
 
-  // Short enough to be a label rather than a sentence. Windowing here would be meaningless —
-  // a one-word window matches almost any file — so the whole thing has to appear.
-  if (words.length <= WINDOW) return normalizedFile.includes(needle)
+  // Short enough to be a label rather than a sentence, so try it whole first: a static label
+  // is the common case and an exact hit needs no windowing.
+  if (words.length <= WINDOW) {
+    if (normalizedFile.includes(needle)) return true
 
-  for (let start = 0; start + WINDOW <= words.length; start += 1) {
-    if (normalizedFile.includes(words.slice(start, start + WINDOW).join(' '))) return true
+    // G3 (#44): short does not imply *static*, which is what the original version assumed.
+    // `Count is {count}` renders as `Count is 0` — three words, so it took the whole-snippet
+    // path above, which an interpolated snippet can never satisfy. The counter button of a
+    // stock `npm create vite` app was flagged stale against an untouched file, and the agent
+    // duly distrusted a line number that was exactly right.
+    return slidingMatch(words, normalizedFile, Math.max(FLOOR, words.length - 1))
+  }
+
+  return slidingMatch(words, normalizedFile, WINDOW)
+}
+
+/**
+ * The narrowest run that still means something — see {@link WINDOW} for the same tradeoff at
+ * the other end of the scale.
+ *
+ * Two rather than one because a single word matches almost any file, and a snippet of two words
+ * or fewer therefore gets no fallback at all: `Save changes` that has genuinely vanished still
+ * flags, because `words.length - 1` is 1 and the floor refuses it.
+ */
+const FLOOR = 2
+
+/** Does any run of `size` consecutive words survive in the file? */
+function slidingMatch(
+  words: readonly string[],
+  normalizedFile: string,
+  size: number,
+): boolean {
+  if (size > words.length) return false
+
+  for (let start = 0; start + size <= words.length; start += 1) {
+    if (normalizedFile.includes(words.slice(start, start + size).join(' '))) return true
   }
 
   return false

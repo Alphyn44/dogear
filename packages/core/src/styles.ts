@@ -1,7 +1,7 @@
 /**
  * Every style the overlay uses, as two string constants.
  *
- * No `.css` file and no build-step import: @dogear/core is bundled by tsup with no CSS
+ * No `.css` file and no build-step import: dogear-core is bundled by tsup with no CSS
  * loader configured, and adding one to ship roughly forty lines of CSS would buy nothing.
  * Prettier formats `.ts` but not the inside of a template literal, so what is written here
  * is what ships.

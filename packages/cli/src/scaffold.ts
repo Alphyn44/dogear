@@ -1,6 +1,6 @@
 import { configFile, configRemoval } from './config.js'
 import type { Agent, Cli, Detection, DetectedApp } from './detect.js'
-import { detect } from './detect.js'
+import { CLI_ENTRY, detect } from './detect.js'
 import { gitignore, gitignoreRemoval } from './gitignore.js'
 import { guidance } from './guidance.js'
 import { createHookStep, hookRemoval } from './hook-config.js'
@@ -222,7 +222,7 @@ export interface Wiring {
   readonly agents: readonly Agent[]
   /** Whether to write Claude Code's prompt hook. */
   readonly hook: boolean
-  /** Whether `@dogear/cli` resolves from inside the repo, for the registration's note. */
+  /** Whether `dogear-cli` resolves from inside the repo, for the registration's note. */
   readonly cli: Cli
 }
 
@@ -355,7 +355,7 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
 
   // Kept apart from the step notes all the way to the report, and not for ordering: only step
   // notes suppress `nothing changed`. See {@link report}.
-  const found = remarks(detection)
+  const found = remarks(detection, wiring)
   // E8 (#41)'s trailing block — what init is telling the user to do rather than doing. Beside
   // `remarks` for the same reason it is not a step: nothing plans it and nothing applies it.
   const next = guidance(detection)
@@ -646,12 +646,9 @@ function many(apps: readonly DetectedApp[]): readonly string[] {
  * to make and nothing to become idempotent about. Both are the shape `Plan.notes` was widened
  * for in E4 — state init can see, must not repair by guessing, and must not leave unsaid.
  */
-function remarks(detection: Detection): readonly string[] {
+function remarks(detection: Detection, wiring: Wiring): readonly string[] {
   if (detection.apps.length === 0) {
-    return [
-      'no vite config found. dogear is a Vite dev-server plugin — the overlay will not ' +
-        'load without one.',
-    ]
+    return [...cliNotInstalled(wiring), ...noViteConfig()]
   }
 
   // React, Preact and Solid all author components in `.jsx`/`.tsx`, which is what the
@@ -662,7 +659,54 @@ function remarks(detection: Detection): readonly string[] {
     (app) => app.framework === 'vue' || app.framework === 'svelte',
   )
 
-  return [...jsxOnly(floored), ...runtimeDependency(detection.apps)]
+  return [
+    ...cliNotInstalled(wiring),
+    ...jsxOnly(floored),
+    ...runtimeDependency(detection.apps),
+  ]
+}
+
+function noViteConfig(): readonly string[] {
+  return [
+    'no vite config found. dogear is a Vite dev-server plugin — the overlay will not ' +
+      'load without one.',
+  ]
+}
+
+/**
+ * The local `dogear-cli` the committed configs point at — G3 (#44).
+ *
+ * **A remark rather than a step note, and the round trip is the interesting part.** E3 had
+ * ./mcp-config.ts note it, gated on a registration being *written* — so it fired once, on the
+ * run that created `.mcp.json`, and never again. G3 walked the documented install path and
+ * found the consequence: a repository reporting `nothing changed` over an MCP server that
+ * exited 1 on spawn and a `UserPromptSubmit` hook that failed on every prompt the user typed.
+ *
+ * Moving the condition to "a registration exists" fixed the firing and broke something else —
+ * step notes suppress `nothing changed`, so a repository that earns this on every run never
+ * got a verdict again, which is exactly the trap {@link report} describes for E2's remarks.
+ * The discriminator there settles it: *a step note qualifies what init did or declined to do;
+ * a remark describes the repository.* Init did not decline anything — it wrote the
+ * registration, correctly. What is wrong is the repository, and it stays wrong until someone
+ * installs the package. So it belongs here, where it prints every run and silences nothing.
+ *
+ * It speaks for the **prompt hook** as well: ./hook-config.ts writes the same `CLI_ENTRY` and
+ * had no warning of its own, and that is the worse failure of the two. An MCP server that will
+ * not start is silent until a tool is called; a hook pointing at a missing file is not.
+ */
+function cliNotInstalled(wiring: Wiring): readonly string[] {
+  // Nothing names `CLI_ENTRY` when nothing is wired, so there is nothing to warn about.
+  if (wiring.agents.length === 0 || wiring.cli === 'local') return []
+
+  const surfaces =
+    wiring.hook && wiring.agents.includes('claude')
+      ? 'the MCP registration and the prompt hook both point'
+      : 'the MCP registration points'
+
+  return [
+    `${surfaces} at ${CLI_ENTRY}, which is not installed here. Run ` +
+      '`npm i -D dogear-cli` so the path resolves for everyone who clones this repository.',
+  ]
 }
 
 /** brief:1517 — the transform is JSX-only, so these apps get the selector floor and no more. */
@@ -681,7 +725,7 @@ function jsxOnly(floored: readonly DetectedApp[]): readonly string[] {
 }
 
 /**
- * `@dogear/vite` in `dependencies` rather than `devDependencies` — E8 (#41).
+ * `dogear-vite` in `dependencies` rather than `devDependencies` — E8 (#41).
  *
  * **Reported, never moved.** This is the manifest half of the leak `scripts/check-leak.ts`
  * exists to catch: a dev-only plugin in `dependencies` installs in production even when every
@@ -698,7 +742,7 @@ function runtimeDependency(apps: readonly DetectedApp[]): readonly string[] {
     .join(', ')
 
   return [
-    `@dogear/vite is a runtime dependency in ${named}. It is dev-only — move it to ` +
+    `dogear-vite is a runtime dependency in ${named}. It is dev-only — move it to ` +
       'devDependencies so it cannot install in production.',
   ]
 }

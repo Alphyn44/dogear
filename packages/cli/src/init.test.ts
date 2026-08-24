@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { QUEUE_DIR } from '@dogear/queue'
+import { QUEUE_DIR } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { init } from './init.js'

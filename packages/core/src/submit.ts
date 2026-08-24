@@ -16,7 +16,7 @@
 import type { AnnotationDraft, QueueItem } from './queue.js'
 
 /**
- * The only version of the POST contract that exists. Mirrors @dogear/vite's
+ * The only version of the POST contract that exists. Mirrors dogear-vite's
  * `PROTOCOL_VERSION`, which validates against it — the two halves cannot import each other.
  */
 export const PROTOCOL_VERSION = 1
@@ -57,7 +57,7 @@ export type SubmitResult =
  * The request body for a batch.
  *
  * **`key` is stripped**, which is the one transformation that matters. It is a local
- * counter that never leaves the tab, and @dogear/vite's `stampAnnotation` spreads client
+ * counter that never leaves the tab, and dogear-vite's `stampAnnotation` spreads client
  * fields straight through — so an unrecognised extra field rides into `queue.json` and
  * anything id-shaped there will eventually be mistaken for the server's `id`. See
  * ./queue.ts.

@@ -1,0 +1,170 @@
+name: Release
+
+# THIS FILENAME IS PART OF THE PUBLISH CREDENTIAL.
+#
+# Each package's trusted-publisher configuration on npmjs.com names the repository, the
+# workflow *filename*, and the allowed action (`npm publish`). Renaming or moving this file
+# revokes publishing, and the failure is an auth error that does not mention the filename.
+# If it has to move, update all three configurations first.
+#
+# The tag is a TRIGGER, not an instruction. What publishes is decided by comparing each
+# manifest's version against the registry, so:
+#   - dogear-core and dogear-vite keep versioning independently (G2's decision), and
+#   - a partially-failed run is re-runnable — whatever made it through is skipped.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  # G4: "Publishing runs only after `npm run verify` passes in the same workflow." The full
+  # three-version matrix, deliberately — a release is the one build where proving the
+  # `engines` floors is worth the extra minutes.
+  verify:
+    uses: ./.github/workflows/verify.yml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+
+    # Job-level, because permissions do NOT inherit from the workflow block above — and BOTH
+    # entries are needed. Declaring only `id-token: write` here REPLACES the workflow's
+    # `contents: read`, and actions/checkout then cannot read the repository.
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # Trusted publishing needs Node >= 22.14.0, which is above both floors in
+          # `engines`. 24 is what development happens on and is well clear of it; the verify
+          # job above is what proves the floors still work.
+          node-version: '24'
+          # Writes an .npmrc pointing at the public registry. It references NODE_AUTH_TOKEN,
+          # which is deliberately unset: a new-enough npm sees the Actions OIDC environment
+          # and exchanges a token instead. Without registry-url there is no .npmrc at all
+          # and the exchange never happens.
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      # Trusted publishing needs npm >= 11.5.1. Node 24 ships npm 11.x, but the exact patch
+      # drifts with the runner image, so this is a floor check rather than an assumption. An
+      # older npm does not report a version problem — it looks for a token that does not
+      # exist and fails with ENEEDAUTH, on a workflow that otherwise looks correct.
+      - name: Ensure npm >= 11.5.1
+        run: |
+          set -euo pipefail
+          need=11.5.1
+          have=$(npm --version)
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
+            echo "npm $have is below $need — upgrading"
+            npm install -g npm@latest
+          fi
+          npm --version
+
+      - run: npm ci
+
+      # `files` is ["dist", "README.md"], so without this the tarballs would be a README and
+      # a manifest: they install cleanly, resolve cleanly, and import to nothing.
+      - run: npm run build
+
+      - name: Refuse to publish an empty tarball
+        run: |
+          set -euo pipefail
+          for file in \
+            packages/core/dist/index.js \
+            packages/core/dist/noop.js \
+            packages/core/dist/client.js \
+            packages/core/dist/index.d.ts \
+            packages/vite/dist/index.js \
+            packages/vite/dist/index.d.ts \
+            packages/cli/dist/cli.js
+          do
+            if [ ! -s "$file" ]; then
+              echo "::error::$file is missing or empty — the build did not produce a publishable tarball"
+              exit 1
+            fi
+          done
+
+      # Explicit -w flags matching the root `build` script, never `--workspaces`: the root
+      # `workspaces` array is ["packages/*", "examples/*"], so a workspaces-wide publish
+      # would name dogear-queue and dogear-example-react. Both are `private: true` and npm
+      # would skip them, but "happens to be skipped" is a weaker guarantee than "never
+      # named" — and scripts/packaging.test.ts is what keeps that `private` there.
+      #
+      # No --provenance flag: trusted publishing emits attestations on its own. No
+      # --access either — the packages are unscoped, so they are public by default.
+      - name: Publish packages whose version is not yet on the registry
+        run: |
+          set -euo pipefail
+
+          published=""
+          skipped=""
+
+          for dir in core vite cli; do
+            name=$(node -p "require('./packages/$dir/package.json').name")
+            version=$(node -p "require('./packages/$dir/package.json').version")
+
+            set +e
+            view=$(npm view "$name@$version" version 2>&1)
+            status=$?
+            set -e
+
+            # Three outcomes, and conflating them is the bug this block exists to avoid.
+            # Verified against the real registry rather than assumed — npm reports a missing
+            # *version* of an existing package the same way it reports a missing package:
+            #
+            #   exit 0, output      -> that exact version is published. Skip; this is success.
+            #   non-zero, E404      -> either the version or the whole package is absent.
+            #                          Publish. (If the package itself is absent, authentication
+            #                          will fail: a trusted publisher cannot be configured for a
+            #                          package that does not exist, so the manual bootstrap has
+            #                          to have happened. See the brief's Decisions log.)
+            #   non-zero, otherwise -> registry outage, auth, DNS. FAIL. Publishing against a
+            #                          registry we could not read is how a version gets
+            #                          silently skipped and never published at all.
+            if [ $status -eq 0 ] && [ -n "$view" ]; then
+              echo "skip     $name@$version — already published"
+              skipped="$skipped $name@$version"
+              continue
+            fi
+
+            if [ $status -ne 0 ] && ! printf '%s' "$view" | grep -q 'E404'; then
+              echo "::error::npm view $name@$version failed, and not because it is unpublished:"
+              printf '%s\n' "$view"
+              exit 1
+            fi
+
+            echo "publish  $name@$version"
+            npm publish -w "$name"
+            published="$published $name@$version"
+          done
+
+          {
+            echo "### Release ${GITHUB_REF_NAME}"
+            echo
+            echo "| | package |"
+            echo "|---|---|"
+            for entry in $published; do echo "| published | \`$entry\` |"; done
+            for entry in $skipped;   do echo "| skipped (already on npm) | \`$entry\` |"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Advisory, and last so it cannot stop a good publish. The tag is a trigger by design,
+      # so a mismatch is not an error — but `git tag v0.2.0` when nobody bumped a manifest
+      # publishes nothing and goes green, which is worth one line saying so.
+      - name: Note whether the tag matches any manifest version
+        if: always()
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          for dir in core vite cli; do
+            if [ "$(node -p "require('./packages/$dir/package.json').version")" = "$tag_version" ]; then
+              exit 0
+            fi
+          done
+          echo "::warning::tag ${GITHUB_REF_NAME} matches no manifest version. The tag is only a trigger, so this is not an error — but check that you bumped what you meant to."

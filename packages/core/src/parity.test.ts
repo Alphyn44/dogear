@@ -12,7 +12,7 @@ import {
 import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE } from './sites.js'
 
 /**
- * The writer is `@dogear/vite`'s JSX transform; the reader is this package's `collectSites`.
+ * The writer is `dogear-vite`'s JSX transform; the reader is this package's `collectSites`.
  * They cannot import each other — core is framework-agnostic and knows nothing about Vite,
  * which is the same constraint that makes ./submit.ts carry its own `PROTOCOL_VERSION`. So
  * the attribute names exist twice.
@@ -26,8 +26,8 @@ import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE } from './sites.js'
  * reason, and packages/vite/src/sentinel.test.ts, which guards the leak sentinel's copy.
  */
 
-describe('the source attributes read by @dogear/core', () => {
-  it('agree with the ones @dogear/vite stamps', () => {
+describe('the source attributes read by dogear-core', () => {
+  it('agree with the ones dogear-vite stamps', () => {
     expect(SOURCE_ATTRIBUTE).toBe(SOURCE_ATTRIBUTE_IN_VITE)
     expect(COMPONENT_ATTRIBUTE).toBe(COMPONENT_ATTRIBUTE_IN_VITE)
   })

@@ -18,7 +18,7 @@ import { SENTINEL } from './sentinel.js'
  * through Vite's own tag serialization and hook ordering before a browser sees them.
  *
  * The fixture is a temp directory rather than examples/react-app: the example resolves
- * @dogear/vite through its exports map to dist/, so pointing this at it would make
+ * dogear-vite through its exports map to dist/, so pointing this at it would make
  * `npm test` depend on a prior build. Same reasoning as scripts/check-leak.test.ts.
  */
 
@@ -77,7 +77,7 @@ describe('the HTML a dev server actually serves', () => {
     expect(served).toMatch(/<script[^>]*data-dogear=/)
   })
 
-  it('loads @dogear/core from the dev server', () => {
+  it('loads dogear-core from the dev server', () => {
     // The M0 payload was an inline console.info. B1 (#8) replaced it with an inline module
     // importing the served bundle; F4 (#34) removed the inline body entirely, because a
     // strict `script-src 'self'` blocks inline execution.

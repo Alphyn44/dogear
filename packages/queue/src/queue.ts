@@ -148,7 +148,7 @@ export function queuePathFor(gitRoot: string): string {
  *
  * Nothing in this package reads or writes it; it lives here because two packages that
  * cannot import each other need the same path. E4's init step writes it from
- * `@dogear/cli`, and E7's (#40) precedence layer reads it from `@dogear/vite` — a constant in
+ * `dogear-cli`, and E7's (#40) precedence layer reads it from `dogear-vite` — a constant in
  * either one would be a literal copied into the other, which is the duplication
  * `QUEUE_DIR` already exists to prevent.
  */

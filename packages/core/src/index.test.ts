@@ -45,7 +45,7 @@ describe('module surface', () => {
   ])('$module exports an init that returns a callable teardown', ({ init }) => {
     // The specific shape, not just presence. `init()` is documented as
     // `const stop = init(); …; stop()`, and F1's layer 2 fixture uses
-    // `import('@dogear/core').then((m) => m.init())` — a noop returning undefined turns
+    // `import('dogear-core').then((m) => m.init())` — a noop returning undefined turns
     // either into "stop is not a function", in a production bundle, from the module whose
     // whole job is to make production inert.
     expect(typeof init).toBe('function')
@@ -101,7 +101,7 @@ describe('exports map (F1, layer 3)', () => {
     expect(Object.keys(entry)[0]).toBe('types')
   })
 
-  it('exposes ./package.json, which is how @dogear/vite finds the dev bundle', () => {
+  it('exposes ./package.json, which is how dogear-vite finds the dev bundle', () => {
     // The plugin serves core's built bundle at <endpoint>/client.js and needs an absolute
     // path to it. Resolving the package NAME from Node names no `development` condition, so
     // it lands on dist/noop.js — the inert build. Resolving the manifest and joining
@@ -109,7 +109,7 @@ describe('exports map (F1, layer 3)', () => {
     //
     // A dedicated `./dev` subpath was rejected: it would be a second live entry point any
     // bundler could follow, which is the hole layer 3 exists to close. This entry exposes a
-    // manifest, not code, so `@dogear/core` still resolves to the noop for every consumer.
+    // manifest, not code, so `dogear-core` still resolves to the noop for every consumer.
     expect(manifest.exports?.['./package.json']).toBe('./package.json')
   })
 })

@@ -2,7 +2,7 @@
  * C2 (#16) — the ancestor chain. Layer 1 of the brief's source-resolution ladder, read
  * from the browser side.
  *
- * `@dogear/vite`'s transform stamps every host JSX element with its source location; this
+ * `dogear-vite`'s transform stamps every host JSX element with its source location; this
  * is the half that reads them back. Walking *up* from the clicked element rather than
  * taking only its own stamp is the whole ticket: the `<button>` you pointed at was written
  * in Button.tsx, but the decision to put it in a row was made in TabBar.tsx, and which one
@@ -21,7 +21,7 @@
  */
 
 /**
- * The stamped attributes, duplicated from `@dogear/vite`'s ./stamp.ts rather than imported.
+ * The stamped attributes, duplicated from `dogear-vite`'s ./stamp.ts rather than imported.
  *
  * Core is framework-agnostic and knows nothing about Vite — the same constraint that makes
  * ./submit.ts carry its own `PROTOCOL_VERSION`. The two halves cannot import each other, so

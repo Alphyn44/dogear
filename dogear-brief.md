@@ -13,7 +13,7 @@ agent receive that comment already bound to the exact source file and line.
 
 - **Product name:** dogear (lowercase, everywhere — code, docs, UI strings)
 - **Repository:** `dogear`
-- **Packages:** `@dogear/cli`, `@dogear/core`, `@dogear/vite`
+- **Packages:** `dogear-cli`, `dogear-core`, `dogear-vite`
 - **License:** MIT
 
 A personal project built in the open. Not a product, not a startup, no roadmap
@@ -21,11 +21,14 @@ obligations to anyone. That's a design constraint, not a disclaimer: it means th
 ceremony stays low, the scope stays honest, and features exist because they get used
 rather than because they demo well.
 
-The npm scope is a free **organization** named `dogear`, owned by the personal account
-that publishes it — that gets the clean scope without the doubled name of
-`@handle/dogear-core`. If the org name is taken, the fallback is
-`@<handle>/dogear-{cli,core,vite}` and nothing else here changes. (The unscoped `dogear`
-package name belongs to an unrelated hapi/statsd plugin last published in 2022.)
+The packages publish **unscoped**: `dogear-cli`, `dogear-core`, `dogear-vite`. An earlier
+draft of this section planned a free npm **organization** named `dogear`, with
+`@<handle>/dogear-{cli,core,vite}` as the fallback if it were taken. It was taken — and
+that fallback reintroduces the doubled name the organization existed to avoid, so G5 took
+the other road. Unscoped keeps the install line short and removes `--access public` from
+the release entirely, since only scoped packages default to restricted. (The bare `dogear`
+name belongs to an unrelated hapi/statsd plugin last published in 2020.) See the Decisions
+log.
 
 ---
 
@@ -136,7 +139,7 @@ work on deployed/staging URLs, annotations survive reloads for free,
 
 Three packages, one monorepo (npm workspaces).
 
-### `@dogear/core`
+### `dogear-core`
 
 Framework-agnostic. Knows nothing about Vite. Contains:
 
@@ -152,7 +155,7 @@ delivery mechanism later instead of a rewrite.
 Core's only requirement of its host: *something* must serve the endpoint it POSTs to.
 It does not care what.
 
-### `@dogear/vite`
+### `dogear-vite`
 
 Thin plugin. Three jobs:
 
@@ -176,7 +179,7 @@ there's no reference that could survive into a production bundle.
 compilation, so our transform sees actual JSX syntax. Without it we'd be adding
 attributes to already-compiled `jsx()` calls.
 
-### `@dogear/cli`
+### `dogear-cli`
 
 Installed globally, provides `dogear` on PATH. Subcommands:
 
@@ -262,7 +265,7 @@ Verified details of the Claude Code hook contract the implementation depends on:
       { "hooks": [ {
           "type": "command",
           "command": "node",
-          "args": ["${CLAUDE_PROJECT_DIR}/node_modules/@dogear/cli/dist/cli.js", "hook"],
+          "args": ["${CLAUDE_PROJECT_DIR}/node_modules/dogear-cli/dist/cli.js", "hook"],
           "timeout": 10
       } ] }
     ]
@@ -494,7 +497,7 @@ matching Vite's own `/__vite_ping` convention):
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/__dogear/annotations` | Submit a batch |
-| `GET` | `/__dogear/client.js` | `@dogear/core`'s dev bundle — how the overlay reaches the browser |
+| `GET` | `/__dogear/client.js` | `dogear-core`'s dev bundle — how the overlay reaches the browser |
 | `GET` | `/__dogear/client.js.map` | Its sourcemap, under the name the bundle's own `sourceMappingURL` asks for |
 | `GET` | `/__dogear/queue` | Current queue (overlay reads pending count) — **not built, and now in no story at all.** B5 found no caller for it: the POST response already returns `pending`, and the badge shows the local count. D4 was the last plausible claimant and turned it down — its clipboard copies the in-memory batch, since "works with no server" is one of its acceptance criteria. E5 was the last story that could have wanted it and **declined**: `dogear status` reads each repo's `queue.json` off disk, which works for the stopped dev servers this endpoint could never answer for. Nothing is left to claim it |
 | `POST` | `/__dogear/prune` | Drop resolved items — **not built.** D6 shipped prune on the CLI and MCP surfaces and deferred this one for want of a caller; see the Decisions log |
@@ -590,7 +593,8 @@ recognises, with the value each one falls back to:
     "172.16.0.0/12",
     "192.168.0.0/16"
   ],
-  "agent": "claude"
+  "agent": "claude",
+  "app": "web"
 }
 ```
 
@@ -610,9 +614,17 @@ the `--agent` flag instead. Its value was corrected from `claude-code` to `claud
 E7 to match the values that flag actually accepts (`claude|cursor|vscode|none`); nothing
 reads the key either way, and giving it one needs its own story.
 
+`app` has no reader either, and unlike `agent` it never will: this file is per *repository*
+and `app` is per *Vite root*, which is the ambiguity C4 added the field to remove — a
+monorepo's three dev servers cannot share one value for it. It is listed here because
+`config-file.ts` recognises it, and it recognises it precisely so that a file carrying it is
+**not** warned about as an unknown key. Recognised, documented, and deliberately inert.
+Added to this block during G6, which found the code's recognised set and this list had
+disagreed by one key since E7.
+
 Plugin options override the file; the file overrides defaults. Machine-level prefs live
 in `~/.dogear/config.json` and lose to both — still unbuilt, and out of E7's scope.
-E4 (#29) writes the file; **E7 (#40)** gave it a reader in `@dogear/vite`.
+E4 (#29) writes the file; **E7 (#40)** gave it a reader in `dogear-vite`.
 
 **A bad value in this file is warned about and dropped, never thrown on**, and that is
 the opposite of how the same value behaves as a plugin option. See the Decisions log.
@@ -643,9 +655,19 @@ Global once, then per repo — the model CodeGraph uses, for the same reason: th
 is machine-level, the configuration is repo-level.
 
 ```
-npm i -g @dogear/cli        # once per machine
-cd my-repo && dogear init   # once per repo
+npm i -g dogear-cli                    # once per machine — `dogear` on PATH
+cd my-repo && dogear init               # once per repo
+npm i -D dogear-vite dogear-cli       # what init prints
 ```
+
+**`dogear-cli` is installed twice, and the second one is not optional.** Everything step 3
+writes — the MCP registration and the prompt hook alike — points at the repo-relative
+`node_modules/dogear-cli/dist/cli.js`, because those files are committed and an absolute
+path out of one machine's npm prefix is broken for everyone else who clones. So the global
+install provides the command you type and the local one provides the path those configs
+name. G3 (#44) found this by running the install path: without the local copy the MCP server
+does not start and the prompt hook fails on every prompt, which is why `init` says so — see
+the Decisions log.
 
 `dogear init` is non-interactive and idempotent. It:
 
@@ -690,7 +712,7 @@ Layered, structural first:
    both the script injection *and* the attribute transform, so production DOM is
    untouched.
 2. **Gated dynamic import** for non-Vite consumers:
-   `if (import.meta.env.DEV) { import('@dogear/core').then(m => m.init()) }`. Statically
+   `if (import.meta.env.DEV) { import('dogear-core').then(m => m.init()) }`. Statically
    eliminated by bundlers. Dynamic import matters — a static one keeps the module in the
    graph.
 3. **Export conditions** in `package.json` — `"production"` and `"default"` both resolve
@@ -847,7 +869,8 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 - Works with no server, no MCP, and no agent configuration.
 - Falls back to a hidden-textarea copy where `navigator.clipboard` is unavailable.
 
-**D5 — Stale items are obvious and disposable**
+**D5 — Stale items are obvious and disposable** *(matcher amended during G3 — see the
+Decisions log)*
 - An item is marked `stale` when its text snippet appears in **none** of the files it
   names, compared whitespace- and case-insensitively. Amended during D5 — the original
   criterion said "its named file", literally, and flagged every healthy item; see the
@@ -864,7 +887,7 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 ### Epic E — Install and init (M4)
 
 **E1 — Global install, per-repo init**
-- `npm i -g @dogear/cli` puts `dogear` on PATH.
+- `npm i -g dogear-cli` puts `dogear` on PATH.
 - `dogear init` refuses to run outside a git repo, with a message saying why.
 - Re-running is idempotent and reports only what changed.
 
@@ -885,7 +908,7 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
 - Claude Code's hook is merged into `.claude/settings.json` — existing hooks survive,
   and no line init did not write is reformatted.
 - The hook is written as `node <path> hook`, never `dogear hook`, so it works on Windows.
-- The path is repo-relative and portable whether or not `@dogear/cli` is installed yet;
+- The path is repo-relative and portable whether or not `dogear-cli` is installed yet;
   a missing local install is reported, not worked around.
 
 **E4 — Gitignore and config**
@@ -920,7 +943,7 @@ dogear renders that outlives a gesture — also in the Decisions log.)*
   an agent that no longer has dogear installed.
 
 **E7 — Config precedence**
-- `@dogear/vite` reads `<git-root>/.dogear/config.json` and layers it under its own plugin
+- `dogear-vite` reads `<git-root>/.dogear/config.json` and layers it under its own plugin
   options: option, then file, then default. A key the file does not set is left to the
   default, not overwritten with one.
 - `enabled`, `endpoint`, `modifier`, `transform`, `include` and `exclude` are all layered.
@@ -936,19 +959,21 @@ Split out of E4 during E4, which shipped the file without a reader. The four cod
 that named E4 for this work now name E7; see the Decisions log.
 
 **E8 — Plugin install and the vite.config change**
-- Where an app has no `@dogear/vite`, init prints the dependency to install and the
+- Where an app has no `dogear-vite`, init prints the dependency to install and the
   `vite.config` change to make. It writes neither.
 - The install command matches the repository's package manager, and names the package the
   dependency belongs to — which in a monorepo is not always the app's own directory.
-- An app that already declares the plugin gets nothing. A repo with no Vite app gets nothing.
-- `@dogear/vite` in `dependencies` rather than `devDependencies` is reported, not moved.
+- An app that already declares the plugin **and calls it in its config** gets nothing. An app
+  with only one of the two gets exactly the half it is missing. A repo with no Vite app gets
+  nothing. Amended during G3 (#44) — see the Decisions log.
+- `dogear-vite` in `dependencies` rather than `devDependencies` is reported, not moved.
 
 Filed during E2, which found that install step 6 was in no story at all. Written as printing
 rather than writing after the same ticket's grill; see the Decisions log.
 
 `init` writes into four places outside `.dogear/` by the time E3 and E4 land — the agent's
 config, an `AGENTS.md` stanza, `.gitignore`, and `~/.dogear/projects.json` — and
-`npm rm -g @dogear/cli` removes none of them. That asymmetry is the story: the install is
+`npm rm -g dogear-cli` removes none of them. That asymmetry is the story: the install is
 per-machine and the configuration is per-repo, so uninstalling the tool cannot clean up the
 repos, and each repo has to be able to clean up after itself. The hook is the sharp edge
 rather than a tidiness concern, because a `UserPromptSubmit` entry pointing at a deleted
@@ -981,8 +1006,8 @@ built — which is why it is filed as an epic rather than left as a release chec
   only that file — on the package page.
 
 **G2 — The packages are publishable**
-- `@dogear/core`, `@dogear/vite` and `@dogear/cli` drop `private: true` and carry a real
-  version. `@dogear/queue` keeps both — it is source-only and inlined, and publishing it
+- `dogear-core`, `dogear-vite` and `dogear-cli` drop `private: true` and carry a real
+  version. `dogear-queue` keeps both — it is source-only and inlined, and publishing it
   would add a runtime dependency the three-package install story does not have.
 - `npm pack` on each produces a tarball containing `dist/` and no tests or fixtures.
 - Nothing else about the manifests changes: `repository.directory`, `files` and `license`
@@ -996,20 +1021,46 @@ built — which is why it is filed as an epic rather than left as a release chec
 - Verified on a repository dogear has never seen — a fresh Vite app, not `examples/react-app`,
   which resolves the workspace copies and therefore proves nothing about an install.
 
-This is the one user journey nobody has run start to finish, and it is the first one a new
-user hits. It is deliberately ordered before G4: a tarball can be installed locally, so
-publishing is not a prerequisite for finding out whether the install works.
+This was the one user journey nobody had run start to finish, and it is the first one a new
+user hits. It was deliberately ordered before G4: a tarball can be installed locally, so
+publishing is not a prerequisite for finding out whether the install works. Running it is
+what found the two facts in G3's Decisions entries.
+
+**G5 — The published names**
+- The three packages publish as `dogear-cli`, `dogear-core` and `dogear-vite`, and
+  `dogear-queue` keeps its `private: true`. The `dogear` organization was taken; see What
+  dogear is, above.
+- Nothing a user types changes but the package names: the binary is still `dogear`, the
+  plugin is still `dogear()`, the MCP server is still registered under `dogear`, and the
+  on-disk contract — `.dogear/`, `~/.dogear/`, the attributes, the sentinel — is untouched.
+- The production-leak gate still names every package. Its rule was the prefix `@dogear/`,
+  which is not expressible unscoped without colliding with `data-dogear-src`.
+
+**G6 — The package pages say what the code does**
+- The three READMEs agree with the code on what `dogear init` writes, what `--agent` and
+  `--undo` do, and what an endpoint may be.
+- `.dogear/config.json`'s keys are documented **in a published README**. They exist only in
+  this document today, and this document is not in the tarball.
+- A reader who cannot see the overlay has somewhere to look, and a reader who pressed
+  `Ctrl+Alt+D` can find the way back.
 
 **G4 — Publishing from CI, with provenance**
-- A tagged release publishes all three packages from GitHub Actions.
+- A tagged release publishes from GitHub Actions, and only the three packages.
 - Publishing uses OIDC trusted publishing — no stored credential, and provenance
   attestations emitted automatically. See Repo and publishing for why this is not optional.
-- The first publish of each scoped package uses `--access public`.
+- `npm i -g dogear-cli` from the public registry works on a machine that has never seen
+  this repository.
+
+G4 is last, and G5 and G6 are before it for the same reason: npm renders the README a
+package carried *at publish time*, and a name cannot be corrected after someone has
+installed it.
 
 ### Non-functional requirements
 
-- **Browsers:** Firefox, Chrome, Safari. Firefox is the point — it's what an extension
-  can't give you.
+- **Browsers:** Firefox, Chrome, Edge. Firefox is the point — it's what an extension
+  can't give you. **Safari is intended and not yet verified** — B8 (#35) is the story, and
+  until it closes the README claims the three above and not Safari. Corrected during G1,
+  which would otherwise have shipped a user-facing browser list this one disagreed with.
 - **Node:** `^20.19.0 || >=22.12.0`, matching Vite's own floor (Vite is at 8.2.1).
 - **Overhead:** the transform must not make dev startup or HMR noticeably slower.
   Measure before optimizing; the budget is "unnoticeable," not a number.
@@ -1028,7 +1079,7 @@ Increasing order of how much can go wrong.
 | **M2** | Localization | C1–C5 | The attribute transform. Deterministic, synchronous, unit-testable against fixture files. |
 | **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
 | **M4** | Install and init | E1–E8 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
-| **M5** | Release | G1–G4 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages are private and unpublished until now, so `npm i -D @dogear/vite` resolves to nothing and the install path M4 prints instructions for has never been run by anyone. |
+| **M5** | Release | G1–G6 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages were private and unpublished until this milestone, so `npm i -D dogear-vite` resolved to nothing and the install path M4 prints instructions for had never been run by anyone. |
 | — | Safety | F1–F4 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
 
 Two deliberate orderings worth noting:
@@ -1062,7 +1113,7 @@ schema from a config that opted into every default.
 **E4 shipped the config file without a reader; the precedence chain became E7.**
 Four code comments assigned the reading half to E4 by name, and the issue's acceptance
 criteria covered only the `.gitignore` split. Splitting on that seam keeps this ticket
-inside `@dogear/cli`, and keeps `hosts` — the one config key that feeds F3's runtime host
+inside `dogear-cli`, and keeps `hosts` — the one config key that feeds F3's runtime host
 guard, a production-safety layer — out of a ticket about ignore rules. The cost is a
 release where `.dogear/config.json` exists and nothing consumes it, which is visible and
 harmless; the alternative was one ticket spanning three packages and touching the last
@@ -1093,9 +1144,9 @@ a dev server killed by a data file, which is the failure this whole rule exists 
 
 **`hosts` is omitted from the wire when the config file does not set one. Settled during
 E7.** The plugin could resolve `hosts` to `DEFAULT_HOSTS` and always serialise the array;
-instead the key is absent unless the file supplied it, and `@dogear/core` applies its own
+instead the key is absent unless the file supplied it, and `dogear-core` applies its own
 defaults. The reason is the one E4 already recorded for not writing defaults into the config
-file: a restated default *pins* it. `@dogear/vite` and `@dogear/core` version independently,
+file: a restated default *pins* it. `dogear-vite` and `dogear-core` version independently,
 so a plugin one release behind would keep overriding core's list with a stale copy on behalf
 of a project that never expressed an opinion about it. Omission is the only form under which
 the two halves can move separately.
@@ -1107,7 +1158,7 @@ honoured as itself, and `enabled: false` remains the clearer way to say the same
 Core resolves the list **all-or-nothing**, unlike every other field it resolves per-field: a
 malformed array falls back to the defaults rather than to the strings inside it, because half
 of a safety list is not a safety list and filtering would silently *widen* whatever the author
-was narrowing. The per-entry dropping happens in `@dogear/vite`, which reads the file in a
+was narrowing. The per-entry dropping happens in `dogear-vite`, which reads the file in a
 terminal and can name what it dropped. Core is silent, for F3's usual reason.
 
 **`normaliseEndpoint` rejects protocol-relative paths, queries and fragments. Settled during
@@ -1186,7 +1237,7 @@ original criterion was false in both directions.**
 "It never appears in the user's own DOM queries or snapshot tests" covers two scenarios and
 does not survive either. A **component snapshot test** never sees dogear at all: the script
 reaches a page only through the dev server's `transformIndexHtml`, a jsdom component test
-loads no HTML document, and `@dogear/core` is in nobody's import graph — A1 already
+loads no HTML document, and `dogear-core` is in nobody's import graph — A1 already
 guaranteed this, so B7 was claiming credit for it. A **browser test driving the real dev
 server** is the case where B7 earns its keep, and there "never appears" is unachievable:
 anything rendered is a node, and `document.querySelectorAll('*')` finds it wherever it sits.
@@ -1259,7 +1310,7 @@ module script has `document.currentScript === null` — the attribute route does
 and a literal is the only form that stays typed on the plugin side. The sentinel is still
 carried twice, in the tag attribute and the body, for the reason A1 gave.
 
-The plugin reaches the bundle by resolving `@dogear/core/package.json` and joining
+The plugin reaches the bundle by resolving `dogear-core/package.json` and joining
 `dist/index.js`. Resolving the package *name* from Node names no `development` condition and
 lands on `dist/noop.js`, the inert build. A dedicated `./dev` subpath was rejected: it would
 be a second live entry point any bundler could follow into a production graph, which is
@@ -1280,7 +1331,7 @@ than a feature: one listener attached ad hoc falsifies it, and finding that one 
 exactly the retrofit B6 should not have to do. So B1 ships the registry — a single object
 every listener goes through, with a source test failing any module outside it that calls
 `addEventListener` — and `init()` returns the function that empties it. B6 adds a toggle, a
-shortcut, and `localStorage` on top; it touches nothing below. @dogear/vite exposes the
+shortcut, and `localStorage` on top; it touches nothing below. dogear-vite exposes the
 result as `window.__dogear.stop`, which makes the criterion provable by hand in a console a
 milestone early.
 
@@ -1508,9 +1559,9 @@ doesn't, nothing is missing. The hook must never be the only place a behavior li
 Machine-level tool, repo-level config — the CodeGraph model. It also absorbs the hook,
 removing a package that would have existed to hold fifty lines.
 
-**The queue file gets its own package, `@dogear/queue` — source-only and never published.
+**The queue file gets its own package, `dogear-queue` — source-only and never published.
 Settled during D1, overturning an earlier call.**
-`findGitRoot` was duplicated between `@dogear/vite` and `@dogear/cli` behind a parity test,
+`findGitRoot` was duplicated between `dogear-vite` and `dogear-cli` behind a parity test,
 and `git-root.ts`'s header recorded why: all three ways to share it — the CLI depending on
 the plugin, the plugin depending on the CLI, or a fourth package — were "worse than a
 fourteen-line duplicate", the last one because this document argued against a package
@@ -1527,7 +1578,7 @@ single consumer" argument does not reach it.
 Between the two live options the material cost is near identical: both are private,
 source-only, and inlined by their consumers at build time, so no published artifact gains a
 dependency and the install story stays three packages. What separates them is the effect on
-`@dogear/cli` — folding in would force a bin package to expose `./queue` and `./git-root`
+`dogear-cli` — folding in would force a bin package to expose `./queue` and `./git-root`
 subpaths that are really internal, and leave every later reader asking why a Vite plugin
 imports a CLI. A dedicated package keeps every dependency arrow pointing downward.
 
@@ -1590,6 +1641,25 @@ names, and accept a five-word window rather than the whole snippet for snippets 
 that. Checking all the sites is not re-anchoring — the pin is never rewritten, and the
 decision above still stands; it only widens where we look before *flagging*.
 
+**A short snippet falls back to a narrower window rather than demanding the whole thing.
+Amended during G3 (#44).**
+D5 exempted short snippets from windowing, reasoning that below five words there is nothing
+to slide and a one-word window matches almost any file. The floor is right; the exemption was
+scoped by the wrong property. It assumed *short* meant *static*, and the third bullet above
+already says why that fails: `Count is {count}` renders as `Count is 0` — three words, and
+interpolated, so it took the whole-snippet path and could never satisfy it.
+
+G3 found this on the counter button of a stock `npm create vite` app, flagged stale against a
+file nobody had touched, with the agent duly reporting that a correct line number was
+"likely off". That is the false-stale direction this entry calls the one that matters, on the
+most-clicked element of the most-used React starter.
+
+A short snippet now tries the whole thing first and then falls back to a window of
+`words.length - 1`, floored at **two** — so `Count is 0` matches on `count is`. Two rather
+than one preserves D5's actual concern: a snippet of two words or fewer gets no fallback at
+all, so a vanished `Save changes` still flags rather than being rescued by whichever of its
+words survived elsewhere.
+
 The asymmetry is what drives every remaining choice. A **false stale** tells the agent to
 distrust a correct line number on every prompt, which teaches everyone to ignore the marker
 and makes the feature worse than absent. A **false fresh** is the status quo: a wrong line
@@ -1632,9 +1702,9 @@ proves the annotations reached disk; `execCommand` can report success on a clipb
 refuses, and the in-memory queue is the one thing in dogear that cannot be recovered. A copy is
 therefore a read, and reads do not destroy.
 
-**The formatter moved to `@dogear/queue`, behind its own export subpath. Settled during D4.**
+**The formatter moved to `dogear-queue`, behind its own export subpath. Settled during D4.**
 Three callers now — the hook, the MCP server, and the clipboard — and the third is the browser.
-`@dogear/core` declares no dependencies and `@dogear/cli` is a bin package with no `exports`
+`dogear-core` declares no dependencies and `dogear-cli` is a bin package with no `exports`
 field, so the formatter could not stay where it was. The rejected alternative was a copy in core
 guarded by a drift test, which is the pattern already used for `SENTINEL` and the source
 attributes: that works for a constant, where the test can compare two strings, and does not for
@@ -1666,7 +1736,7 @@ is — an app binding the same chord must not also fire — and it is the one ch
 `event.repeat`, because neither of the others can fire twice and this one can.
 
 **Plugin install → printed, not written. Settled during E8.**
-Install step 6 said init *adds* `@dogear/vite` to devDependencies. Three things make writing it
+Install step 6 said init *adds* `dogear-vite` to devDependencies. Three things make writing it
 wrong, and only the first is temporary.
 
 Both dogear packages are unpublished, so there is no range init can write that `npm install`
@@ -1677,7 +1747,7 @@ repository it claimed to be setting up. And the edit accomplishes nothing on its
 config's `import` still fails until someone runs an install, so the command has to be run
 either way.
 
-`npm i -D @dogear/vite` needs no version-derivation logic in the CLI, cannot desync a lockfile,
+`npm i -D dogear-vite` needs no version-derivation logic in the CLI, cannot desync a lockfile,
 and is correct the day the packages publish. It also makes the step symmetric with the decision
 already beside it: init prints the `vite.config` change rather than editing it, and now prints
 the dependency rather than writing it, for adjacent reasons.
@@ -1828,9 +1898,13 @@ Each dev server serves its own endpoint and knows its own root, so port collisio
 repos cannot cause confusion. Worth stating because it's a real advantage over the
 extension approach, which only sees a URL.
 
-**Package naming → `@dogear/*` via a free npm organization.**
+**Package naming → `@dogear/*` via a free npm organization. Superseded during G5 — the
+org was taken. The packages publish unscoped as `dogear-{cli,core,vite}`; see the entry
+below. The account-versus-org reasoning here still stands and is why it is superseded
+rather than deleted.**
 The unscoped `dogear` is taken by an unrelated hapi plugin (v5.0.0, last published
-2022-06-15). An npm scope exists only if you own a user or an org of that name, and on npm
+2020-05-14; the registry's `modified` timestamp of 2022-06-15 is metadata, not a release).
+An npm scope exists only if you own a user or an org of that name, and on npm
 an "organization" carries no team semantics — it is simply the mechanism for owning a scope
 that isn't already your username. It is free for unlimited public packages and keeps
 publishing under one identity. An earlier draft called for a second *personal account*
@@ -1873,16 +1947,16 @@ export, which the parity test would force `noop.ts` to mirror, which ships the l
 every correct production build. The dev-client entry `client.ts` can, because it is in no
 exports map and has no noop counterpart.)*
 
-**Sentinel in `@dogear/vite` → a second copy behind a drift test, not an import from core.**
+**Sentinel in `dogear-vite` → a second copy behind a drift test, not an import from core.**
 A1 makes the plugin the sentinel's first emitter, which raises the question of how the
 plugin reaches a constant that lives in core. The obvious answer — a `./sentinel` subpath on
-core's exports map — was rejected. Importing `@dogear/core` by name resolves through the
+core's exports map — was rejected. Importing `dogear-core` by name resolves through the
 exports map to `dist/`, so `npm run typecheck` would need a prior `npm run build`; typecheck
 runs on every turn that touches a `.ts` file, so that is a permanent cost for a frozen
 twenty-character string. A relative import of core's source is unavailable too:
 `packages/vite/tsconfig.build.json` sets `rootDir: "src"` and declaration emit rejects
 anything above it. And architecturally the plugin never imports dogear's browser half — it
-emits a `<script>` tag — so keeping `@dogear/core` unresolvable from the Node-side plugin
+emits a `<script>` tag — so keeping `dogear-core` unresolvable from the Node-side plugin
 keeps that boundary honest. The duplicated literal is safe because a test in
 `packages/vite/src` imports both and fails on divergence; test files sit outside
 `tsconfig.build.json` and the tsup entry, so the `rootDir` rule does not reach them.
@@ -2024,11 +2098,141 @@ No ESLint: with `strict` on and Prettier owning formatting, a linter's remaining
 project this size didn't justify the config surface. `lint` is defined as
 `format:check && typecheck` so the name still means something.
 
+**`dogear-vite` depends on `dogear-core` at `^0.1.0`, not `*` and not a pin. Settled
+during G2.**
+G2 (#43) was scoped as the `private` flag and the version, on the stated grounds that the
+manifests were otherwise written correctly when each package was created. They were, with one
+exception that only becomes wrong at the moment the flag drops: the dependency was `"*"`, a
+workspace wildcard that resolves to the local copy while developing and **publishes
+verbatim**, so any future `dogear-core` — including one that changed the bundle contract —
+would satisfy an installed plugin.
+
+`^0.1.0` rather than an exact pin because this document already assumes the two version
+independently: the `hosts` entry above omits the key from the wire precisely so a plugin one
+release behind cannot override core's list, which presumes they can move separately. Under
+0.x semver `^0.1.0` is `>=0.1.0 <0.2.0` — core ships patches on its own, and a `0.2.0` that
+changes what the plugin serves at `<endpoint>/client.js` forces a plugin release, which is
+the coupling that genuinely exists.
+
+The consequence worth recording is that a wildcard is now a **test failure** rather than a
+convention: `scripts/packaging.test.ts` refuses `*`, `latest` and the `workspace:` protocol
+forms, because `*` is what `npm install -w` writes back and the regression would otherwise be
+silent until someone installed the published plugin.
+
+**Being wired is two independent facts — a manifest declaration and a config that calls the
+plugin — and init checks both. Settled during G3.**
+E8 keyed `guidance()` on `DetectedApp.plugin` alone, which is a *manifest* fact, on the
+reasonable-sounding grounds that an app already declaring the plugin does not need telling to
+install it. True, and it answers the wrong question: `npm i -D dogear-vite` makes the
+declaration true and changes nothing about the config. G3 (#44) did the two steps in that
+order and found init reporting `nothing changed` with no snippet over an app whose overlay
+could never load. It is the same trap E1 named — *check for the state you need, not for the
+path being occupied* — one level up.
+
+`DetectedApp.configured` is the second fact, and each half of the block is now printed only
+when its own half is missing: an app with the package and no plugin call gets the snippet and
+is **not** told to install what it already has, and the install line's `then,` lead — which
+only reads as a sequel to a snippet — becomes `install it` when it stands alone.
+
+It is a **substring test, not a parse**, and the asymmetry with `guidance.ts`'s refusal to
+rewrite a config is the point: rewriting safely requires parsing, and a wrong guess is a dev
+server that will not start, while deciding whether to *print a hint* fails cheaply in both
+directions — a stray mention in a comment costs a suppressed hint, a missed one costs a
+redundant hint beside a config that already works. An unreadable config reads as `false`,
+which is the direction that prints.
+
+**A missing local `dogear-cli` is a detection *remark*, not a step note, and it speaks for the
+prompt hook too. Settled during G3.**
+E3 had `mcp-config.ts` note it, gated on `jobs.length > 0` — reasoning that "a repository whose
+configs are all already correct does not need telling how the CLI resolves." G3 (#44) walked
+the documented global-only install and found the hole: the config being correct and the path
+inside it resolving are different questions. The note fired once, on the run that created
+`.mcp.json`, and every re-run afterwards reported `nothing changed` over an MCP server that
+exited 1 with `MODULE_NOT_FOUND` on spawn. The warning was transient; the breakage was not.
+
+Re-keying it on a registration *existing* fixed the firing and broke the report: **step notes
+suppress `nothing changed`**, so a repository earning this on every run never got a verdict
+again — which is precisely the trap E2 already identified for its own remarks, and which the
+built-binary suite caught within one run of the change.
+
+The discriminator in `report()` settles where it belongs: *a step note qualifies what init did
+or declined to do; a remark describes the repository.* Init declined nothing here — it wrote
+the registration, correctly. What is wrong is the repository, and it stays wrong until someone
+installs the package. So it is a remark, computed in `scaffold()` from the resolved `Wiring`
+rather than folded into `Detection`, which would make the `agent:` findings line report a
+preference as an observation. It prints on every run and silences nothing.
+
+It also names the **prompt hook**, which had no warning of its own and is the worse of the two
+failures: an MCP server that will not start is silent until you ask for it, while a
+`UserPromptSubmit` entry pointing at a missing file fails on *every prompt the user types* —
+the same shape E6 (#39) was filed to prevent, arrived at from the other direction. The wording
+comes from `Wiring.hook`, so `--no-hook` is not told about a hook it declined, and
+`--agent=none` gets nothing at all because nothing then points at `CLI_ENTRY`.
+
+**Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
+G5.**
+The `dogear` organization was taken, which this document had planned for — but the fallback
+it named reintroduces exactly the doubled name the organization was chosen to avoid, and
+puts a personal handle in every install line and on every package page. Unscoped costs one
+thing and buys two: it gives up the scope as a namespace others cannot squat, and it removes
+`--access public` from the release entirely (only scoped packages default to restricted)
+while keeping `npm i -g dogear-cli` short enough to read aloud.
+
+The rename is otherwise invisible, and that is deliberate: the binary is still `dogear`, the
+plugin export and Vite plugin id are still `dogear`, the MCP server is registered under the
+key `dogear`, and every on-disk name — `.dogear/`, `~/.dogear/projects.json`,
+`data-dogear-src`, the sentinel, `<dogear-queue>`, `<!-- dogear:start -->`, the three
+`dogear_*` tools — is untouched. **The one thing that could not survive the change
+mechanically is the production-leak gate.** Its `package-specifier` rule was the prefix
+`@dogear/`, which covered a package added later for free; `dogear-` cannot replace it,
+because that string is a substring of `data-dogear-src` and `data-dogear-component`, whose
+rules sit in the same table. So the gate now names each package explicitly, and
+`packaging.test.ts` asserts every published name is in that list — an explicit list is a
+list that can go stale, and the test is what stops it.
+
+**The tag is a trigger, not a manifest. Settled during G4.**
+`git tag v0.1.0` starts the release; what publishes is decided by comparing each
+`package.json` version against the registry and skipping what is already there. The
+alternative — the tag naming the version, refusing to publish if a manifest disagrees — is
+simpler to read and quietly forces lockstep versions, which is the thing G2 decided against
+when it gave `dogear-vite` a caret range on `dogear-core` rather than a pin. A release where
+core is at `0.1.2` and vite at `0.3.0` is expressible under one tag only if the tag is not
+authoritative. Two consequences worth having: a partially-failed run is re-runnable, because
+the packages that made it are skipped rather than colliding; and tagging without bumping
+publishes nothing and goes green, which is why the job emits a warning line and a
+step-summary table rather than a silent success.
+
+**The first publish of each package cannot use OIDC, and that is npm's constraint rather
+than ours. Settled during G4.**
+A trusted publisher is configured *on a package*, and npm has no way to configure one for a
+package that does not exist yet (npm/cli#8544; `npm trust` says so outright). PyPI allows
+it; npm does not. So each package is bootstrapped by hand — a throwaway `0.0.1` published
+interactively, the trusted publisher configured against the new package page, then the real
+`0.1.0` published by the workflow with provenance.
+
+**The placeholder takes `latest` and there is no way to stop it.** G4 planned to publish it
+under `--tag bootstrap` so the package would carry no `latest` at all, and a plain
+`npm i dogear-vite` would then error rather than install a placeholder. That is not how the
+registry behaves: every package must have a `latest`, so the **first** publish claims it
+whatever `--tag` says, and `latest` cannot afterwards be removed. Found by running it.
+
+What actually covers the window is smaller and sufficient: the placeholder is `npm
+deprecate`d, so anyone who installs it in the days before the release gets a warning naming
+the version to use, and the tagged release moves `latest` to `0.1.0` on its own. The
+exposure is a package nobody has been told exists. `--tag bootstrap` is still passed — it
+costs nothing and is correct for any *later* out-of-band publish — but it is not what makes
+this safe.
+
+This does not weaken the "no stored credential" rule — the bootstrap is a human at a
+terminal with 2FA, not a secret in the repository. What it costs is that the very first
+version of each package carries no provenance attestation, which is why the placeholder is
+`0.0.1` and deprecated rather than the `0.1.0` anyone installs.
+
 ---
 
 ## Still open
 
-None of these block M0.
+None of these blocked M0, and none of them blocks the release.
 
 - **Screenshots.** An extension gets `captureVisibleTab` free; a page script needs
   `getDisplayMedia` (a permission prompt every time) or canvas rasterization (heavy,
@@ -2054,7 +2258,8 @@ None of these block M0.
 - Each `package.json` needs `repository.directory` pointing at its subfolder — without it
   every npm page links to the repo root.
 - `files` array so tarballs ship `dist/` and not tests and fixtures.
-- Scoped packages need `npm publish --access public` on first publish.
+- The packages are unscoped, so `--access public` does not apply — only scoped packages
+  default to restricted. See the naming entry in the Decisions log.
 
 **Publishing uses OIDC trusted publishing from GitHub Actions. This is no longer
 optional:**
@@ -2065,8 +2270,17 @@ optional:**
   automatically** — no `--provenance` flag. Provenance is a meaningful trust signal for a
   tool people install into their build pipeline.
 - Trusted-publisher configurations created **after 20 May 2026** must explicitly select at
-  least one allowed action. Ours will be, so the config must name `npm publish` rather
-  than relying on the old implicit default.
+  least one allowed action. Ours are, so each config names `npm publish` rather than
+  relying on the old implicit default.
+- It needs **npm ≥ 11.5.1 and Node ≥ 22.14.0**, which is above both floors in `engines`.
+  The publish job therefore runs on Node 24 and checks its own npm version; the matrix that
+  proves the floors is the verify job. An older npm does not fail with a version message —
+  it looks for a token that does not exist and reports an auth error.
+- **A trusted publisher cannot be configured for a package that does not exist**, so each
+  package's first publish is manual. See the Decisions log.
+- The configuration names the **workflow filename**. `release.yml` is part of the publish
+  credential: moving or renaming it breaks publishing with an auth error that does not
+  mention the file.
 
 ---
 

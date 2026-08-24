@@ -26,7 +26,7 @@ import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE } from './stamp.js'
  * source-level assertion in ./stamp.test.ts is only a proxy for it.
  *
  * A temp directory rather than examples/react-app, for the reason inject.test.ts gives —
- * the example resolves @dogear/vite through its exports map to dist/, so pointing at it
+ * the example resolves dogear-vite through its exports map to dist/, so pointing at it
  * would make `npm test` depend on a prior build.
  */
 

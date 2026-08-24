@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import type { StoredAnnotation } from '@dogear/queue'
+import type { StoredAnnotation } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { appearsIn, findStale, normalize } from './stale.js'
@@ -102,15 +102,51 @@ describe('appearsIn()', () => {
     { why: 'exactly the window length', snippet: 'one two three four five', want: true },
     { why: 'one word, absent', snippet: 'nowhere', want: false },
     {
-      why: 'at the window length, absent',
+      why: 'at the window length with one word changed, via the fallback',
       snippet: 'one two three four six',
-      want: false,
+      want: true,
     },
-  ])('a short snippet must match WHOLE — $why', ({ snippet, want }) => {
-    // Below the window there is nothing to slide, so windowing would degrade to matching a
-    // single word against the entire file — which almost always succeeds.
+  ])('a short snippet tries WHOLE first — $why', ({ snippet, want }) => {
     const file = normalize('const items = ["Overview"]; // one two three four five')
     expect(appearsIn(snippet, file)).toBe(want)
+  })
+
+  /**
+   * G3 (#44). The rule used to be "short snippets must match whole", on the grounds that a
+   * short label is a static one and windowing it would degrade to matching a single word
+   * against the whole file. The first half of that does not hold: `Count is {count}` renders
+   * as `Count is 0`, which is three words and interpolated, so it took the whole-snippet path
+   * and could never satisfy it. A stock `npm create vite` counter button was flagged stale
+   * against an untouched file.
+   */
+  describe('a short snippet that is interpolated rather than static', () => {
+    const COUNTER = normalize(
+      '<button type="button" className="counter" onClick={...}>Count is {count}</button>',
+    )
+
+    it('is fresh on the static run either side of the interpolation', () => {
+      expect(appearsIn('Count is 0', COUNTER)).toBe(true)
+    })
+
+    it('is fresh however the interpolated value renders', () => {
+      expect(appearsIn('Count is 41', COUNTER)).toBe(true)
+    })
+
+    it('still flags a short snippet that shares no run with the file', () => {
+      expect(appearsIn('Submit the form', COUNTER)).toBe(false)
+    })
+
+    it('gives two words and fewer no fallback at all', () => {
+      // `words.length - 1` is 1 there, and FLOOR refuses it — otherwise a genuinely vanished
+      // two-word label would be rescued by whichever of its words survived elsewhere. `count`
+      // is very much still in this file, and that is the whole point: the pair is not.
+      expect(appearsIn('Count gone', COUNTER)).toBe(false)
+      expect(appearsIn('Vanished', COUNTER)).toBe(false)
+    })
+
+    it('does not let a single surviving word carry a three-word snippet', () => {
+      expect(appearsIn('count the beans', COUNTER)).toBe(false)
+    })
   })
 
   it('a LONGER snippet needs only a window, not the whole thing', () => {

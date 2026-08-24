@@ -3,7 +3,7 @@
  * of production".
  *
  * READ THIS BEFORE CONCLUDING IT IS WHAT KEEPS DOGEAR OFF PRODUCTION SITES. It is not.
- * `apply: 'serve'` in @dogear/vite is the primary defense; the plugin does not exist during
+ * `apply: 'serve'` in dogear-vite is the primary defense; the plugin does not exist during
  * `vite build`, so on a correctly built site this file is never downloaded, never parsed,
  * and never called. This is the *last* line — the one that runs only in the scenario where
  * every structural layer already failed and core is somehow live in a real user's browser.
@@ -21,7 +21,7 @@
  * rule beside this list.
  *
  * The brief's Config block calls this `hosts`, and E7 (#40) is what plugged it in: the key is
- * read from `.dogear/config.json` by @dogear/vite, rides the config parameter, and reaches
+ * read from `.dogear/config.json` by dogear-vite, rides the config parameter, and reaches
  * {@link isCurrentHostAllowed} as its argument. `dogear init` writes `version` and nothing
  * else, so a repo that has never edited that file names no hosts and lands here.
  *
@@ -80,7 +80,7 @@ export function isAllowedHost(
  * or a non-DOM context without throwing. Its absence is treated as "not local", for the
  * same reason an empty hostname is: there is no origin to judge.
  *
- * `hosts` is E7's (#40) arrival: `.dogear/config.json`'s list, layered by @dogear/vite and
+ * `hosts` is E7's (#40) arrival: `.dogear/config.json`'s list, layered by dogear-vite and
  * carried on the config parameter. Omitted means the defaults, so every existing bare call
  * behaves exactly as before — and `isAllowedHost`'s own default parameter is what handles
  * the `undefined`, rather than a second copy of the fallback here.

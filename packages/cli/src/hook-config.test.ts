@@ -77,7 +77,7 @@ describe('createHookStep() writing the entry', () => {
 
     expect(command?.command).toBe('node')
     expect(command?.args).toEqual([
-      '${CLAUDE_PROJECT_DIR}/node_modules/@dogear/cli/dist/cli.js',
+      '${CLAUDE_PROJECT_DIR}/node_modules/dogear-cli/dist/cli.js',
       'hook',
     ])
   })
@@ -218,7 +218,7 @@ describe('createHookStep() re-running', () => {
   it('recognises the hook even when the user changed its timeout', () => {
     seed(
       '{\n  "hooks": {\n    "UserPromptSubmit": [{ "hooks": [{ "command": "node", ' +
-        '"args": ["${CLAUDE_PROJECT_DIR}/node_modules/@dogear/cli/dist/cli.js", "hook"], ' +
+        '"args": ["${CLAUDE_PROJECT_DIR}/node_modules/dogear-cli/dist/cli.js", "hook"], ' +
         '"timeout": 30 }] }]\n  }\n}\n',
     )
 
@@ -238,7 +238,7 @@ describe('createHookStep() re-running', () => {
     const planned = plan()
     seed(
       '{\n  "hooks": {\n    "UserPromptSubmit": [{ "hooks": [{ "command": "node", ' +
-        '"args": ["node_modules/@dogear/cli/dist/cli.js", "hook"] }] }]\n  }\n}\n',
+        '"args": ["node_modules/dogear-cli/dist/cli.js", "hook"] }] }]\n  }\n}\n',
     )
 
     planned?.change?.apply()
@@ -302,7 +302,7 @@ describe('taking the hook back out — E6 (#39)', () => {
     // Spliced rather than deleted — the doubled file is not byte-identical to what init writes,
     // so the whole-file rule does not apply and both entries come out one at a time. The empty
     // containers they leave go with them.
-    expect(read()).not.toContain('@dogear/cli')
+    expect(read()).not.toContain('dogear-cli')
     expect(JSON.parse(read()) as unknown).toEqual({})
   })
 
@@ -312,13 +312,13 @@ describe('taking the hook back out — E6 (#39)', () => {
     // is the assertion that would fail if they did.
     seed(
       '{\n  "hooks": {\n    "UserPromptSubmit": [\n      { "hooks": [{ "type": "command", ' +
-        '"command": "node", "args": ["node_modules/@dogear/cli/dist/cli.js", "hook"], ' +
+        '"command": "node", "args": ["node_modules/dogear-cli/dist/cli.js", "hook"], ' +
         '"timeout": 60 }] }\n    ]\n  }\n}\n',
     )
 
     undo()
 
-    expect(read()).not.toContain('@dogear/cli')
+    expect(read()).not.toContain('dogear-cli')
   })
 
   it('plans nothing when there is no settings.json', () => {

@@ -16,8 +16,8 @@ import { tempPathFor } from './queue.js'
  * `dogear status` (E5, #30).
  *
  * **Why this lives in a package named for the queue.** The registry is not the queue, but it
- * has the queue's two consumers and the queue's two concurrency rules: `@dogear/vite` writes
- * it, `@dogear/cli` reads it, and neither can import the other. That is the same argument
+ * has the queue's two consumers and the queue's two concurrency rules: `dogear-vite` writes
+ * it, `dogear-cli` reads it, and neither can import the other. That is the same argument
  * that created this package during D1, and it reaches the registry unchanged — two
  * implementations of one file format disagreeing is how a user's state gets lost silently.
  * A fifth workspace for eighty lines is the thing this repository has now argued against

@@ -1,5 +1,5 @@
 /**
- * The inert build of @dogear/core.
+ * The inert build of dogear-core.
  *
  * package.json's `exports` map routes both the `production` condition and the
  * catch-all `default` here, so a bundler that has never heard of dogear's
@@ -63,7 +63,7 @@ export function isCurrentHostAllowed(_hosts?: readonly string[]): boolean {
  * **It must return a function**, and that is the whole reason this has a body rather than
  * being `() => undefined`. The idiom `init()` is documented under is
  * `const stop = init(); …; stop()`, and F1's layer 2 fixture uses the dynamic form
- * `import('@dogear/core').then((m) => m.init())`. A noop returning `undefined` turns that
+ * `import('dogear-core').then((m) => m.init())`. A noop returning `undefined` turns that
  * into `stop is not a function` — a crash, in a production bundle, from the module whose
  * entire job is to make production a no-op.
  *

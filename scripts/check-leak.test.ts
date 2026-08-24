@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { SENTINEL } from '../packages/core/src/sentinel.js'
-import { formatFindings, scanBuildOutput, scanManifest } from './check-leak.js'
+import { RULES, formatFindings, scanBuildOutput, scanManifest } from './check-leak.js'
 
 /**
  * These tests exist because the gate cannot prove itself. On a healthy repo the real
@@ -30,6 +30,25 @@ function write(name: string, contents: string): string {
   return path
 }
 
+describe('the rule table', () => {
+  it('has no needle that is a substring of another', () => {
+    // The structural version of what the detection table below asserts case by case, and
+    // the reason G5's package rule names each package instead of using the prefix
+    // `dogear-`: that string sits inside both `data-dogear-src` and
+    // `data-dogear-component`, so every stamped attribute would report twice and the
+    // report would name two rules for one bug. Cheap to state, and it fails at the edit
+    // rather than at the fixture.
+    for (const rule of RULES) {
+      const others = RULES.filter((other) => other !== rule)
+
+      expect(
+        others.filter((other) => other.needle.includes(rule.needle)),
+        `${rule.name}'s needle "${rule.needle}" is contained in another rule's.`,
+      ).toEqual([])
+    }
+  })
+})
+
 describe('scanBuildOutput — detection', () => {
   it.each([
     {
@@ -44,15 +63,18 @@ describe('scanBuildOutput — detection', () => {
     },
     {
       // Only the component attribute in this fixture, and only the source attribute in the
-      // one above: each row asserts exactly one finding, and the two needles are not
-      // substrings of one another, so neither row can trip the other's rule.
+      // one above: each row asserts exactly one finding, and no needle is a substring of
+      // another, so no row can trip a different row's rule. That is why the package rule
+      // names each package rather than using the prefix `dogear-`, which is a substring of
+      // both attributes — see PACKAGE_SPECIFIERS. The `toHaveLength(1)` here is what
+      // catches anyone who reintroduces it.
       rule: 'component-attribute',
       contents: '<div data-dogear-component="Button">hi</div>',
       why: "C5's transform stamped production DOM",
     },
     {
       rule: 'package-specifier',
-      contents: 'import x from "@dogear/core"',
+      contents: 'import x from "dogear-core"',
       why: 'dogear was in the module graph',
     },
   ])('flags $rule — $why', ({ rule, contents }) => {
@@ -165,10 +187,15 @@ describe('scanBuildOutput — refusing to pass vacuously', () => {
 
 describe('scanManifest', () => {
   it.each([
-    { field: 'dependencies', name: '@dogear/vite', flagged: true },
-    { field: 'dependencies', name: '@dogear/core', flagged: true },
+    { field: 'dependencies', name: 'dogear-vite', flagged: true },
+    { field: 'dependencies', name: 'dogear-core', flagged: true },
+    { field: 'dependencies', name: 'dogear-queue', flagged: true },
     { field: 'dependencies', name: 'dogear', flagged: true },
-    { field: 'devDependencies', name: '@dogear/vite', flagged: false },
+    // Exact match, not a prefix — see PACKAGE_SPECIFIERS for why the prefix is unusable
+    // unscoped. The cost is this row: a dogear package added later and not added to that
+    // list goes unflagged, which is what scripts/packaging.test.ts asserts against.
+    { field: 'dependencies', name: 'dogear-svelte', flagged: false },
+    { field: 'devDependencies', name: 'dogear-vite', flagged: false },
   ])('$field containing $name -> flagged=$flagged', ({ field, name, flagged }) => {
     const path = write('package.json', JSON.stringify({ [field]: { [name]: '*' } }))
 
@@ -182,7 +209,7 @@ describe('scanManifest', () => {
   it('explains why a runtime dependency is wrong', () => {
     const path = write(
       'package.json',
-      JSON.stringify({ dependencies: { '@dogear/vite': '*' } }),
+      JSON.stringify({ dependencies: { 'dogear-vite': '*' } }),
     )
 
     expect(scanManifest(path)[0]?.detail).toContain('devDependency')

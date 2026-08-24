@@ -1,9 +1,8 @@
 {
-  "name": "@dogear/cli",
-  "version": "0.0.0",
-  "private": true,
+  "name": "dogear-cli",
+  "version": "0.1.0",
   "type": "module",
-  "description": "The dogear CLI: init, mcp, prune, status.",
+  "description": "The dogear CLI: init, hook, mcp, prune, status.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -14,11 +13,9 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "bin": {
     "dogear": "./dist/cli.js"
   },
@@ -27,7 +24,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@dogear/queue": "*"
+    "dogear-queue": "*"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0"

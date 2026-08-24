@@ -37,7 +37,7 @@ import { TOOLS, callTool } from './tools.js'
  *
  * `../package.json` resolves the same from `src/` and from `dist/` — both are one level
  * below the package root — so this works built or not. The same `createRequire` trick
- * `@dogear/vite` uses to locate core's bundle.
+ * `dogear-vite` uses to locate core's bundle.
  */
 const VERSION = readVersion()
 
@@ -58,7 +58,7 @@ function readVersion(): string {
  * stable, and re-walking for `.git` on every call would be work for no answer. The queue's
  * *contents* are the opposite: every tool call re-reads the file, because a dev server may
  * have appended since the last one. Caching the queue at server start is the single mistake
- * `@dogear/queue`'s header exists to prevent.
+ * `dogear-queue`'s header exists to prevent.
  */
 export async function serve(gitRoot: string): Promise<number> {
   const server = new Server(

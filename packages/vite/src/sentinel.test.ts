@@ -8,8 +8,8 @@ import { describe, expect, it } from 'vitest'
 import { SENTINEL as CORE_SENTINEL } from '../../core/src/sentinel.js'
 import { SENTINEL } from './sentinel.js'
 
-describe('the sentinel copy in @dogear/vite', () => {
-  it('has not drifted from @dogear/core, which is what check:leak scans for', () => {
+describe('the sentinel copy in dogear-vite', () => {
+  it('has not drifted from dogear-core, which is what check:leak scans for', () => {
     expect(SENTINEL).toBe(CORE_SENTINEL)
   })
 })

@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import { queuePathFor, readQueue } from '@dogear/queue'
+import { queuePathFor, readQueue } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { ClientDist } from './client.js'
@@ -36,7 +36,7 @@ beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'dogear-endpoint-'))
   fellThrough = false
 
-  // A stand-in for @dogear/core's dist, written into the fixture rather than resolved from
+  // A stand-in for dogear-core's dist, written into the fixture rather than resolved from
   // the workspace: making this suite depend on `npm run build` would put `npm test` behind
   // a build, which the repo deliberately keeps it out from behind.
   writeFileSync(join(root, 'bundle.js'), BUNDLE_JS)
@@ -499,7 +499,7 @@ describe('routing', () => {
   })
 })
 
-describe('serving @dogear/core to the browser (B1)', () => {
+describe('serving dogear-core to the browser (B1)', () => {
   it('serves the bundle as JavaScript', async () => {
     // The MIME type is load-bearing, not cosmetic: the injected tag is `type="module"`, and
     // a module served as anything but a JavaScript MIME type is refused by the browser
@@ -562,7 +562,7 @@ describe('serving @dogear/core to the browser (B1)', () => {
       const body = await response.text()
 
       expect(response.status).toBe(200)
-      expect(body).toContain('npm run build -w @dogear/core')
+      expect(body).toContain('npm run build -w dogear-core')
       // Parses as a module rather than merely being 200 with plausible text.
       expect(() => new Function(body)).not.toThrow()
     } finally {

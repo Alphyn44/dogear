@@ -18,7 +18,7 @@ import { join, sep } from 'node:path'
  * planning turns one repository's problem into a stack trace; this runs before every step, so
  * a `package.json` with a trailing comma four directories down would take out an init that had
  * nothing to do with it. Every read degrades to `undefined` — the same posture
- * `@dogear/vite`'s `app-name.ts` takes toward the same file format, for the same reason: a
+ * `dogear-vite`'s `app-name.ts` takes toward the same file format, for the same reason: a
  * broken manifest somewhere in a working tree is an ordinary thing to find.
  *
  * **Nothing here writes, and nothing here guesses on the user's behalf.** Detection reports;
@@ -76,7 +76,7 @@ export interface DetectedAgent {
   readonly marker: string
 }
 
-/** Whether `@dogear/cli` is reachable from inside the repository. */
+/** Whether `dogear-cli` is reachable from inside the repository. */
 export type Cli = 'local' | 'absent'
 
 /** One directory with a Vite config in it — an app, as far as init is concerned. */
@@ -102,13 +102,30 @@ export interface DetectedApp {
    */
   readonly manifestDir: string | undefined
   /**
-   * Whether that manifest declares `@dogear/vite`, and in which field — E8 (#41).
+   * Whether that manifest declares `dogear-vite`, and in which field — E8 (#41).
    *
    * `runtime` is not merely unusual, it is the manifest half of the production leak
    * `scripts/check-leak.ts` exists to catch: a dev-only plugin in `dependencies` installs in
    * production even when every bundle is clean. init reports it and does not move it.
    */
   readonly plugin: Declaration
+  /**
+   * Whether {@link DetectedApp.config} mentions dogear at all — G3 (#44).
+   *
+   * {@link DetectedApp.plugin} is a *manifest* fact and this is a *config* fact, and the
+   * install path needs both: `npm i -D dogear-vite` makes the first true and changes nothing
+   * about the second. G3 walked into exactly that gap — the package installed, `dogear()` not
+   * in the `plugins` array, and `dogear init` reporting `nothing changed` with no snippet,
+   * because guidance keyed on the declaration alone. The overlay never loads in that state.
+   *
+   * **A substring test, deliberately not a parse.** ./guidance.ts refuses to *rewrite* a
+   * config because doing that safely means parsing it and a wrong guess is a dev server that
+   * will not start. Deciding whether to *print a hint* is a far cheaper question, and it fails
+   * cheaply in both directions: a stray mention in a comment costs a suppressed hint, and a
+   * missed one costs a redundant hint next to a config that already works. An unreadable
+   * config is `false`, which is the direction that prints.
+   */
+  readonly configured: boolean
 }
 
 export interface Detection {
@@ -138,9 +155,9 @@ export interface Detection {
    */
   readonly agents: readonly DetectedAgent[]
   /**
-   * Whether `@dogear/cli` is installed in, or declared by, this repository — E3 (#28).
+   * Whether `dogear-cli` is installed in, or declared by, this repository — E3 (#28).
    *
-   * The agent configs `dogear init` writes name `node_modules/@dogear/cli/dist/cli.js`, which
+   * The agent configs `dogear init` writes name `node_modules/dogear-cli/dist/cli.js`, which
    * is repo-relative so that the file stays correct for everyone who clones. That path is
    * written whatever this says; `absent` earns a `Plan.note` telling the user to install it,
    * because the alternative — resolving the *global* install and writing an absolute path into
@@ -195,13 +212,13 @@ const SKIP = new Set(['node_modules', 'dist', 'build', 'out', 'coverage'])
 const MAX_DEPTH = 3
 
 /** The package `dogear init` tells people to install. */
-const PLUGIN = '@dogear/vite'
+const PLUGIN = 'dogear-vite'
 
 /** The package whose `dist/cli.js` every config init writes points at. */
-const CLI = '@dogear/cli'
+const CLI = 'dogear-cli'
 
 /**
- * Where a local `@dogear/cli` puts the file every agent config init writes points at.
+ * Where a local `dogear-cli` puts the file every agent config init writes points at.
  *
  * **Repo-relative, and never the resolved global install** — E3 (#28). These configs are
  * committed, so an absolute path out of one developer's npm prefix is broken for everyone else
@@ -212,7 +229,7 @@ const CLI = '@dogear/cli'
  * form these configs use cannot run one. Same rule as the `UserPromptSubmit` hook, from the
  * brief's Delivery section.
  */
-export const CLI_ENTRY = 'node_modules/@dogear/cli/dist/cli.js'
+export const CLI_ENTRY = 'node_modules/dogear-cli/dist/cli.js'
 
 /**
  * What proves an agent is in use here — E3 (#28), first match wins per agent.
@@ -289,7 +306,7 @@ function agentsIn(root: string): readonly DetectedAgent[] {
 }
 
 /**
- * Is `@dogear/cli` reachable from inside this repository?
+ * Is `dogear-cli` reachable from inside this repository?
  *
  * **Two questions, either of which is a yes**, and they are not redundant. The file on disk is
  * the state that makes the written config work *today*; the manifest declaration is the state
@@ -466,6 +483,29 @@ function appAt(root: string, dir: string): DetectedApp | undefined {
     viteVersion: versionOf(manifest, 'vite'),
     manifestDir: nearest?.dir,
     plugin: declarationOf(manifest, PLUGIN),
+    configured: mentionsDogear(join(absolute, name)),
+  }
+}
+
+/**
+ * Does this Vite config reference dogear? See {@link DetectedApp.configured} for why a
+ * substring is the right instrument here and a parse is not.
+ *
+ * Word-bounded so `dogeared` and `undogear` do not count, and case-insensitive because the
+ * import specifier, the plugin call and a comment may each spell it differently. Never throws
+ * — detection runs before every step.
+ *
+ * **A hyphen is a word boundary, so `dogear-vite` matches, and it must.** Since G5 (#50) the
+ * package is named exactly that, so the specifier a wired config imports from is a hyphenated
+ * segment. An earlier version of this comment claimed the word boundary excluded
+ * `not-dogear-related`; it never did, and "fixing" the regex to honour that claim would make
+ * {@link DetectedApp.configured} report `false` for every correctly wired repository.
+ */
+function mentionsDogear(path: string): boolean {
+  try {
+    return /\bdogear\b/i.test(readFileSync(path, 'utf8'))
+  } catch {
+    return false
   }
 }
 

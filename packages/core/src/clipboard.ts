@@ -21,7 +21,7 @@
  * overlay looks like afterwards.
  */
 
-import type { StoredAnnotation } from '@dogear/queue/format'
+import type { StoredAnnotation } from 'dogear-queue/format'
 
 import type { QueueItem } from './queue.js'
 

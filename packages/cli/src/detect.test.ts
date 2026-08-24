@@ -62,6 +62,7 @@ describe('detect() on a single-package repository', () => {
         viteVersion: '^8.2.1',
         manifestDir: '',
         plugin: 'absent',
+        configured: false,
       },
     ])
   })
@@ -82,6 +83,7 @@ describe('detect() on a single-package repository', () => {
         viteVersion: '^8.2.1',
         manifestDir: '',
         plugin: 'absent',
+        configured: false,
       },
     ])
   })
@@ -165,8 +167,8 @@ describe('detect() and whether the plugin is already declared', () => {
   it.each([
     ['devDependencies', 'dev'],
     ['dependencies', 'runtime'],
-  ] as const)('reports @dogear/vite in %s as %s', (field, plugin) => {
-    manifest('package.json', { [field]: { '@dogear/vite': '^1.0.0' } })
+  ] as const)('reports dogear-vite in %s as %s', (field, plugin) => {
+    manifest('package.json', { [field]: { 'dogear-vite': '^1.0.0' } })
     file('vite.config.ts', '')
 
     expect(detect(root).apps[0]?.plugin).toBe(plugin)
@@ -183,7 +185,7 @@ describe('detect() and whether the plugin is already declared', () => {
     // Weaker than the version read on purpose. A key with a broken value is still someone
     // having declared the dependency, and telling them to install what their own manifest
     // names is the wrong correction to make.
-    manifest('package.json', { devDependencies: { '@dogear/vite': '' } })
+    manifest('package.json', { devDependencies: { 'dogear-vite': '' } })
     file('vite.config.ts', '')
 
     expect(detect(root).apps[0]?.plugin).toBe('dev')
@@ -192,7 +194,7 @@ describe('detect() and whether the plugin is already declared', () => {
   it('reads each app’s own manifest, so one wired app does not cover for another', () => {
     manifest('package.json', { workspaces: ['packages/*'] })
     manifest('packages/wired/package.json', {
-      devDependencies: { '@dogear/vite': '^1.0.0' },
+      devDependencies: { 'dogear-vite': '^1.0.0' },
     })
     manifest('packages/bare/package.json', {})
     file('packages/wired/vite.config.ts', '')
@@ -203,6 +205,59 @@ describe('detect() and whether the plugin is already declared', () => {
     )
 
     expect(byDir).toEqual({ 'packages/wired': 'dev', 'packages/bare': 'absent' })
+  })
+})
+
+/**
+ * G3 (#44): a manifest declaration and a config that calls the plugin are different facts,
+ * and the install path produces the first without the second every time.
+ */
+describe('detect() and whether the config calls the plugin', () => {
+  const CONFIG = [
+    "import { dogear } from 'dogear-vite'",
+    'export default { plugins: [dogear()] }',
+  ].join('\n')
+
+  it('reports configured for a config that imports and calls it', () => {
+    file('vite.config.ts', CONFIG)
+
+    expect(detect(root).apps[0]?.configured).toBe(true)
+  })
+
+  it('reports not configured for a config that does not mention it', () => {
+    file('vite.config.ts', "import react from '@vitejs/plugin-react'\n")
+
+    expect(detect(root).apps[0]?.configured).toBe(false)
+  })
+
+  it('is independent of the manifest declaration, in both directions', () => {
+    manifest('package.json', {
+      workspaces: ['packages/*'],
+      devDependencies: { 'dogear-vite': '^1.0.0' },
+    })
+    manifest('packages/installed/package.json', {
+      devDependencies: { 'dogear-vite': '^1.0.0' },
+    })
+    manifest('packages/edited/package.json', {})
+    // Installed but never added to the config — the state G3 walked into.
+    file('packages/installed/vite.config.ts', '')
+    // Added to the config but never installed: the import fails, and init must say so.
+    file('packages/edited/vite.config.ts', CONFIG)
+
+    const byDir = Object.fromEntries(
+      detect(root).apps.map((app) => [app.dir, [app.plugin, app.configured]]),
+    )
+
+    expect(byDir).toEqual({
+      'packages/installed': ['dev', false],
+      'packages/edited': ['absent', true],
+    })
+  })
+
+  it('does not count a longer word that merely contains it', () => {
+    file('vite.config.ts', "import x from './dogeared-helpers.js'\n")
+
+    expect(detect(root).apps[0]?.configured).toBe(false)
   })
 })
 
@@ -312,6 +367,7 @@ describe('detect() on a workspace', () => {
         viteVersion: '^8.2.1',
         manifestDir: 'examples/web',
         plugin: 'absent',
+        configured: false,
       },
     ])
   })
@@ -527,7 +583,7 @@ describe('detect() and which agent is in use — E3 (#28)', () => {
 
 describe('detect() and whether the CLI resolves locally — E3 (#28)', () => {
   it('reads an installed dist/cli.js as local', () => {
-    file('node_modules/@dogear/cli/dist/cli.js', '')
+    file('node_modules/dogear-cli/dist/cli.js', '')
 
     expect(detect(root).cli).toBe('local')
   })
@@ -535,7 +591,7 @@ describe('detect() and whether the CLI resolves locally — E3 (#28)', () => {
   it('reads a declaration as local even before anything is installed', () => {
     // A repository mid-clone is not misconfigured. The written path resolves after the next
     // install, so there is nothing to tell the user about.
-    manifest('package.json', { devDependencies: { '@dogear/cli': '^0.1.0' } })
+    manifest('package.json', { devDependencies: { 'dogear-cli': '^0.1.0' } })
 
     expect(detect(root).cli).toBe('local')
   })
@@ -543,7 +599,7 @@ describe('detect() and whether the CLI resolves locally — E3 (#28)', () => {
   it('reads a runtime declaration as local too', () => {
     // Unusual placement for a dev tool, but it still resolves — which is the only question
     // this field answers. E8's remark is what has opinions about the field it sits in.
-    manifest('package.json', { dependencies: { '@dogear/cli': '^0.1.0' } })
+    manifest('package.json', { dependencies: { 'dogear-cli': '^0.1.0' } })
 
     expect(detect(root).cli).toBe('local')
   })

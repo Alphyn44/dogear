@@ -1,4 +1,4 @@
-import { findGitRoot } from '@dogear/queue'
+import { findGitRoot } from 'dogear-queue'
 
 import type { Agent } from './detect.js'
 import { write } from './emit.js'

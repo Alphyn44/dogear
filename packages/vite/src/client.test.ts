@@ -26,7 +26,7 @@ import { DEFAULT_ENDPOINT } from './endpoint.js'
  * The guard on the plugin↔core contract.
  *
  * `packages/vite/src/client.ts` hand-writes copies of core's `Modifier` and `MODIFIERS` for
- * the reason the brief already settled for SENTINEL: importing `@dogear/core` by name
+ * the reason the brief already settled for SENTINEL: importing `dogear-core` by name
  * resolves through the exports map to `dist/`, so `npm run typecheck` — which runs on every
  * turn that touches a `.ts` file — would need a prior `npm run build`; and a relative import
  * of core's source is refused by `tsconfig.build.json`'s `rootDir: "src"`.
@@ -36,7 +36,7 @@ import { DEFAULT_ENDPOINT } from './endpoint.js'
  * Exactly the licence ./sentinel.test.ts already uses.
  */
 
-describe('the modifier contract with @dogear/core', () => {
+describe('the modifier contract with dogear-core', () => {
   it('has not drifted', () => {
     expect([...MODIFIERS].sort()).toEqual([...CORE_MODIFIERS].sort())
   })
@@ -69,7 +69,7 @@ describe('the modifier contract with @dogear/core', () => {
  * copies of the base path have to agree or a submit 404s against the app's SPA fallback —
  * which answers 200 with `index.html`, so it would not even look like a failure.
  */
-describe('the endpoint contract with @dogear/core', () => {
+describe('the endpoint contract with dogear-core', () => {
   it('agrees on the default', () => {
     expect(DEFAULT_ENDPOINT).toBe(CORE_DEFAULT_ENDPOINT)
   })
@@ -88,7 +88,7 @@ describe('the endpoint contract with @dogear/core', () => {
  * two hand-written copies of the type ever disagree about `hosts`, this file stops compiling
  * and `npm run typecheck` fails.
  */
-describe('the hosts contract with @dogear/core', () => {
+describe('the hosts contract with dogear-core', () => {
   it('serialises a list core would accept', () => {
     const config: InitOptions = buildClientConfig({
       endpoint: '/__dogear',
@@ -99,8 +99,8 @@ describe('the hosts contract with @dogear/core', () => {
   })
 
   it('leaves the key off entirely when no list was configured', () => {
-    // **Absent, not equal to the defaults.** Sending @dogear/vite's copy of DEFAULT_HOSTS
-    // would pin it: a plugin one version behind @dogear/core would keep overriding core's
+    // **Absent, not equal to the defaults.** Sending dogear-vite's copy of DEFAULT_HOSTS
+    // would pin it: a plugin one version behind dogear-core would keep overriding core's
     // list with a stale one it never chose — the same failure the brief's E4 entry rejects
     // for writing defaults into the config file. Omitted means "core decides".
     expect(buildClientConfig({ endpoint: '/__dogear' })).not.toHaveProperty('hosts')
@@ -210,7 +210,7 @@ describe('readConfig', () => {
 
 describe('resolveCoreDist', () => {
   it('finds the live bundle, not the noop', () => {
-    // The whole reason this goes via `@dogear/core/package.json`: resolving the package NAME
+    // The whole reason this goes via `dogear-core/package.json`: resolving the package NAME
     // from Node names no `development` condition, so it falls through the exports map to
     // dist/noop.js — the inert build. Serving that would leave the overlay silently doing
     // nothing, with no error anywhere to explain it.
