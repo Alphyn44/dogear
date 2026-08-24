@@ -1,0 +1,104 @@
+name: Bug report
+description: dogear behaves differently than its documentation says it should
+title: 'short description of the wrong behaviour'
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Before filing, the
+        [Troubleshooting section](https://github.com/Alphyn44/dogear#troubleshooting)
+        covers the common cases. An overlay that never appears is usually one of five
+        things, and it names the `[dogear]` line each one prints.
+
+        **Do not report a security vulnerability here.** Use private reporting instead:
+        see [SECURITY.md](https://github.com/Alphyn44/dogear/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happens
+    attributes:
+      label: What happens
+      description: The actual behaviour, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. dogear init in a fresh Vite app
+        2. add dogear() to vite.config.ts
+        3. npm run dev, hold Alt, click a button
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: dogear-output
+    attributes:
+      label: What your dev server printed
+      description: >-
+        Every line dogear writes starts with `[dogear]`. Whichever one you see (`ready`,
+        `no .git found above`, `disabled by`, or nothing at all) is usually the whole
+        diagnosis, so please paste it even if it looks unremarkable.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: dogear, Vite and Node. `npm ls dogear-vite dogear-cli` and `node -v`.
+      placeholder: 'dogear-vite 0.1.0, dogear-cli 0.1.0, vite 8.2.1, node 22.12.0'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package-manager
+    attributes:
+      label: Package manager
+      description: >-
+        Everything `dogear init` writes points at `node_modules/dogear-cli/dist/cli.js`,
+        so the install layout matters. Yarn's PnP linker has no `node_modules` at all.
+      options:
+        - npm
+        - pnpm
+        - yarn (node-modules linker)
+        - yarn (PnP)
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser
+      description: 'Safari is not yet verified; see #35.'
+      options:
+        - Firefox
+        - Chrome
+        - Edge
+        - Safari
+        - other
+        - not a browser problem
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: 'Windows 11, macOS 15, Ubuntu 24.04'
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: '`dogear()` is in my `vite.config`. Installing the package is only half the wiring'
+        - label: I am running a dev server, not a production build. dogear does not exist in a build, by design
+        - label: 'The page is on a hostname dogear allows: localhost, a private IP, or one I added to `hosts`'

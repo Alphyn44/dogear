@@ -1,0 +1,13 @@
+# Blank issues stay enabled on purpose. The forms here cover a bug report and the
+# maintainer's own story format. Anything else (a question, an idea, a "this bit of the
+# README is wrong") has nowhere to go otherwise, and a project that only accepts
+# well-formed bug reports hears about fewer bugs, not fewer problems.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Alphyn44/dogear/security/advisories/new
+    about: >-
+      Report privately. dogear is a dev-only tool, but it runs a local HTTP endpoint and
+      writes files at your git root, so please do not open a public issue for anything in
+      that area.
