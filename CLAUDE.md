@@ -54,9 +54,11 @@ implement → verify sequence.
 
 ### Issues
 
-Every issue you create follows `.github/ISSUE_TEMPLATE/story.md` (or `bug.md`).
+Every issue you create follows `.github/ISSUE_TEMPLATE/story.md` (or `bug.yml`).
 GitHub only applies those templates to the web form, never to `gh issue create
 --body`, so matching the format is on you — read the template file and follow it.
+`bug.yml` is an issue *form*, so there is no body to copy: reproduce its labels as
+headings, in order, and answer each one.
 
 Title format is `<story ID> — <short title>`, e.g. `C1 — Attribute transform`, so
 issues map back to the brief at a glance. **The brief is the spec; the issue is
