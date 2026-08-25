@@ -40,6 +40,8 @@ function detection(apps: readonly DetectedApp[], manager: Manager = 'npm'): Dete
   return {
     workspace: 'npm',
     manager,
+    // guidance() reads this no more than it reads `agents` — H6's remark is ./scaffold.ts's.
+    linker: 'node-modules',
     packages: apps.length,
     apps,
     agents: [],

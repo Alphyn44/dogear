@@ -163,6 +163,50 @@ describe('detect() and the package manager', () => {
   })
 })
 
+describe('detect() and the linker — H6 (#58)', () => {
+  beforeEach(() => {
+    manifest('package.json', {})
+    file('vite.config.ts', '')
+  })
+
+  it.each([
+    ['.pnp.cjs', 'pnp'],
+    ['.pnp.js', 'pnp'],
+  ] as const)('reads %s as %s', (artefact, linker) => {
+    // Both names: Yarn 2 wrote `.pnp.js` and Berry writes `.pnp.cjs`. A repository pinned to
+    // the older release is still one CLI_ENTRY cannot resolve in.
+    file(artefact, '')
+
+    expect(detect(root).linker).toBe(linker)
+  })
+
+  it('answers node-modules when nothing has been installed yet', () => {
+    // A fallback, like npm is for the manager: a repository that has installed nothing has no
+    // artefact either way, and node-modules is the layout the committed path already assumes.
+    expect(detect(root).linker).toBe('node-modules')
+  })
+
+  it('answers node-modules for a yarn repo that is not using PnP', () => {
+    // The case the whole field exists to distinguish. `manager: yarn` says nothing about
+    // whether there is a node_modules — Yarn's node-modules linker is a supported layout, and
+    // reading the linker off the manager would condemn every yarn user to H6's warning.
+    file('yarn.lock', '')
+
+    expect(detect(root).manager).toBe('yarn')
+    expect(detect(root).linker).toBe('node-modules')
+  })
+
+  it('reports the linker and the manager independently', () => {
+    // A PnP repository still has a yarn.lock, so the two fields are read from different
+    // artefacts and must not be collapsed into one answer.
+    file('yarn.lock', '')
+    file('.pnp.cjs', '')
+
+    expect(detect(root).manager).toBe('yarn')
+    expect(detect(root).linker).toBe('pnp')
+  })
+})
+
 describe('detect() and whether the plugin is already declared', () => {
   it.each([
     ['devDependencies', 'dev'],

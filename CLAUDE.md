@@ -257,6 +257,24 @@ across the whole matrix — two-space, four-space, tabs, CRLF, minified, BOM, no
 value-on-the-next-line, empty object — asserting valid JSON, byte preservation and idempotency
 for each, plus that CRLF files gain no lone `\n`.
 
+**H6 added `Detection.linker`, and it is separate from `Detection.manager` for the reason
+`manager` is separate from `workspace`.** Yarn spells the layout `nodeLinker` and pnpm has the
+same setting with the same `pnp` option, so *which tool installs here* cannot answer *is there a
+`node_modules` for `CLI_ENTRY` to resolve through* — and only the second question bears on the
+committed path. It is read from the generated `.pnp.cjs`/`.pnp.js`, never from `.yarnrc.yml`:
+the setting may be inherited from a parent directory or left at Yarn's default and written
+nowhere, while the artefact is always there. Same shape as `managerOf` reading the lockfile
+rather than the intent behind it. **The PnP arm of `cliNotInstalled` is checked *before*
+`wiring.cli`, and that order is the whole fix** — `cliIn` answers `'local'` from the manifest
+declaration when the file is absent, which is right for a repo mid-clone and wrong for one that
+will never have the file, so a PnP repo reached the old guard as `local` and init wrote a path
+resolving nowhere in silence. Reordering is not an option either: under PnP the install the
+other arm prescribes is the one the user has already done. It is a **remark**, not a step note
+and not a refusal, by the discriminator `cliNotInstalled` already documents — init wrote the
+registration correctly and it is the repository that is wrong. `test-packed/managers/` is the
+suite that proves all of it, including the negative; Yarn 1 is deliberately uncovered, since
+Berry supplies both the `node-modules` leg and the PnP one and classic has no PnP mode.
+
 **Everything E3 writes points at `node <path>`, never `dogear`** — a global npm bin on Windows is
 a `.cmd` shim the exec form cannot run. The MCP configs use the repo-relative
 `node_modules/dogear-cli/dist/cli.js` (an absolute global path would be committed and broken for
@@ -478,9 +496,10 @@ whether the package actually ships. H9 (#71) covers the ecosystem's blind spot: 
 `uses:` references, so H4's actionlint tarball (pinned by version and checksum as literals)
 is invisible to it.
 
-**`ci.yml` carries five jobs and `verify.yml` carries one, and the split is a rule rather
+**`ci.yml` carries six jobs and `verify.yml` carries one, and the split is a rule rather
 than an accident.** Everything that reaches the network beyond `npm ci` lives in `ci.yml`:
-`workflows` (actionlint), `packed` (the registry), `versions` and `dependencies` (H8 and H7).
+`workflows` (actionlint), `packed` and `managers` (the registry), `versions` and `dependencies`
+(H8 and H7).
 `verify.yml` is what `release.yml` gates on, so a release must never be able to fail because
 a registry, a GitHub Releases download or npm's audit endpoint was slow, or because an
 advisory was published that morning. `verify.yml`'s nine steps are the correctness gate and
@@ -555,17 +574,21 @@ are gone" assertion passes without testing anything. `teardown.test.ts` and
 `DOGEAR_HOME` at a temp directory so no suite can write to the real one. See the registry
 notes above for why that is a global rather than a convention.
 
-**Four vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
+**Five vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
 plus `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`
 runs it on every turn that touches TypeScript. Build-independent is the rule there, not
 hermeticity: `check-leak.test.ts` builds its own temp fixtures, while G1's
 `packaging.test.ts` and the two `docs.test.ts` suites read the repository's own committed
-files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other three need a build first:
+files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other four need a build first:
 `scripts/gate/*.test.ts` reads real build output under `npm run check:leak`,
-`packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`, and H1's
-`test-packed/*.test.ts` packs the real tarballs under `npm run test:packed`. Splitting
+`packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`, H1's
+`test-packed/*.test.ts` packs the real tarballs under `npm run test:packed`, and H6's
+`test-packed/managers/*.test.ts` installs them with pnpm and Yarn under
+`npm run test:managers`. Splitting
 on directory rather than filename means no config needs an `exclude` to stay out of another's
-way. They are kept separate rather than merged because `check:leak` is a *gate* answering one
+way — and `test-packed/*.test.ts` being **non-recursive** is what keeps H1's suite from
+swallowing H6's, which is the difference between the `packed` job running four installs per
+platform and one. They are kept separate rather than merged because `check:leak` is a *gate* answering one
 question (did the sentinel leak into production?) — folding a behavioural suite into it would
 make the name lie.
 

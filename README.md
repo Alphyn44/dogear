@@ -195,10 +195,12 @@ init` writes are committed and point at `node_modules/dogear-cli/dist/cli.js`, a
 repo-relative path, so `npm i -D dogear-cli` has to have happened **at the git root** of
 this repository, not in an app subdirectory. A global install alone puts `dogear` on your
 PATH and leaves that path unresolvable. `dogear init` says so in a note when it wires an
-agent and nothing in the repository provides that file. npm, pnpm and yarn all link a direct
-dependency at the top level, so that path holds under each. The exception is Yarn's PnP
-linker, which has no `node_modules` at all and cannot support a committed path like this
-one.
+agent and nothing in the repository provides that file. npm, pnpm and Yarn's `node-modules`
+linker all place a direct dependency at the top level, so that path holds under each — CI
+installs the published tarballs with all three and checks it. The exception is Yarn's **PnP**
+linker, which has no `node_modules` at all and cannot support a committed path like this one;
+that is checked too, and `dogear init` says so when it sees a PnP project. Set
+`nodeLinker: node-modules` in `.yarnrc.yml` if you need the MCP server.
 
 **My comments are not reaching the agent.** Check `.dogear/queue.json` at your **git
 root**, not your Vite root, which in a monorepo is a different directory. `dogear status`

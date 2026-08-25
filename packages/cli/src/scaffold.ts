@@ -2,7 +2,7 @@ import { configFile, configRemoval } from './config.js'
 import type { Agent, Cli, Detection, DetectedApp } from './detect.js'
 import { CLI_ENTRY, detect } from './detect.js'
 import { gitignore, gitignoreRemoval } from './gitignore.js'
-import { guidance } from './guidance.js'
+import { INSTALL, guidance } from './guidance.js'
 import { createHookStep, hookRemoval } from './hook-config.js'
 import { createMcpStep, mcpRemovals } from './mcp-config.js'
 import { queueDirectory, queueDirRemoval } from './queue-dir.js'
@@ -648,7 +648,7 @@ function many(apps: readonly DetectedApp[]): readonly string[] {
  */
 function remarks(detection: Detection, wiring: Wiring): readonly string[] {
   if (detection.apps.length === 0) {
-    return [...cliNotInstalled(wiring), ...noViteConfig()]
+    return [...cliNotInstalled(wiring, detection), ...noViteConfig()]
   }
 
   // React, Preact and Solid all author components in `.jsx`/`.tsx`, which is what the
@@ -660,7 +660,7 @@ function remarks(detection: Detection, wiring: Wiring): readonly string[] {
   )
 
   return [
-    ...cliNotInstalled(wiring),
+    ...cliNotInstalled(wiring, detection),
     ...jsxOnly(floored),
     ...runtimeDependency(detection.apps),
   ]
@@ -693,19 +693,42 @@ function noViteConfig(): readonly string[] {
  * It speaks for the **prompt hook** as well: ./hook-config.ts writes the same `CLI_ENTRY` and
  * had no warning of its own, and that is the worse failure of the two. An MCP server that will
  * not start is silent until a tool is called; a hook pointing at a missing file is not.
+ *
+ * **H6 (#58) added the PnP arm, and it is checked before `wiring.cli`.** That order is the fix
+ * rather than a detail: `cliIn` answers `local` from the manifest declaration alone when the
+ * file is absent, so a PnP repository that declares `dogear-cli` reaches the guard below as
+ * `local` and this function returns nothing. Init then writes a committed path into a layout
+ * that has no `node_modules` for it to resolve in, silently. Reordering is not an option
+ * either — under PnP the install the second arm prescribes is the one the user has already
+ * done, so it would name a fix that changes nothing.
  */
-function cliNotInstalled(wiring: Wiring): readonly string[] {
+function cliNotInstalled(wiring: Wiring, detection: Detection): readonly string[] {
   // Nothing names `CLI_ENTRY` when nothing is wired, so there is nothing to warn about.
-  if (wiring.agents.length === 0 || wiring.cli === 'local') return []
+  if (wiring.agents.length === 0) return []
 
   const surfaces =
     wiring.hook && wiring.agents.includes('claude')
       ? 'the MCP registration and the prompt hook both point'
       : 'the MCP registration points'
 
+  // Deliberately regardless of `wiring.cli` — see the note above. Installed or not, the path
+  // cannot resolve here, so `local` is not the reassurance it is under every other layout.
+  if (detection.linker === 'pnp') {
+    return [
+      `${surfaces} at ${CLI_ENTRY}, and this repository installs with Yarn's PnP linker, ` +
+        'which creates no node_modules for that path to resolve in. dogear writes it anyway ' +
+        'because it is committed and has to be right for everyone who clones. Set ' +
+        '`nodeLinker: node-modules` in .yarnrc.yml, or run the MCP server another way — see ' +
+        "dogear's README.",
+    ]
+  }
+
+  if (wiring.cli === 'local') return []
+
   return [
     `${surfaces} at ${CLI_ENTRY}, which is not installed here. Run ` +
-      '`npm i -D dogear-cli` so the path resolves for everyone who clones this repository.',
+      `\`${INSTALL[detection.manager]} dogear-cli\` so the path resolves for everyone who ` +
+      'clones this repository.',
   ]
 }
 

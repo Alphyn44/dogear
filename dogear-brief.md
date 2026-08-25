@@ -1144,8 +1144,23 @@ cannot.
 
 Everything init writes points at the repo-relative, committed
 `node_modules/dogear-cli/dist/cli.js`, so it has to resolve under whatever package manager the
-person cloning uses. That it does is currently reasoning, and the root README states it as
-fact. Lowest priority in the epic: the failure is narrow, documented and unreported.
+person cloning uses. That it does was reasoning until this story, and the root README stated it
+as fact. Lowest priority in the epic: the failure is narrow, documented and unreported.
+
+**Landed with a second half the acceptance criteria did not name.** Proving PnP unsupported
+meant running init under it, which is how the silent case surfaced: `cliIn` answers `local`
+from the *manifest declaration* when the file is absent — right for a repository mid-clone,
+wrong for one that will never have the file — so init wrote a committed path that resolved
+nowhere and said nothing. `Detection.linker` is the fix, and it is separate from
+`Detection.manager` for the reason `manager` is separate from `workspace`: Yarn spells the
+linker `nodeLinker` and pnpm has the same setting, so "which tool installs here" cannot answer
+"is there a `node_modules` to resolve through", and only the second question bears on the path.
+Read from the generated `.pnp.cjs`/`.pnp.js` rather than from `.yarnrc.yml`, because the
+setting may be inherited or left at Yarn's default and written nowhere, while the artefact is
+always there. It earns a **remark** rather than a refusal or a step note — init writes the
+registration correctly and it is the repository that is wrong, which is the discriminator
+`cliNotInstalled` already documents. Yarn 1 is not covered: Berry supplies both the
+`node-modules` leg and the PnP one, and classic has no PnP mode to test.
 
 **H7 — Dependency health, reported on every pull request**
 - Every pull request surfaces the current `npm audit` result, ranked by severity.

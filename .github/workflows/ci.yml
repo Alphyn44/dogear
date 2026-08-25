@@ -198,6 +198,48 @@ jobs:
 
       - run: npm run test:packed
 
+  # H6 (#58). The same tarballs as the job above, installed with pnpm and with Yarn instead.
+  #
+  # Everything `dogear init` writes points at the repo-relative, committed
+  # `node_modules/dogear-cli/dist/cli.js`, so it has to resolve under whatever package manager
+  # the person cloning uses. That npm, pnpm and Yarn's node-modules linker all place a direct
+  # dependency at the top level was reasoning until this job ran it, and README.md stated it as
+  # fact. The Yarn PnP leg proves the documented exception rather than arguing it.
+  #
+  # Two platforms rather than three, unlike `packed` above: a manager's layout is the same on
+  # macOS as it is on Linux, and each leg is a full install. Windows earns its place because the
+  # `.cmd` shim question is the reason CLI_ENTRY is spawned as `node <path>` at all.
+  #
+  # No pnpm or Yarn setup step, deliberately. Both are devDependencies reached as
+  # `node <their own JS entry>`, so `npm ci` above has already installed them at versions this
+  # repository's lockfile pins — which also means a developer running `npm run test:managers`
+  # gets the same versions CI does, rather than whatever is on their PATH.
+  managers:
+    name: manager install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          # One version, for the reason `packed` gives: what this job proves is per-package
+          # manager, not per-Node.
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # `npm pack` packs what is on disk — see the same step in `packed` above.
+      - run: npm run build
+
+      - run: npm run test:managers
+
   # H8 (#70). Two halves, and they are deliberately different KINDS of check.
   #
   # The GATE: a pull request must never lower a version below what is on the base branch. A

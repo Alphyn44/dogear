@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -8,6 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,16 +46,49 @@ export function manifestOf(dir: PublishedDir): Manifest {
 }
 
 /**
- * How to spawn npm without a shell.
+ * The package managers these suites install with — H6 (#58).
  *
- * `npm_execpath` first, and it is not an optimisation. What sits on PATH on Windows is
+ * Deliberately the same word list as `Manager` in packages/cli/src/detect.ts, so the fixture
+ * and the code it is testing name the layouts the same way.
+ */
+export type Manager = 'npm' | 'pnpm' | 'yarn'
+
+/** Which layout the install should produce. Only yarn offers the choice — see {@link Linker}. */
+export type Linker = 'node-modules' | 'pnp'
+
+/** The devDependency each non-npm manager is reached through, for the error message below. */
+const MANAGER_PACKAGE: Readonly<Record<Exclude<Manager, 'npm'>, string>> = {
+  pnpm: 'pnpm',
+  yarn: '@yarnpkg/cli-dist',
+}
+
+/**
+ * How to spawn a package manager without a shell.
+ *
+ * **npm: `npm_execpath` first, and it is not an optimisation.** What sits on PATH on Windows is
  * `npm.cmd`, and since Node 20.12 `execFile` refuses to spawn a `.cmd` at all without
  * `shell: true` — while `shell: true` does not quote the arguments it is handed, so a scratch
  * directory under `C:\Users\First Last\` would arrive as two of them. Under `npm run`, which
  * is how this suite is invoked by its own script and by CI, npm exports its own JS entry point
  * here, and `node <that>` needs neither a shim nor a shell.
+ *
+ * **pnpm and yarn: the same trap, and no `npm_execpath` to escape it with.** `pnpm.cmd` and
+ * `yarn.cmd` are `.cmd` shims exactly as npm's is, and `npm_execpath` names whichever manager
+ * invoked the suite — npm — so it cannot answer for the other two. They are devDependencies
+ * instead, reached by `node <their own JS entry>`: no shim, no shell, no PATH, and a version
+ * pinned in this repository's lockfile rather than whatever the machine happens to have.
+ *
+ * The entry is **read from the installed manifest's `bin` field**, never written down here. A
+ * hard-coded `bin/pnpm.cjs` is a guess that goes stale on a major bump, and it would fail as a
+ * missing-file error naming a path rather than as the dependency problem it is.
  */
-function npmCommand(args: readonly string[]): { file: string; argv: readonly string[] } {
+function managerCommand(
+  manager: Manager,
+  args: readonly string[],
+): { file: string; argv: readonly string[] } {
+  if (manager !== 'npm')
+    return { file: process.execPath, argv: [binOf(manager), ...args] }
+
   const execpath = process.env['npm_execpath']
 
   if (execpath !== undefined && execpath.endsWith('.js')) {
@@ -68,12 +103,57 @@ function npmCommand(args: readonly string[]): { file: string; argv: readonly str
   )
 }
 
-export function runNpm(
+/**
+ * The JS file a manager's `bin` field points at, resolved from this repository's install.
+ *
+ * `createRequire` first, then the literal path under the repository root: a package whose
+ * `exports` map does not publish `./package.json` cannot be resolved by specifier, and both
+ * managers are direct devDependencies of a repository that installs with npm, so the second
+ * form is reliable here even though it would not be in shipped code.
+ */
+function binOf(manager: Exclude<Manager, 'npm'>): string {
+  const name = MANAGER_PACKAGE[manager]
+  const require = createRequire(import.meta.url)
+
+  let manifestPath: string
+  try {
+    manifestPath = require.resolve(`${name}/package.json`)
+  } catch {
+    manifestPath = join(REPO_ROOT, 'node_modules', name, 'package.json')
+  }
+
+  if (!existsSync(manifestPath)) {
+    throw new Error(
+      `${manager} is reached through the ${name} devDependency and it is not installed. ` +
+        `Run \`npm i -D ${name}\` at the repository root.`,
+    )
+  }
+
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+    readonly bin?: string | Readonly<Record<string, string>>
+  }
+
+  // `bin` is a string for a single-binary package and a map otherwise. Prefer the entry named
+  // for the manager itself — pnpm's map also carries `pnpx`, which is not what we want — and
+  // fall back to the first entry when the map names it something else.
+  const entry =
+    typeof manifest.bin === 'string'
+      ? manifest.bin
+      : (manifest.bin?.[manager] ?? Object.values(manifest.bin ?? {})[0])
+  if (entry === undefined)
+    throw new Error(`${name} declares no bin to run ${manager} with`)
+
+  return join(dirname(manifestPath), entry)
+}
+
+/** Run any of the three. {@link runNpm} is the npm-bound form the rest of this file uses. */
+export function runManager(
+  manager: Manager,
   args: readonly string[],
   cwd: string,
   timeout = 600_000,
 ): Promise<{ readonly stdout: string; readonly stderr: string }> {
-  const { file, argv } = npmCommand(args)
+  const { file, argv } = managerCommand(manager, args)
 
   return new Promise((resolve, reject) => {
     execFile(
@@ -84,13 +164,21 @@ export function runNpm(
       { cwd, timeout, maxBuffer: 32 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(`npm ${args.join(' ')} failed:\n${stdout}\n${stderr}`))
+          reject(new Error(`${manager} ${args.join(' ')} failed:\n${stdout}\n${stderr}`))
           return
         }
         resolve({ stdout, stderr })
       },
     )
   })
+}
+
+export function runNpm(
+  args: readonly string[],
+  cwd: string,
+  timeout = 600_000,
+): Promise<{ readonly stdout: string; readonly stderr: string }> {
+  return runManager('npm', args, cwd, timeout)
 }
 
 export interface Packed {
@@ -183,11 +271,18 @@ export function tarballFor(
  * *up* for `.git`, so a fixture inside the workspace resolves to this repository — `dogear
  * init` would write into the real `.dogear/` and the plugin would serve this repo's queue,
  * proving nothing at all about an install.
+ *
+ * **The manager and linker default to npm's, so H1's suite is unaffected** — H6 (#58) added
+ * them. The install command is the only thing that varies; everything written above it is the
+ * same project whichever tool installs into it, which is the point of comparing them.
  */
 export async function createScratchProject(
   packed: ReadonlyMap<string, Packed>,
+  { manager = 'npm', linker = 'node-modules' }: ScratchOptions = {},
 ): Promise<string> {
-  const root = mkdtempSync(join(tmpdir(), 'dogear-packed-'))
+  // Per-manager prefix so concurrent legs cannot be mistaken for each other in a stack trace,
+  // and so a leaked directory says which install left it behind.
+  const root = mkdtempSync(join(tmpdir(), `dogear-packed-${manager}-`))
 
   // A bare `.git` directory rather than a real repository: `findGitRoot` only looks for the
   // entry, and E4's gitignore step then takes its degraded path, which is the arrangement
@@ -197,7 +292,13 @@ export async function createScratchProject(
   writeFileSync(
     join(root, 'package.json'),
     `${JSON.stringify(
-      { name: 'dogear-packed-fixture', private: true, version: '0.0.0', type: 'module' },
+      {
+        name: 'dogear-packed-fixture',
+        private: true,
+        version: '0.0.0',
+        type: 'module',
+        ...resolutionsFor(manager, packed),
+      },
       null,
       2,
     )}\n`,
@@ -234,22 +335,117 @@ export async function createScratchProject(
   const vite = manifestOf('vite').peerDependencies?.['vite']
   if (vite === undefined) throw new Error('dogear-vite declares no vite peerDependency')
 
+  // Yarn's linker is a project setting, so it has to be on disk before the install runs.
+  //
+  // `enableImmutableInstalls` is the one that would otherwise pass here and fail in CI:
+  // Berry turns it on by itself whenever `CI` is set, and `yarn add` necessarily writes a
+  // lockfile, so the install dies with YN0028 on a runner and nowhere else. This project has
+  // no lockfile to protect — it is built from scratch for one assertion and deleted after.
+  //
+  // Telemetry off for the same reason nothing else in this repository phones home.
+  if (manager === 'yarn') {
+    writeFileSync(
+      join(root, '.yarnrc.yml'),
+      [
+        `nodeLinker: ${linker}`,
+        'enableImmutableInstalls: false',
+        'enableTelemetry: false',
+        '',
+      ].join('\n'),
+    )
+  }
+
   // All three tarballs in ONE command. dogear-vite depends on dogear-core by range, and
   // passing them together is what lets the local core satisfy it instead of the registry —
   // the same thing the M5 smoke test relied on without saying so.
-  await runNpm(
-    [
-      'install',
-      '--no-save',
-      '--no-audit',
-      '--no-fund',
-      ...PUBLISHED.map((dir) => tarballFor(packed, dir)),
-      `vite@${vite}`,
-    ],
-    root,
-  )
+  const tarballs = PUBLISHED.map((dir) => specifierFor(manager, packed, dir))
+
+  await runManager(manager, [...installVerb(manager), ...tarballs, `vite@${vite}`], root)
 
   return root
+}
+
+/**
+ * Yarn's `resolutions` field, and only Yarn's — H6 (#58).
+ *
+ * **Yarn will not use a `file:` locator to satisfy another package's semver range.** Pass all
+ * three tarballs and `dogear-vite`'s `dogear-core: ^0.1.0` still goes to the registry, so the
+ * project gets the local core at the top level and a *second*, published one nested underneath
+ * the plugin. Measured, not assumed: top-level `0.1.1` with `0.1.0` under `dogear-vite/`, and
+ * with this field the nested copy is gone. npm and pnpm both dedupe it without being asked.
+ *
+ * **This is a property of installing from local tarballs, not of dogear.** Nobody installs the
+ * published packages this way: a real `yarn add -D dogear-vite` resolves both from the registry
+ * and gets one copy. Without this the yarn legs would test Yarn's `file:` protocol semantics
+ * rather than whether the committed CLI path resolves, and they would do it by failing the one
+ * assertion H1's npm leg uses to enforce G2's caret-range decision — a red that means nothing
+ * here and everything there.
+ */
+function resolutionsFor(
+  manager: Manager,
+  packed: ReadonlyMap<string, Packed>,
+): { readonly resolutions?: Readonly<Record<string, string>> } {
+  if (manager !== 'yarn') return {}
+
+  return {
+    resolutions: {
+      [npmName('core')]: `file:${tarballFor(packed, 'core').replace(/\\/g, '/')}`,
+    },
+  }
+}
+
+/**
+ * How to name a local tarball to the manager doing the installing.
+ *
+ * npm and pnpm take a bare path. **Yarn does not**, and the failure is not subtle: it reads an
+ * unprefixed argument as a registry range, so `.../dogear-core-0.1.1.tgz` becomes a package name
+ * and Berry goes to registry.yarnpkg.com asking for a URL-encoded Windows path. `file:` alone is
+ * still rejected — `yarn add` requires the `package-name@range` form and says so — which leaves
+ * `dogear-core@file:...` as the one spelling that works. Established by running all three
+ * against a real Berry, not from its documentation.
+ *
+ * Forward slashes because the specifier is a *range*, not a path Node will resolve: a Windows
+ * backslash inside one is an escape character to the parser reading it.
+ */
+function specifierFor(
+  manager: Manager,
+  packed: ReadonlyMap<string, Packed>,
+  dir: PublishedDir,
+): string {
+  const tarball = tarballFor(packed, dir)
+  if (manager !== 'yarn') return tarball
+
+  return `${npmName(dir)}@file:${tarball.replace(/\\/g, '/')}`
+}
+
+/** Options for {@link createScratchProject}. Both default to what npm does — H6 (#58). */
+export interface ScratchOptions {
+  readonly manager?: Manager
+  /** Only `yarn` honours this; npm and pnpm have no PnP mode in play here. */
+  readonly linker?: Linker
+}
+
+/**
+ * The verb and flags that mean "add these, and do not write it down".
+ *
+ * Each manager spells the same intent differently, and the flags are not cosmetic: without
+ * them every install writes a lockfile and a manifest entry into a scratch project that exists
+ * for one assertion, and yarn additionally treats a dirty lockfile as a CI failure.
+ *
+ * pnpm gets `--ignore-workspace` because the scratch project lives under `tmpdir`, and pnpm
+ * walks *up* for a `pnpm-workspace.yaml` exactly as `findGitRoot` walks up for `.git` — a
+ * developer whose temp directory sits inside one would otherwise get a different install from
+ * the same test.
+ */
+function installVerb(manager: Manager): readonly string[] {
+  switch (manager) {
+    case 'npm':
+      return ['install', '--no-save', '--no-audit', '--no-fund']
+    case 'pnpm':
+      return ['add', '--ignore-workspace', '--reporter=append-only']
+    case 'yarn':
+      return ['add']
+  }
 }
 
 /**

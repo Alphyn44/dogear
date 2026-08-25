@@ -34,8 +34,14 @@ import type { DetectedApp, Detection, Manager } from './detect.js'
 /** How many apps get a snippet before the rest are counted. Mirrors ./scaffold.ts's APP_CAP. */
 const CAP = 5
 
-/** `pnpm add -D`, and its two counterparts. */
-const INSTALL: Record<Manager, string> = {
+/**
+ * `pnpm add -D`, and its two counterparts.
+ *
+ * Exported since H6 (#58) so ./scaffold.ts's `dogear-cli` remark can name the manager the
+ * repository actually uses. It said `npm i -D` to every repository until then, including the
+ * pnpm and yarn ones this same table already got right one line below.
+ */
+export const INSTALL: Record<Manager, string> = {
   npm: 'npm i -D',
   pnpm: 'pnpm add -D',
   yarn: 'yarn add -D',

@@ -26,6 +26,7 @@
     "test": "vitest run",
     "test:built": "vitest run --config vitest.built.config.ts",
     "test:packed": "vitest run --config vitest.packed.config.ts",
+    "test:managers": "vitest run --config vitest.managers.config.ts",
     "check:leak": "vitest run --config vitest.leak.config.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -34,7 +35,9 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
+    "@yarnpkg/cli-dist": "^4.18.0",
     "happy-dom": "^20.11.2",
+    "pnpm": "^11.24.0",
     "prettier": "^3.9.6",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
