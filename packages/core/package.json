@@ -1,6 +1,6 @@
 {
   "name": "dogear-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Overlay UI, source resolution, and clipboard export for dogear. Framework-agnostic.",
   "license": "MIT",
