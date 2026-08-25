@@ -194,39 +194,35 @@ describe('dogear-vite', () => {
   })
 })
 
-describe('RELEASING.md', () => {
+describe('the published versions', () => {
   /**
-   * A source rule, in the shape packages/cli/src/docs.test.ts established for the command
-   * list — documentation that is also an interface, pinned against the code it describes.
+   * Lockstep, and it is a rule rather than an accident of them having been released
+   * together so far.
    *
-   * #64 made a merge to `main` the thing that publishes, so RELEASING.md is now the only
-   * written account of how to cut a release. The half of it that can silently go wrong is
-   * the dependency-range advice: it quotes dogear-vite's range on dogear-core verbatim in
-   * order to explain WHICH bump forces a companion release. Widen that range and the
-   * document keeps confidently describing the old one, which is worse than saying nothing —
-   * it is the exact coupling a reader came to the file to check.
+   * The three packages are one product with one version. A tree where core is at 0.1.1,
+   * vite at 0.1.5 and cli at 0.1.8 is a support question nobody can answer from a version
+   * number, and the caret range between vite and core means such a tree also *installs*,
+   * silently, in several combinations. So every release moves all three, including packages
+   * with no change in it.
+   *
+   * Asserted here rather than described in RELEASING.md alone, because the failure is a
+   * release that has already happened by the time anyone reads a document. This runs in the
+   * fast `npm test` suite, so a release pull request that bumps two of three goes red before
+   * it merges — and merging is what publishes since #64.
    */
-  const releasing = read('RELEASING.md')
+  it('are identical across all three packages', () => {
+    const versions = PUBLISHED.map((dir) => [dir, manifest(dir).version] as const)
+    const distinct = new Set(versions.map(([, version]) => version))
 
-  it('quotes the dogear-core range that is actually in the manifest', () => {
-    const range = manifest('vite').dependencies?.['dogear-core']
-
-    expect(range).toBeDefined()
     expect(
-      releasing,
-      `RELEASING.md explains which core bumps force a dogear-vite release by quoting its ` +
-        `range, and the manifest now says ${String(range)}. Update the prose to match.`,
-    ).toContain(`\`${String(range)}\``)
-  })
-
-  it('names every package that publishes', () => {
-    // Cheap, and the failure it catches is a fourth published package whose release
-    // procedure nobody wrote down — which surfaces as a bootstrap nobody knew was needed.
-    for (const dir of PUBLISHED) {
-      expect(releasing, `RELEASING.md never mentions dogear-${dir}.`).toContain(
-        `dogear-${dir}`,
-      )
-    }
+      distinct.size,
+      `the three packages must carry the same version, and they do not: ${versions
+        .map(([dir, version]) => `dogear-${dir}@${String(version)}`)
+        .join(
+          ', ',
+        )}. Every release bumps all three, including ones with no change in it. ` +
+        'See RELEASING.md.',
+    ).toBe(1)
   })
 })
 

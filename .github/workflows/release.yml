@@ -320,9 +320,12 @@ jobs:
 
   # Tags are a RECORD of what shipped, never the thing that ships it (#64).
   #
-  # Per package — `dogear-core@0.1.2` — because G2 has core, vite and cli versioning
-  # independently, and a repo-wide `v0.1.2` is a name that lies the first time core patches
-  # without vite. `v0.1.0` and `v0.1.1` remain as relics of the tag-trigger era.
+  # Per package — `dogear-core@0.1.2` — even though the three release in lockstep and a
+  # repo-wide `v0.1.2` would usually be honest. The case a record has to survive is the
+  # PARTIAL release, and that is exactly when the three are not at one version: this job runs
+  # on `!cancelled()` precisely so a run that published two of three still records them. A
+  # per-package tag names what npm actually received and needs no rule for the exception.
+  # `v0.1.0` and `v0.1.1` remain as relics of the tag-trigger era.
   #
   # Separate from `publish` so that `contents: write` and `id-token: write` are never held by
   # the same job. `!cancelled()` rather than an implicit success gate: a run that published two

@@ -2218,6 +2218,27 @@ convention: `scripts/packaging.test.ts` refuses `*`, `latest` and the `workspace
 forms, because `*` is what `npm install -w` writes back and the regression would otherwise be
 silent until someone installed the published plugin.
 
+**The three packages release in lockstep. Settled during M6, and it narrows G2 rather than
+reversing it.**
+Every release bumps `dogear-core`, `dogear-vite` and `dogear-cli` to the same version,
+including packages with no change in it. Core at `0.1.1`, vite at `0.1.5` and cli at `0.1.8`
+is a state nobody can reason about from a version number: three numbers describing one
+product, where the only question a user actually has is "which dogear am I on". The npm cost
+of a no-op bump is a version nobody needed; the cost of divergence is every future support
+question.
+
+**This is a release policy, and it does not touch the caret range or the `hosts` entry above,
+because those are about installed trees rather than published ones.** Lockstep controls what
+leaves this repository together. It cannot control what a user's `node_modules` holds — a
+caret range still admits a core that moved without the plugin, which is exactly the drift the
+`hosts` omission and `test-packed/install.test.ts`'s nested-copy assertion exist to survive.
+Pinning the range would close that, and would also mean a core patch could not reach anyone
+without a plugin republish, which is a worse trade than the one it fixes.
+
+`scripts/packaging.test.ts` asserts the three versions are identical, so a release pull request
+that bumps two of three goes red before it merges. That matters more since #64 than it would
+have before: merging is what publishes, so there is no later step at which someone notices.
+
 **Being wired is two independent facts — a manifest declaration and a config that calls the
 plugin — and init checks both. Settled during G3.**
 E8 keyed `guidance()` on `DetectedApp.plugin` alone, which is a *manifest* fact, on the
@@ -2292,13 +2313,18 @@ list that can go stale, and the test is what stops it.
 **The manifest is the manifest. Settled during G4, and untouched by #64.**
 What publishes is decided by comparing each `package.json` version against the registry and
 skipping what is already there. The alternative — a name that declares the version, refusing
-to publish if a manifest disagrees — is simpler to read and quietly forces lockstep versions,
-which is the thing G2 decided against when it gave `dogear-vite` a caret range on
-`dogear-core` rather than a pin. A release where core is at `0.1.2` and vite at `0.3.0` is
-expressible only if the trigger is not authoritative. Two consequences worth having: a
-partially-failed run is re-runnable, because the packages that made it are skipped rather
-than colliding; and a trigger that fires with nothing bumped publishes nothing and goes
-green, which is why the job emits a step-summary table rather than a silent success.
+to publish if a manifest disagrees — is simpler to read and makes the trigger authoritative
+over the manifests, which is the wrong way round: the manifests are what a consumer resolves.
+Two consequences worth having: a partially-failed run is re-runnable, because the packages
+that made it are skipped rather than colliding; and a trigger that fires with nothing bumped
+publishes nothing and goes green, which is why the job emits a step-summary table rather than
+a silent success.
+
+The lockstep entry above does *not* make this redundant. Lockstep is a rule about what a
+release pull request must contain, enforced by a test before the merge; the registry
+comparison is what the workflow does after it, and it stays the authority on what is already
+out there. A release that failed halfway leaves the three genuinely out of step on the
+registry, and only the comparison can tell the re-run which two to skip.
 
 **What triggers it moved from a tag to a merge. #64, and the first release is the
 evidence.** All three `0.1.0` packages record `gitHead = 0e4ee643`, a commit that is not
@@ -2324,13 +2350,14 @@ only if it says yes. A `release:publish` label was considered as a second lock a
 the reviewed version diff is already a deliberate act, and a gate that must be remembered is
 a step that will be forgotten, which is the failure mode this whole change exists to remove.
 
-**Tags survive as a record, and are now per package.** The workflow pushes
-`dogear-core@0.1.2` after npm accepts the publish, one per package that actually shipped, from
-a job holding `contents: write` and no OIDC token. A repo-wide `v0.1.2` was rejected for the
-reason the first entry gives: it is a name that lies the first time core patches without vite,
-which is precisely what G2's caret range exists to allow. `v0.1.0` and `v0.1.1` remain as
-relics of the tag-trigger era. Since tags no longer trigger anything, P2 (#60)'s protection on
-`v*` stops being the primary control and branch protection on `main` becomes it.
+**Tags survive as a record, and are per package.** The workflow pushes `dogear-core@0.1.2`
+after npm accepts the publish, one per package that actually shipped, from a job holding
+`contents: write` and no OIDC token. Under lockstep a repo-wide `v0.1.2` would also be honest,
+and it was weighed: what decides it is that a *partial* release is the case the record has to
+survive, and that is precisely when the three are not at one version. A per-package tag names
+what npm actually received and needs no rule for the exception. `v0.1.0` and `v0.1.1` remain
+as relics of the tag-trigger era. Since tags no longer trigger anything, P2 (#60)'s protection
+on `v*` stops being the primary control and branch protection on `main` becomes it.
 
 **The first publish of each package cannot use OIDC, and that is npm's constraint rather
 than ours. Settled during G4.**
