@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Node only, no DOM: the suite spawns processes and fetches over HTTP, and never touches
+    // a document. It reaches into packages/core/src for the sentinel constant, which is why
+    // this project sees files outside its own directory — scripts/tsconfig.json does the same
+    // for the leak gate.
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

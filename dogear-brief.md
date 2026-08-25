@@ -1055,6 +1055,95 @@ G4 is last, and G5 and G6 are before it for the same reason: npm renders the REA
 package carried *at publish time*, and a name cannot be corrected after someone has
 installed it.
 
+### Epic H — Testing (M6)
+
+Every epic above tested the thing it built, and each did it well: the transform has fixtures,
+the endpoint has a real server, the queue has a tolerance suite, `dogear init` has a built
+binary spawned as a subprocess. What none of them could test is the *seams between* the
+things they built — and every one of those seams is currently held by a person having checked
+once.
+
+Three of them, specifically. Every cross-package resolution in this repository goes through a
+workspace symlink, so nothing has ever exercised the shape npm publishes. CI has only ever run
+one operating system, and it is not the one dogear is developed on. And the product's central
+claim — click an element, the comment arrives bound to a file and a line — has never been
+verified end to end by anything but a click.
+
+This epic is filed after the release rather than before it because the first release is what
+turned each of these from a theoretical gap into an argument with evidence.
+
+**H1 — Installing from a packed tarball, in CI**
+- CI packs all three packages and installs the tarballs into a scratch project outside the
+  workspace.
+- The installed `dogear` binary runs, and `dogear init` sets that project up.
+- The installed plugin resolves `dogear-core`'s bundle — the resolution a wrong `exports` map
+  breaks.
+- A package whose `files` array is missing `dist` fails this job.
+
+The largest gap in the epic and the cheapest to close. A tarball that shipped no `dist` at all
+would pass all nine steps of `npm run verify`, because every resolution lands in the source
+tree where the build output already sits.
+
+**H2 — CI on the platforms dogear is used on**
+- The verify matrix runs on Windows and macOS as well as Linux.
+- A path or casing regression that reproduces on only one platform fails a pull request there.
+- The cost is bounded — the full Node matrix need not run on every platform.
+
+Two pieces of code exist *because* of Windows, and both were reasoned out rather than observed
+failing: `registryKey` upper-cases the drive letter, and everything `dogear init` writes points
+at `node <path>` rather than `dogear`. Neither has been tested on Windows by anything but a
+developer noticing.
+
+**H3 — The browser round trip, tested**
+- A headless browser loads a page served by a real dev server with the plugin loaded.
+- It modifier-clicks an element, types a comment, queues it, opens the panel and submits.
+- The annotation arrives in `.dogear/queue.json` with a `sites` entry naming a real file and
+  line, `via: "attribute"` — not the selector floor.
+- A transform regression that leaves the overlay working but the resolution wrong fails.
+
+The last criterion is the story. A test asserting only that *an annotation arrived* would pass
+on a build where the attribute transform had stopped running entirely, because the selector and
+text floor would still produce an item.
+
+**H4 — The workflow files are checked before a tag**
+- A malformed workflow file fails a pull request.
+- The check covers `ci.yml`, `verify.yml` and `release.yml`.
+- It runs as part of `npm run verify`, or as a CI step a contributor can reproduce locally.
+
+Nothing in `verify` parses YAML, so GitHub's own parser at push time is the only validator
+these files have — and on the release path push time is *after* the tag exists. The
+`.prettierignore` exclusion of `*.yml` is **not** what to undo here; that file states its own
+reason, and formatting is not the problem. Validity is.
+
+**H5 — A release rehearsal**
+- `release.yml` can be run manually against a branch in a mode that publishes nothing.
+- The dry run exercises the version comparison, the empty-tarball guard and the step summary,
+  and reports what *would* publish.
+- The mode cannot publish by accident.
+
+The publish job is the least-exercised code in the repository, and its first run is against a
+tag that already exists. What a rehearsal cannot cover is the OIDC exchange itself, which is
+the part most likely to be misconfigured — this reduces the unknown surface, it does not remove
+it.
+
+**H6 — The committed CLI path under pnpm and Yarn**
+- The path `dogear init` writes is asserted to resolve after a real install under npm, pnpm and
+  Yarn's `node-modules` linker.
+- Yarn PnP is either supported or documented as unsupported, on the strength of a test rather
+  than reasoning.
+- A package manager whose layout breaks the path fails a pull request.
+
+Everything init writes points at the repo-relative, committed
+`node_modules/dogear-cli/dist/cli.js`, so it has to resolve under whatever package manager the
+person cloning uses. That it does is currently reasoning, and the root README states it as
+fact. Lowest priority in the epic: the failure is narrow, documented and unreported.
+
+**Delivery ordering: H4, then H2, then H1.** H4 first because every other story here adds
+workflow YAML and none of it is checked until it does. H2 before H1 so that H1's job inherits
+the platforms rather than adding them again. H3 is the expensive one and independent of all of
+them; H5 waits on the publish trigger being settled; H6 builds directly on H1's pack-and-install
+harness.
+
 ### Non-functional requirements
 
 - **Browsers:** Firefox, Chrome, Edge. Firefox is the point — it's what an extension
@@ -1080,6 +1169,7 @@ Increasing order of how much can go wrong.
 | **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
 | **M4** | Install and init | E1–E8 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
 | **M5** | Release | G1–G6 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages were private and unpublished until this milestone, so `npm i -D dogear-vite` resolved to nothing and the install path M4 prints instructions for had never been run by anyone. |
+| **M6** | Testing | H1–H6 | After the release, because the release is what turned each gap here from theoretical into evidenced. Every milestone above tested what it built; this one tests the seams *between* what they built — the published tarball, the operating systems, the browser round trip — each of which currently rests on a person having checked once. |
 | — | Safety | F1–F4 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
 
 Two deliberate orderings worth noting:

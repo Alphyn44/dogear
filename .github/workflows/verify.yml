@@ -9,32 +9,54 @@ name: verify
 # comments, and the copy exercised once per release is the one that would drift.
 on:
   workflow_call:
-    inputs:
-      node-versions:
-        description: 'JSON array of Node versions to run against.'
-        type: string
-        required: false
-        default: '["20.19.0", "22.12.0", "24"]'
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     strategy:
-      # Don't cancel the other versions when one fails. Knowing whether a break is
-      # version-specific is most of the diagnosis.
+      # Don't cancel the other legs when one fails. Whether a break is version-specific or
+      # platform-specific is most of the diagnosis, and a cancelled matrix answers neither.
       fail-fast: false
       matrix:
-        # The intersection of Vite's engines (^20.19.0 || >=22.12.0) and vitest's
-        # (^20.0.0 || ^22.0.0 || >=24.0.0). The two floors are the lowest versions we
-        # claim to support in package.json `engines`; 24 is what development happens on.
-        # Node 21 and 23 are correctly excluded, since vitest does not support them.
-        node: ${{ fromJSON(inputs.node-versions) }}
+        # H2 (#54): an explicit include list, not a cross product, because the two axes are
+        # not independent. The Node axis exists to prove the `engines` floors; the platform
+        # axis exists to prove path, casing and shim handling, and none of THOSE failures are
+        # Node-version-specific. Three-by-three would be nine jobs to learn what these five
+        # already say, and Windows runners are the slowest on offer.
+        #
+        # The Node versions are the intersection of Vite's engines (^20.19.0 || >=22.12.0)
+        # and vitest's (^20.0.0 || ^22.0.0 || >=24.0.0). The two floors are the lowest
+        # versions package.json `engines` claims; 24 is what development happens on. Node 21
+        # and 23 are correctly absent, since vitest does not support them.
+        include:
+          - os: ubuntu-latest
+            node: '20.19.0'
+          - os: ubuntu-latest
+            node: '22.12.0'
+          - os: ubuntu-latest
+            node: '24'
+          # dogear is developed on Windows and, until H2, was never tested there. Two pieces
+          # of code exist BECAUSE of Windows and were both reasoned out rather than observed
+          # failing: registryKey upper-cases the drive letter, since Node reports its case
+          # differently depending on how the process started — `dogear init` from a shell
+          # versus Vite from an npm script is exactly that pair — and everything init writes
+          # points at `node <path>` rather than `dogear`, because a global npm bin here is a
+          # .cmd shim the exec form cannot run. This leg is what turns either into a result.
+          # There is a softer third reason: several suites compare paths, and a lowercase
+          # drive letter has previously failed every test in the repository at load.
+          - os: windows-latest
+            node: '24'
+          # A POSIX second opinion, nearly free once the matrix is a matrix. It matters less
+          # than Windows — the runner already in use is POSIX too — but `*.local` mDNS
+          # hostnames in DEFAULT_HOSTS are a macOS convention.
+          - os: macos-latest
+            node: '24'
 
-    name: verify (node ${{ matrix.node }})
+    name: verify (${{ matrix.os }}, node ${{ matrix.node }})
 
     steps:
       - uses: actions/checkout@v7

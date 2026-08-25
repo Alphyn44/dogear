@@ -235,6 +235,21 @@ npm test               # vitest
 npm run format         # prettier --write
 ```
 
+Two checks run in CI and sit outside `verify`, both deliberately — `verify` is what a release
+gates on, and neither of these is a question about correctness that should be able to fail a
+release:
+
+```sh
+npm run build && npm run test:packed   # install the real tarballs into a scratch project
+actionlint                             # parse and lint .github/workflows/
+```
+
+`test:packed` is the one thing that exercises what npm *publishes* rather than what this
+repository contains: everything else resolves the three packages through workspace symlinks,
+so a tarball missing its `dist/` would pass all nine steps above. `actionlint` is a separate
+binary rather than an npm dependency; [CONTRIBUTING.md](./CONTRIBUTING.md) has the version
+and why shellcheck is worth having beside it.
+
 The example app under [`examples/react-app`](./examples/react-app) consumes the **built**
 plugin, and the plugin serves the overlay's **built** bundle, so both need building
 before the example picks up a change:

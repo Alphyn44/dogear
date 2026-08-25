@@ -15,3 +15,89 @@ jobs:
   # this plumbing works. That is why it is a shared file and not an inline duplicate.
   verify:
     uses: ./.github/workflows/verify.yml
+
+  # H4 (#56). Nothing in `npm run verify` parses YAML — .prettierignore excludes *.yml, and
+  # deliberately so: formatting is not the problem, validity is. That leaves GitHub's own
+  # parser at push time as the only validator these files have, and on the release path push
+  # time is AFTER the tag exists. The recovery from that is deleting and re-pushing a tag on a
+  # repository that publishes to npm, which is the one git operation people get wrong under
+  # pressure. This job moves the check to the pull request.
+  #
+  # Here and not in verify.yml on purpose. verify.yml is called by release.yml, and a release
+  # must not be able to fail because a GitHub Releases download was slow. The check's whole
+  # job is to fail the PR, which is where ci.yml runs.
+  workflows:
+    name: actionlint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned by version AND verified by checksum, rather than piping upstream's install
+      # script into bash. This repository pins its actions by major tag and treats the actions
+      # supply chain as the one that matters — release.yml holds a publishing credential — so
+      # fetching an unpinned remote script and executing it would be the opposite of that.
+      # Bumping actionlint means changing both literals, in a diff a reviewer can see.
+      - name: Install actionlint
+        env:
+          VERSION: 1.7.12
+          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="actionlint_${VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --output "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${archive}"
+          echo "${SHA256}  ${archive}" | sha256sum --check --strict -
+          tar -xzf "$archive" actionlint
+
+      # No file arguments: actionlint discovers .github/workflows/** itself, so ci.yml,
+      # verify.yml and release.yml are covered by construction rather than by a list that can
+      # go stale as this epic adds more YAML.
+      #
+      # The reason this is worth more than a YAML parse: ubuntu-latest ships shellcheck, and
+      # actionlint shells out to it for every `run:` block whose shell resolves to bash. That
+      # is what gets release.yml's forty lines of publish bash — version comparison, E404
+      # classification, the step-summary table — checked at all. It is the highest-value half
+      # of this job and it is completely invisible from the command line.
+      - run: ./actionlint -color
+
+  # H1 (#53). Every cross-package resolution in this workspace goes through a symlink into
+  # packages/*, where dist/ already sits because the build put it there — so `files`, `exports`
+  # and `bin` are never consulted by any of verify's nine steps, and a tarball shipping no dist
+  # at all passes all of them. This job packs the real tarballs and installs them into a
+  # project outside the workspace instead.
+  #
+  # Not folded into verify.yml, for the same reason as the job above and one more: the scratch
+  # install reaches the registry for magic-string, the MCP SDK and vite, and verify.yml is what
+  # release.yml gates on. A release must not be able to fail because a registry was slow.
+  #
+  # Across the three platforms H2 (#54) established rather than Linux alone: the committed
+  # `node_modules/dogear-cli/dist/cli.js` that init writes, and npm's .cmd shim for the
+  # `dogear` bin, are exactly the things that differ per platform.
+  packed:
+    name: packed install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          # One version. What this job proves is per-platform and per-package-manager, not
+          # per-Node — the engines floors are verify.yml's job.
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # `npm pack` packs what is on disk, and none of the three packages has a prepack script
+      # that would build for it. Without this the job would pack three empty dist/ directories
+      # and report the failure it exists to catch, every time.
+      - run: npm run build
+
+      - run: npm run test:packed
