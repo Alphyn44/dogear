@@ -389,6 +389,7 @@ rather than merely promised.
 | `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
 | `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client. Needs a build first |
+| `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace, and runs the binary, `dogear init` and a real dev server. Needs a build first; deliberately not in `verify` |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
@@ -421,29 +422,51 @@ trusted-publisher configuration on npmjs.com names the repository, the workflow 
 the allowed action; renaming or moving the file revokes publishing, and the failure is an
 auth error that does not mention the filename.
 
-**The release tag is a trigger, not a manifest.** `git tag v0.1.0` starts the run; what
-publishes is decided by comparing each `package.json` version against the registry and
-skipping what is already there. That keeps core and vite versioning independently, per G2's
-decision, and makes a partially-failed run re-runnable. An `npm view` failure that is *not*
-an E404 fails the job on purpose — publishing against a registry that could not be read is
-how a version gets silently skipped and never published at all. Note that npm reports a
-missing *version* of an existing package with E404 too, exactly as it reports a missing
-package; the workflow's comment records this because it is easy to assume otherwise.
+**The manifest decides what publishes; a merge to `main` decides when.** `release.yml` runs on
+`push: branches: [main]`, and what publishes is decided by comparing each `package.json`
+version against the registry and skipping what is already there. That keeps core and vite
+versioning independently, per G2's decision, and makes a partially-failed run re-runnable. An
+`npm view` failure that is *not* an E404 fails the job on purpose — publishing against a
+registry that could not be read is how a version gets silently skipped and never published at
+all. Note that npm reports a missing *version* of an existing package with E404 too, exactly
+as it reports a missing package; the workflow's comment records this because it is easy to
+assume otherwise. **A merge never invents a version**, so the ordinary merges between releases
+find all three already published and go green having done nothing. `RELEASING.md` is the
+procedure.
 
-**The trigger is under review in #64, and the first release is the argument.** All three
-`0.1.0` packages record `gitHead = 0e4ee643`, which is not reachable from `main`: it lived
-on `m5-release` and PR #52 was squash-merged. A tag push happens outside CI and outside
-review, so nothing caught it. What *publishes* would not change under a merge trigger, since
-the registry comparison already skips everything on a merge that bumps nothing; what changes
-is that the version diff becomes reviewable. The objection to weigh is that it puts a job
-holding `id-token: write` on every merge instead of on rare tags, which #64 answers by
-splitting the decision out of the privileged job.
+**#64 moved the trigger, and the first release is the argument.** All three `0.1.0` packages
+record `gitHead = 0e4ee643`, which is not reachable from `main`: it lived on `m5-release` and
+PR #52 was squash-merged. A tag push happens outside CI and outside review, so nothing caught
+it. What *publishes* did not change — the registry comparison already skipped everything on a
+merge that bumps nothing — but the version diff is now reviewable. The objection was that it
+puts a job holding `id-token: write` on every merge instead of on rare tags, and the answer is
+the job split: an unprivileged **`decide`** does the comparison and emits what would publish,
+`verify` and `tarballs` gate on it, and the privileged **`publish`** runs only when it says
+yes. A `release:publish` label was considered as a second lock and declined — a gate that must
+be remembered is a step that will be forgotten, which is the failure mode this change removes.
 
-**`0.1.0` has no provenance and never can.** The repository was private when it published,
-GitHub withdrew provenance for private repositories in July 2023, and attestations are made
-at publish time. `dist.attestations` is empty on all three while `_npmUser` reads
-`npm-oidc-no-reply@github.com`, so OIDC worked and only the attestation was skipped, in
-silence. The first release after the repository goes public is what satisfies that criterion.
+**Tags are now a record, per package, pushed by the workflow.** `dogear-core@0.1.2` and
+friends, created by a **`tag`** job holding `contents: write` and no OIDC token, after npm
+accepts. A repo-wide `v0.1.2` was rejected because it is a name that lies the first time core
+patches without vite, which is exactly what G2's caret range exists to allow. `v0.1.0` and
+`v0.1.1` remain as relics. Since tags trigger nothing, P2 (#60)'s protection on `v*` stopped
+being the primary control and branch protection on `main` became it.
+
+**H5's rehearsal is `workflow_dispatch`, and the *event* is the safety.** Permissions are
+job-level, so a dispatched run never starts `publish` and never mints a token — an input
+gating the publish *command* (H5's original shape, filed before the trigger moved) would leave
+the credential present. The empty-tarball guard therefore lives in its own **`tarballs`** job
+rather than inside `publish`: a dry run must reach the guard and must not reach the publish.
+The cost is that `publish` builds a second time on a real release, bought so that what npm
+attests is what the publishing job itself built.
+
+**`0.1.0` has no provenance and never can; `0.1.1` has it.** The repository was private when
+`0.1.0` published, GitHub withdrew provenance for private repositories in July 2023, and
+attestations are made at publish time — so `dist.attestations` is empty on all three `0.1.0`
+packages while `_npmUser` reads `npm-oidc-no-reply@github.com`, meaning OIDC worked and only
+the attestation was skipped, in silence. `0.1.1` published after P5 (#63) flipped the
+repository and carries a `slsa.dev/provenance/v1` predicate, which is what satisfies G4's
+criterion. Checked against the registry, not assumed.
 
 **`.github/dependabot.yml` covers `github-actions` only, and that is deliberate.** npm
 version updates would be churn against a `verify` gate that already catches breakage, and a
@@ -489,18 +512,27 @@ are gone" assertion passes without testing anything. `teardown.test.ts` and
 `DOGEAR_HOME` at a temp directory so no suite can write to the real one. See the registry
 notes above for why that is a global rather than a convention.
 
-**Three vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
+**Four vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
 plus `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`
 runs it on every turn that touches TypeScript. Build-independent is the rule there, not
 hermeticity: `check-leak.test.ts` builds its own temp fixtures, while G1's
 `packaging.test.ts` and the two `docs.test.ts` suites read the repository's own committed
-files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other two need a build first:
-`scripts/gate/*.test.ts` reads real build output under `npm run check:leak`, and
-`packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`. Splitting
+files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other three need a build first:
+`scripts/gate/*.test.ts` reads real build output under `npm run check:leak`,
+`packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`, and H1's
+`test-packed/*.test.ts` packs the real tarballs under `npm run test:packed`. Splitting
 on directory rather than filename means no config needs an `exclude` to stay out of another's
 way. They are kept separate rather than merged because `check:leak` is a *gate* answering one
 question (did the sentinel leak into production?) — folding a behavioural suite into it would
 make the name lie.
+
+**`test:packed` is out of `verify` for a reason that is not speed.** It reaches the registry
+for `vite`, `magic-string` and the MCP SDK, and `verify.yml` is what `release.yml` gates on —
+a release must not be able to fail because a registry was slow. It runs as its own `ci.yml`
+job across all three platforms instead. `test-packed/fixture.ts` holds the shared harness:
+`packAll` → `createScratchProject` (under `tmpdir`, never inside the repo, because
+`findGitRoot` walks *up*) → `startDevServer` → `runInstalledCli`. One install is shared by the
+whole file; it is the slowest thing in the repository by an order of magnitude.
 
 **The leak sentinel is internal to `dogear-core` on purpose.** `packages/core/src/sentinel.ts`
 is not re-exported from `index.ts`, because `noop.ts` mirrors index's public surface and

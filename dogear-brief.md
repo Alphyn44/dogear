@@ -1045,7 +1045,8 @@ what found the two facts in G3's Decisions entries.
   `Ctrl+Alt+D` can find the way back.
 
 **G4 — Publishing from CI, with provenance**
-- A tagged release publishes from GitHub Actions, and only the three packages.
+- A release publishes from GitHub Actions, and only the three packages. *Delivered against a
+  tag trigger; #64 later moved that to a merge to `main` without changing what publishes.*
 - Publishing uses OIDC trusted publishing — no stored credential, and provenance
   attestations emitted automatically. See Repo and publishing for why this is not optional.
 - `npm i -g dogear-cli` from the public registry works on a machine that has never seen
@@ -1121,10 +1122,18 @@ reason, and formatting is not the problem. Validity is.
   and reports what *would* publish.
 - The mode cannot publish by accident.
 
-The publish job is the least-exercised code in the repository, and its first run is against a
-tag that already exists. What a rehearsal cannot cover is the OIDC exchange itself, which is
-the part most likely to be misconfigured — this reduces the unknown surface, it does not remove
-it.
+The publish job is the least-exercised code in the repository, and under the old trigger its
+first run was against a tag that already existed. What a rehearsal cannot cover is the OIDC
+exchange itself, which is the part most likely to be misconfigured — this reduces the unknown
+surface, it does not remove it.
+
+**The rehearsal is `workflow_dispatch`, and the *event* is what makes it safe rather than an
+input.** #64 split the workflow into an unprivileged `decide` and a privileged `publish`, so
+gating `publish` on `github.event_name == 'push'` means a dispatched run never starts the job
+that holds `id-token: write` and therefore never mints a token at all. An input gating the
+publish *command* — H5's original shape, filed before the trigger moved — leaves the
+credential present and rests on getting an `if:` right. An input can be set wrong; an event
+cannot.
 
 **H6 — The committed CLI path under pnpm and Yarn**
 - The path `dogear init` writes is asserted to resolve after a real install under npm, pnpm and
@@ -2280,32 +2289,48 @@ rules sit in the same table. So the gate now names each package explicitly, and
 `packaging.test.ts` asserts every published name is in that list — an explicit list is a
 list that can go stale, and the test is what stops it.
 
-**The tag is a trigger, not a manifest. Settled during G4.**
-`git tag v0.1.0` starts the release; what publishes is decided by comparing each
-`package.json` version against the registry and skipping what is already there. The
-alternative — the tag naming the version, refusing to publish if a manifest disagrees — is
-simpler to read and quietly forces lockstep versions, which is the thing G2 decided against
-when it gave `dogear-vite` a caret range on `dogear-core` rather than a pin. A release where
-core is at `0.1.2` and vite at `0.3.0` is expressible under one tag only if the tag is not
-authoritative. Two consequences worth having: a partially-failed run is re-runnable, because
-the packages that made it are skipped rather than colliding; and tagging without bumping
-publishes nothing and goes green, which is why the job emits a warning line and a
-step-summary table rather than a silent success.
+**The manifest is the manifest. Settled during G4, and untouched by #64.**
+What publishes is decided by comparing each `package.json` version against the registry and
+skipping what is already there. The alternative — a name that declares the version, refusing
+to publish if a manifest disagrees — is simpler to read and quietly forces lockstep versions,
+which is the thing G2 decided against when it gave `dogear-vite` a caret range on
+`dogear-core` rather than a pin. A release where core is at `0.1.2` and vite at `0.3.0` is
+expressible only if the trigger is not authoritative. Two consequences worth having: a
+partially-failed run is re-runnable, because the packages that made it are skipped rather
+than colliding; and a trigger that fires with nothing bumped publishes nothing and goes
+green, which is why the job emits a step-summary table rather than a silent success.
 
-**Reopened by #64, and the first release is the evidence against the tag.** All three
-`0.1.0` packages record `gitHead = 0e4ee643`, a commit that is not reachable from `main`:
-it lived on `m5-release`, PR #52 was squash-merged, and the branch commits went with it. So
-the published packages point at a commit that is not in the repository's history. It still
-resolves on github.com, because GitHub retains commits referenced by a pull request, but
-`git cat-file -e` fails in a fresh clone.
+**What triggers it moved from a tag to a merge. #64, and the first release is the
+evidence.** All three `0.1.0` packages record `gitHead = 0e4ee643`, a commit that is not
+reachable from `main`: it lived on `m5-release`, PR #52 was squash-merged, and the branch
+commits went with it. So the published packages point at a commit that is not in the
+repository's history. It still resolves on github.com, because GitHub retains commits
+referenced by a pull request, but `git cat-file -e` fails in a fresh clone.
 
 Nothing caught that and nothing could have, because tagging happens outside CI and outside
-review, against whatever commit is checked out. The decision above is about *what*
-publishes, and it stands. What #64 questions is what does the *triggering*: a merge to
-`main` is reviewed, has a visible `"version"` diff and three green CI legs, while a tag push
-has none of those. The version comparison already behaves correctly under either trigger,
-so the change is small; the objection is that it would run a job holding `id-token: write`
-on every merge rather than on rare tags, which is answerable by splitting the job.
+review, against whatever commit is checked out. So `release.yml` now runs on
+`push: branches: [main]`, and a release is a pull request whose diff reads
+`"version": "0.1.1" -> "0.1.2"` with the full CI matrix green against it. **A merge never
+invents a version** — the comparison above is unchanged, so the ordinary merges between
+releases find every version already published, skip all three and go green. `RELEASING.md`
+is the procedure; this entry is the reasoning.
+
+**The credential objection is answered by splitting the job, not by a second lock.** A
+merge-triggered publish would otherwise hold `id-token: write` on every merge rather than on
+rare tags, and that matters more here than elsewhere because Dependabot proposes bumps to the
+very actions that job uses. So the decision is split from the act: an unprivileged `decide`
+job does the registry comparison and emits what would publish, and the privileged job runs
+only if it says yes. A `release:publish` label was considered as a second lock and declined —
+the reviewed version diff is already a deliberate act, and a gate that must be remembered is
+a step that will be forgotten, which is the failure mode this whole change exists to remove.
+
+**Tags survive as a record, and are now per package.** The workflow pushes
+`dogear-core@0.1.2` after npm accepts the publish, one per package that actually shipped, from
+a job holding `contents: write` and no OIDC token. A repo-wide `v0.1.2` was rejected for the
+reason the first entry gives: it is a name that lies the first time core patches without vite,
+which is precisely what G2's caret range exists to allow. `v0.1.0` and `v0.1.1` remain as
+relics of the tag-trigger era. Since tags no longer trigger anything, P2 (#60)'s protection on
+`v*` stops being the primary control and branch protection on `main` becomes it.
 
 **The first publish of each package cannot use OIDC, and that is npm's constraint rather
 than ours. Settled during G4.**
@@ -2366,6 +2391,13 @@ None of these blocked M0, and none of them blocks the release.
 - The packages are unscoped, so `--access public` does not apply — only scoped packages
   default to restricted. See the naming entry in the Decisions log.
 
+**A release is a merge to `main`, not a tag.** Bump the manifests that moved, let the
+lockfile follow, and open a pull request whose diff is versions and nothing else; merging it
+is what publishes. Every other merge finds all three versions already on the registry and
+goes green having published nothing. **`RELEASING.md` is the procedure** — including which
+packages a given change forces to move, which is the part that is easy to get wrong. The
+reasoning behind the trigger is in the Decisions log; the runbook does not belong here.
+
 **Publishing uses OIDC trusted publishing from GitHub Actions. This is no longer
 optional:**
 
@@ -2374,16 +2406,17 @@ optional:**
 - Trusted publishing needs no stored credential and **emits provenance attestations
   automatically** — no `--provenance` flag. Provenance is a meaningful trust signal for a
   tool people install into their build pipeline.
-- **Provenance requires a public source repository, and this one is private.** GitHub
-  withdrew support for provenance from private repositories in July 2023, and trusted
-  publishing does not exempt it: the attestation names a repository and a commit that a
-  verifier has to be able to reach. **`0.1.0` proved the worse of the two failure modes.**
+- **Provenance requires a public source repository, and this one was private until P5
+  (#63).** GitHub withdrew support for provenance from private repositories in July 2023, and
+  trusted publishing does not exempt it: the attestation names a repository and a commit that
+  a verifier has to be able to reach. **`0.1.0` proved the worse of the two failure modes.**
   The release did not fail; it published cleanly and skipped the attestation in silence, so
   `dist.attestations` is empty on all three packages while `_npmUser` correctly reads
   `npm-oidc-no-reply@github.com`. OIDC worked, provenance did not, and nothing reported it.
-  Attestations are made at publish time and cannot be added later, so `0.1.0` can never
-  carry one: **G4's provenance criterion is met by the first release published after M7's
-  P5 (#63) flips the repository**, not by anything that can be done to what is already out.
+  Attestations are made at publish time and cannot be added later, so `0.1.0` can never carry
+  one. **G4's provenance criterion is met by `0.1.1`**, the first release from the public
+  repository: `dist.attestations` now names a `slsa.dev/provenance/v1` predicate on all three.
+  Checked against the registry rather than assumed.
 - Trusted-publisher configurations created **after 20 May 2026** must explicitly select at
   least one allowed action. Ours are, so each config names `npm publish` rather than
   relying on the old implicit default.

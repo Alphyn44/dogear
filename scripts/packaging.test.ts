@@ -194,6 +194,42 @@ describe('dogear-vite', () => {
   })
 })
 
+describe('RELEASING.md', () => {
+  /**
+   * A source rule, in the shape packages/cli/src/docs.test.ts established for the command
+   * list — documentation that is also an interface, pinned against the code it describes.
+   *
+   * #64 made a merge to `main` the thing that publishes, so RELEASING.md is now the only
+   * written account of how to cut a release. The half of it that can silently go wrong is
+   * the dependency-range advice: it quotes dogear-vite's range on dogear-core verbatim in
+   * order to explain WHICH bump forces a companion release. Widen that range and the
+   * document keeps confidently describing the old one, which is worse than saying nothing —
+   * it is the exact coupling a reader came to the file to check.
+   */
+  const releasing = read('RELEASING.md')
+
+  it('quotes the dogear-core range that is actually in the manifest', () => {
+    const range = manifest('vite').dependencies?.['dogear-core']
+
+    expect(range).toBeDefined()
+    expect(
+      releasing,
+      `RELEASING.md explains which core bumps force a dogear-vite release by quoting its ` +
+        `range, and the manifest now says ${String(range)}. Update the prose to match.`,
+    ).toContain(`\`${String(range)}\``)
+  })
+
+  it('names every package that publishes', () => {
+    // Cheap, and the failure it catches is a fourth published package whose release
+    // procedure nobody wrote down — which surfaces as a bootstrap nobody knew was needed.
+    for (const dir of PUBLISHED) {
+      expect(releasing, `RELEASING.md never mentions dogear-${dir}.`).toContain(
+        `dogear-${dir}`,
+      )
+    }
+  })
+})
+
 describe('dogear-cli', () => {
   it('still puts `dogear` on PATH, not `dogear-cli`', () => {
     // The one field G5's rename would plausibly have swept up, and the failure is silent

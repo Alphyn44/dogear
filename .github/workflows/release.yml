@@ -5,105 +5,67 @@ name: Release
 # Each package's trusted-publisher configuration on npmjs.com names the repository, the
 # workflow *filename*, and the allowed action (`npm publish`). Renaming or moving this file
 # revokes publishing, and the failure is an auth error that does not mention the filename.
-# If it has to move, update all three configurations first.
+# If it has to move, update all three configurations first. The TRIGGER is not part of that
+# configuration, which is why #64 could change it without touching npmjs.com.
 #
-# The tag is a TRIGGER, not an instruction. What publishes is decided by comparing each
-# manifest's version against the registry, so:
-#   - dogear-core and dogear-vite keep versioning independently (G2's decision), and
+# WHAT PUBLISHES IS THE MANIFEST, and that is unchanged since G4. Each package.json version
+# is compared against the registry and only what is absent is published, so:
+#   - dogear-core and dogear-vite keep versioning independently (G2's decision),
+#   - a merge that bumps nothing publishes nothing and goes green, and
 #   - a partially-failed run is re-runnable, since whatever made it through is skipped.
+#
+# WHAT TRIGGERS IT is a merge to main (#64). A tag push happens outside CI and outside
+# review, against whatever commit is checked out — which is how all three 0.1.0 packages came
+# to record a gitHead that is not reachable from main. A merge is reviewed, its "version" diff
+# is visible, and CI is already green against the commit that publishes. See the brief's
+# Decisions log; RELEASING.md is the procedure.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+  # H5 (#57): the rehearsal. Run against any branch to exercise everything below except the
+  # publish itself. See the `publish` job for why the EVENT, not an input, is what makes it
+  # unable to publish.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-jobs:
-  # G4: "Publishing runs only after `npm run verify` passes in the same workflow." The full
-  # three-version matrix, deliberately: a release is the one build where proving the
-  # `engines` floors is worth the extra minutes.
-  verify:
-    uses: ./.github/workflows/verify.yml
+# Serialised, and never cancelled. Two merges landing close together must not race two
+# publishes of the same version, and a publish that is mid-flight must be allowed to finish —
+# cancelling one between `npm publish` and the tag push is how a package ends up on the
+# registry with no record of what shipped.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
-  publish:
-    needs: verify
+jobs:
+  # The whole point of #64's split: this job decides, and it holds no credential to abuse.
+  #
+  # It runs on every merge to main, so it is deliberately the cheapest thing that can answer
+  # the question — node and `npm view` against the public registry, no `npm ci`, no cache, and
+  # no `registry-url` so there is not even an .npmrc for a token to land in. An ordinary merge
+  # pays for this job and nothing else.
+  decide:
+    name: decide what would publish
     runs-on: ubuntu-latest
 
-    # Job-level, because permissions do NOT inherit from the workflow block above, and BOTH
-    # entries are needed. Declaring only `id-token: write` here REPLACES the workflow's
-    # `contents: read`, and actions/checkout then cannot read the repository.
-    permissions:
-      contents: read
-      id-token: write
+    outputs:
+      publish: ${{ steps.compare.outputs.publish }}
+      targets: ${{ steps.compare.outputs.targets }}
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v5
         with:
-          # Trusted publishing needs Node >= 22.14.0, which is above both floors in
-          # `engines`. 24 is what development happens on and is well clear of it; the verify
-          # job above is what proves the floors still work.
           node-version: '24'
-          # Writes an .npmrc pointing at the public registry. It references NODE_AUTH_TOKEN,
-          # which is deliberately unset: a new-enough npm sees the Actions OIDC environment
-          # and exchanges a token instead. Without registry-url there is no .npmrc at all
-          # and the exchange never happens.
-          registry-url: 'https://registry.npmjs.org'
-          cache: npm
 
-      # Trusted publishing needs npm >= 11.5.1. Node 24 ships npm 11.x, but the exact patch
-      # drifts with the runner image, so this is a floor check rather than an assumption. An
-      # older npm does not report a version problem. It looks for a token that does not
-      # exist and fails with ENEEDAUTH, on a workflow that otherwise looks correct.
-      - name: Ensure npm >= 11.5.1
-        run: |
-          set -euo pipefail
-          need=11.5.1
-          have=$(npm --version)
-          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
-            echo "npm $have is below $need, upgrading"
-            npm install -g npm@latest
-          fi
-          npm --version
-
-      - run: npm ci
-
-      # `files` is ["dist", "README.md"], so without this the tarballs would be a README and
-      # a manifest: they install cleanly, resolve cleanly, and import to nothing.
-      - run: npm run build
-
-      - name: Refuse to publish an empty tarball
-        run: |
-          set -euo pipefail
-          for file in \
-            packages/core/dist/index.js \
-            packages/core/dist/noop.js \
-            packages/core/dist/client.js \
-            packages/core/dist/index.d.ts \
-            packages/vite/dist/index.js \
-            packages/vite/dist/index.d.ts \
-            packages/cli/dist/cli.js
-          do
-            if [ ! -s "$file" ]; then
-              echo "::error::$file is missing or empty. The build did not produce a publishable tarball"
-              exit 1
-            fi
-          done
-
-      # Explicit -w flags matching the root `build` script, never `--workspaces`: the root
-      # `workspaces` array is ["packages/*", "examples/*"], so a workspaces-wide publish
-      # would name dogear-queue and dogear-example-react. Both are `private: true` and npm
-      # would skip them, but "happens to be skipped" is a weaker guarantee than "never
-      # named", and scripts/packaging.test.ts is what keeps that `private` there.
-      #
-      # No --provenance flag: trusted publishing emits attestations on its own. No
-      # --access either, since the packages are unscoped and so public by default.
-      - name: Publish packages whose version is not yet on the registry
+      - name: Compare each manifest against the registry
+        id: compare
         run: |
           set -euo pipefail
 
-          published=""
+          targets=""
           skipped=""
 
           for dir in core vite cli; do
@@ -141,30 +103,285 @@ jobs:
             fi
 
             echo "publish  $name@$version"
-            npm publish -w "$name"
-            published="$published $name@$version"
+            targets="$targets $dir"
           done
 
+          # Package DIRECTORIES, not name@version. The publish job re-reads the manifests at
+          # the same commit, so passing versions across would be a second copy of a fact that
+          # cannot disagree. What must not be duplicated is the CLASSIFICATION above — a
+          # second `npm view` loop in the privileged job is the thing that would drift.
+          targets="${targets# }"
+
           {
-            echo "### Release ${GITHUB_REF_NAME}"
+            echo "targets=$targets"
+            if [ -n "$targets" ]; then echo "publish=true"; else echo "publish=false"; fi
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            heading="### Release rehearsal — \`${GITHUB_REF_NAME}\`"
+            verb="would publish"
+          else
+            heading="### Release"
+            verb="publish"
+          fi
+
+          {
+            echo "$heading"
+            echo
+            if [ -z "$targets" ]; then
+              echo "Nothing to publish. Every manifest version is already on the registry."
+              echo
+            fi
+            echo "| | package |"
+            echo "|---|---|"
+            for dir in $targets; do
+              name=$(node -p "require('./packages/$dir/package.json').name")
+              version=$(node -p "require('./packages/$dir/package.json').version")
+              echo "| $verb | \`$name@$version\` |"
+            done
+            for entry in $skipped; do echo "| skipped (already on npm) | \`$entry\` |"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # G4: "Publishing runs only after `npm run verify` passes in the same workflow." A called
+  # workflow's jobs run inside the caller's run, so `needs: verify` below is a real gate rather
+  # than a hope about a previous run. The full three-version matrix, deliberately: a release is
+  # the one build where proving the `engines` floors is worth the extra minutes.
+  #
+  # Gated on `decide`, and that costs no coverage. ci.yml already runs these same five legs on
+  # `push: branches: [main]`, so an ordinary merge is not skipping verification — it is
+  # skipping a SECOND run of it against the identical commit.
+  verify:
+    needs: decide
+    if: needs.decide.outputs.publish == 'true'
+    uses: ./.github/workflows/verify.yml
+
+  # The empty-tarball guard, in a job of its own so that a rehearsal reaches it.
+  #
+  # It cannot live inside `publish`, because `publish` is precisely what a dry run must not
+  # start — that is H5's second acceptance criterion. Splitting it out means `publish` builds a
+  # second time on a real release, which is one redundant build on the rarest path in the
+  # repository. Bought deliberately: what npm attests is then what the publishing job itself
+  # built, rather than an artefact handed to it by another job.
+  tarballs:
+    name: guard against an empty tarball
+    needs: decide
+    if: needs.decide.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # `files` is ["dist", "README.md"], so without a build the tarballs would be a README and
+      # a manifest: they install cleanly, resolve cleanly, and import to nothing.
+      - run: npm run build
+
+      - name: Refuse to publish an empty tarball
+        run: |
+          set -euo pipefail
+          for file in \
+            packages/core/dist/index.js \
+            packages/core/dist/noop.js \
+            packages/core/dist/client.js \
+            packages/core/dist/index.d.ts \
+            packages/vite/dist/index.js \
+            packages/vite/dist/index.d.ts \
+            packages/cli/dist/cli.js
+          do
+            if [ ! -s "$file" ]; then
+              echo "::error::$file is missing or empty. The build did not produce a publishable tarball"
+              exit 1
+            fi
+          done
+
+  publish:
+    needs: [decide, verify, tarballs]
+    # THE EVENT IS THE SAFETY, NOT AN `if:` ON A COMMAND.
+    #
+    # H5 originally proposed a workflow_dispatch input gating the publish command. Once #64
+    # split this job out, the event is strictly stronger: permissions are job-level, so a
+    # dispatched run never STARTS this job and therefore never mints an OIDC token at all.
+    # "Cannot publish by accident" becomes structural. An input can be set wrong; an event
+    # cannot.
+    if: github.event_name == 'push' && needs.decide.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+
+    # Job-level, because permissions do NOT inherit from the workflow block above, and BOTH
+    # entries are needed. Declaring only `id-token: write` here REPLACES the workflow's
+    # `contents: read`, and actions/checkout then cannot read the repository.
+    #
+    # `contents` stays READ. Tagging is a separate job so that write access to the repository
+    # and the publishing credential are never held at the same time.
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          # Trusted publishing needs Node >= 22.14.0, which is above both floors in
+          # `engines`. 24 is what development happens on and is well clear of it; the verify
+          # job above is what proves the floors still work.
+          node-version: '24'
+          # Writes an .npmrc pointing at the public registry. It references NODE_AUTH_TOKEN,
+          # which is deliberately unset: a new-enough npm sees the Actions OIDC environment
+          # and exchanges a token instead. Without registry-url there is no .npmrc at all
+          # and the exchange never happens.
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      # Trusted publishing needs npm >= 11.5.1. Node 24 ships npm 11.x, but the exact patch
+      # drifts with the runner image, so this is a floor check rather than an assumption. An
+      # older npm does not report a version problem. It looks for a token that does not
+      # exist and fails with ENEEDAUTH, on a workflow that otherwise looks correct.
+      - name: Ensure npm >= 11.5.1
+        run: |
+          set -euo pipefail
+          need=11.5.1
+          have=$(npm --version)
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" != "$need" ]; then
+            echo "npm $have is below $need, upgrading"
+            npm install -g npm@latest
+          fi
+          npm --version
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Explicit -w flags matching the root `build` script, never `--workspaces`: the root
+      # `workspaces` array is ["packages/*", "examples/*"], so a workspaces-wide publish
+      # would name dogear-queue and dogear-example-react. Both are `private: true` and npm
+      # would skip them, but "happens to be skipped" is a weaker guarantee than "never
+      # named", and scripts/packaging.test.ts is what keeps that `private` there.
+      #
+      # No --provenance flag: trusted publishing emits attestations on its own. No
+      # --access either, since the packages are unscoped and so public by default.
+      - name: Publish the packages decide named
+        id: publish
+        env:
+          TARGETS: ${{ needs.decide.outputs.targets }}
+        run: |
+          set -euo pipefail
+
+          read -ra targets <<< "$TARGETS"
+
+          published=""
+          failed=""
+
+          # Deliberately not fail-fast. A package that publishes and then a later one that does
+          # not must still be recorded, because the tag job reads this output — otherwise the
+          # half that shipped goes untagged and nothing says so. The loop reports every failure
+          # and exits non-zero at the end.
+          for dir in "${targets[@]}"; do
+            name=$(node -p "require('./packages/$dir/package.json').name")
+            version=$(node -p "require('./packages/$dir/package.json').version")
+
+            echo "publish  $name@$version"
+            if npm publish -w "$name"; then
+              published="$published $dir"
+            else
+              echo "::error::npm publish failed for $name@$version"
+              failed="$failed $name@$version"
+            fi
+          done
+
+          published="${published# }"
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Published"
             echo
             echo "| | package |"
             echo "|---|---|"
-            for entry in $published; do echo "| published | \`$entry\` |"; done
-            for entry in $skipped;   do echo "| skipped (already on npm) | \`$entry\` |"; done
+            for dir in $published; do
+              name=$(node -p "require('./packages/$dir/package.json').name")
+              version=$(node -p "require('./packages/$dir/package.json').version")
+              echo "| published | \`$name@$version\` |"
+            done
+            for entry in $failed; do echo "| FAILED | \`$entry\` |"; done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Advisory, and last so it cannot stop a good publish. The tag is a trigger by design,
-      # so a mismatch is not an error, but `git tag v0.2.0` when nobody bumped a manifest
-      # publishes nothing and goes green, which is worth one line saying so.
-      - name: Note whether the tag matches any manifest version
-        if: always()
+          if [ -n "$failed" ]; then
+            echo "::error::one or more packages failed to publish:$failed"
+            exit 1
+          fi
+
+  # Tags are a RECORD of what shipped, never the thing that ships it (#64).
+  #
+  # Per package — `dogear-core@0.1.2` — because G2 has core, vite and cli versioning
+  # independently, and a repo-wide `v0.1.2` is a name that lies the first time core patches
+  # without vite. `v0.1.0` and `v0.1.1` remain as relics of the tag-trigger era.
+  #
+  # Separate from `publish` so that `contents: write` and `id-token: write` are never held by
+  # the same job. `!cancelled()` rather than an implicit success gate: a run that published two
+  # of three packages and failed on the last one must still tag the two that shipped.
+  tag:
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result != 'skipped' && needs.publish.outputs.published != '' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Tags are not fetched at the default depth, and the existence check below needs
+          # them. Cheap next to a full history.
+          fetch-tags: true
+
+      # ubuntu-latest ships a node, but which one drifts with the runner image. Pinned because
+      # the step below reads the manifests with `node -p` to build the tag names.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Tag each published package
+        env:
+          PUBLISHED: ${{ needs.publish.outputs.published }}
         run: |
           set -euo pipefail
-          tag_version="${GITHUB_REF_NAME#v}"
-          for dir in core vite cli; do
-            if [ "$(node -p "require('./packages/$dir/package.json').version")" = "$tag_version" ]; then
-              exit 0
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          read -ra published <<< "$PUBLISHED"
+
+          created=()
+          for dir in "${published[@]}"; do
+            name=$(node -p "require('./packages/$dir/package.json').name")
+            version=$(node -p "require('./packages/$dir/package.json').version")
+            tag="$name@$version"
+
+            # Reachable only when someone re-runs a run that already tagged. npm refuses to
+            # republish a version, so decide would have found nothing to do — but RELEASING.md
+            # tells people to re-run a failed release, and a re-run must not fail here.
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "skip     $tag (already tagged)"
+              continue
             fi
+
+            git tag -a "$tag" -m "$tag"
+            created+=("$tag")
           done
-          echo "::warning::tag ${GITHUB_REF_NAME} matches no manifest version. The tag is only a trigger, so this is not an error, but check that you bumped what you meant to."
+
+          if [ ${#created[@]} -eq 0 ]; then
+            echo "no new tags"
+            exit 0
+          fi
+
+          # Named refs rather than --tags, so this can never push a tag someone left in the
+          # working checkout.
+          git push origin "${created[@]}"

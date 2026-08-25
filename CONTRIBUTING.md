@@ -78,6 +78,10 @@ Two CI jobs run alongside that matrix and are **not** part of `npm run verify`:
   them. It needs `npm run build` first. It is out of `verify` because the install reaches the
   registry, and `verify` is what a release gates on.
 
+A release is a merge to `main` that bumps a package version — there is no tag to push.
+[RELEASING.md](./RELEASING.md) has the procedure, including which packages a given change
+forces to move.
+
 Fair warning on house style: the conventions here are unusual and load-bearing. Comments
 explain *why* rather than what, the brief carries the reasoning that would otherwise live
 in a wiki, and there is no ESLint because `verify` is the gate. A pull request that misses
