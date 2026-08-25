@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -282,7 +283,24 @@ export async function createScratchProject(
 ): Promise<string> {
   // Per-manager prefix so concurrent legs cannot be mistaken for each other in a stack trace,
   // and so a leaked directory says which install left it behind.
-  const root = mkdtempSync(join(tmpdir(), `dogear-packed-${manager}-`))
+  //
+  // **`realpathSync.native`, and on Windows it is what keeps vite alive.** The GitHub
+  // windows-latest runner's TEMP sits under an 8.3 short name (`C:\Users\RUNNER~1\…`, because
+  // `runneradmin` is too long for the legacy form), and `tmpdir()` hands that spelling straight
+  // through. vite then watches it, ReadDirectoryChangesW reports the *long* name back, and
+  // libuv asserts that what it was given is a prefix of what it got:
+  //
+  //     Assertion failed: !_wcsnicmp(filename, dir, dirlen), file src\win\fs-event.c, line 72
+  //
+  // which aborts the process with 0xC0000409 *after* it has printed its ready banner. The symptom
+  // is a dev server that starts, says it is listening, and dies on the first file event.
+  // `.native` rather than the JS `realpathSync` because only the OS call expands a short name;
+  // the JS one resolves symlinks and leaves `RUNNER~1` exactly as it found it. On macOS this is
+  // the `/var` → `/private/var` resolution the same call gives for free, which is the same class
+  // of bug one platform over.
+  const root = realpathSync.native(
+    mkdtempSync(join(tmpdir(), `dogear-packed-${manager}-`)),
+  )
 
   // A bare `.git` directory rather than a real repository: `findGitRoot` only looks for the
   // entry, and E4's gitignore step then takes its degraded path, which is the arrangement

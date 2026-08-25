@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,6 +27,26 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js')
 
+/**
+ * A temp directory under its **resolved** name, which on macOS is not the name `tmpdir()` gives.
+ *
+ * `/var` is a symlink to `/private/var` there, so `mkdtempSync(tmpdir())` hands back a
+ * `/var/folders/…` path while a process *spawned with that as its cwd* reports
+ * `/private/var/folders/…`: the kernel resolves a working directory, and nothing asked it to.
+ * This suite registers a repository in-process and then runs the built binary inside it, so the
+ * two spellings become two `registryKey`s and the `(this repo)` marker never matches anything.
+ *
+ * **This is an artefact of registering a path by hand, not a bug in `registryKey`.** Nothing in
+ * the product registers a path it did not get from `process.cwd()` or a Vite root derived from
+ * one, so both sides are already resolved and already agree; ../../queue/src/registry.ts records
+ * why `realpathSync` would be the wrong thing *there* (it throws for a root that has gone, which
+ * is the state `dogear status` exists to report). Resolving once at creation keeps that decision
+ * where it is and gives the test the one spelling the binary is going to see.
+ */
+function tempDir(prefix: string): string {
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)))
+}
+
 interface Run {
   readonly stdout: string
   readonly stderr: string
@@ -38,8 +58,8 @@ let outside: string
 let path: string
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), 'dogear-built-home-'))
-  outside = mkdtempSync(join(tmpdir(), 'dogear-built-outside-'))
+  home = tempDir('dogear-built-home-')
+  outside = tempDir('dogear-built-outside-')
   path = registryPath({ DOGEAR_HOME: home })
 })
 
@@ -96,7 +116,7 @@ describe('dogear status, spawned as the built binary', () => {
   })
 
   it('lists a registered repository from outside every repository', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dogear-built-repo-'))
+    const repo = tempDir('dogear-built-repo-')
     writeFileSync(join(repo, '.git'), 'gitdir: /elsewhere')
 
     try {
@@ -121,7 +141,7 @@ describe('dogear status, spawned as the built binary', () => {
   })
 
   it('marks the current repository when run inside one', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dogear-built-here-'))
+    const repo = tempDir('dogear-built-here-')
     writeFileSync(join(repo, '.git'), 'gitdir: /elsewhere')
 
     try {

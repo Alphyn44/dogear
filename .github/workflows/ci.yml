@@ -623,7 +623,13 @@ jobs:
           # apostrophes in its comments, either of which ends a single-quoted argument. stdout is
           # the summary and stderr is the log, which is what lets one program write markdown and
           # raise ::error:: annotations without an annotation landing in the middle of a table.
-          cat > report.js <<'REPORT'
+          #
+          # `.cjs`, NOT `.js`, and the extension is the whole thing that makes this run. The file
+          # is written into the checkout, whose package.json says `"type": "module"`, so a `.js`
+          # here is an ES module and `require` is not defined in one, so the step died on line 1
+          # having reported nothing. `.cjs` opts this one file back into CommonJS without making
+          # the repository's own module type a thing this workflow has to care about.
+          cat > report.cjs <<'REPORT'
           const fs = require('node:fs')
           const read = (p) => JSON.parse(fs.readFileSync(p, 'utf8').trim() || '{}')
 
@@ -782,4 +788,4 @@ jobs:
           }
           REPORT
 
-          node report.js >> "$GITHUB_STEP_SUMMARY"
+          node report.cjs >> "$GITHUB_STEP_SUMMARY"
