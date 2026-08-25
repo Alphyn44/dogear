@@ -2561,6 +2561,43 @@ The same reasoning has a blind spot, and **H9 (#71)** is it. `github-actions` co
 references and nothing else, so H4's actionlint tarball (pinned by version and checksum as
 literals) is invisible to Dependabot and would rot with nobody proposing a bump.
 
+**The browser suite runs against a scratch project, not `examples/react-app`. Settled during
+H3.** The story names the example app as the obvious host, and it is disqualified by one line
+of the plugin: the endpoint writes to `queuePathFor(findGitRoot(server.config.root))`, the
+example's git root is this repository, and no option overrides it. Every run would append test
+annotations to the developer's own `.dogear/queue.json` and stamp paths naming this repo's real
+source files — the test would pass while measuring something nobody asked for. So a committed
+fixture app is copied into a temp directory with a bare `.git` of its own, which is the same
+conclusion H1 reached about `createScratchProject` and for a closely related reason.
+
+It installs nothing, and that is what keeps it out of H1's territory rather than merely fast.
+The workspace already hoists `react`, `@vitejs/plugin-react` and `vite`, so one junction
+reaches them and the `dogear-vite` symlink together — meaning the fixture consumes the **built**
+plugin through its exports map, exactly as the example app does and for the same reason F1's
+layer 3 gives. H1 owns *what npm publishes*; this owns *what the browser does*, and folding
+them together would put a registry on the critical path of a suite that needs none.
+
+**No test-only handle was added to reach the overlay, and the refusal made the test better.
+Settled during H3.** The shadow root is `closed`, so nothing outside it can query dogear's DOM
+— which is B7's guarantee working, not an obstacle. Exposing the root on `window.__dogear` for
+the suite's benefit would have put a hole in the one property the overlay's isolation rests on,
+in order to test it. The alternative turned out to be what the story asked for anyway: every
+step is real input — a keyboard-modified pointer event, `Enter`, a click on the badge,
+`Ctrl+Enter` — and the only thing the suite reads is `.dogear/queue.json`, which is the
+artefact under test. The badge's screen position had to be derived from its CSS rather than
+found with a locator, and that is the real cost; it is paid down by hit-testing the point
+before clicking it, so a restyle fails naming the function to fix.
+
+**The `transform: false` leg is what makes the `via` assertion mean anything. Settled during
+H3.** This is the story's fourth criterion made literal. An annotation still arrives with the
+transform off — C3's floor resolves a selector and a text snippet, which is exactly what that
+floor is for — so a suite that asserted only "something reached the queue" would stay green
+through a build where the attribute transform had stopped running entirely. Driving the
+identical gesture against a second server and requiring **no** `via: 'attribute'` site is the
+same standing rule this repository already applies to `check-leak.test.ts`, to H8's classifier
+self-test and to H7's `dependencies.total > 0`: on a healthy repo a guard that cannot fail will
+pass forever while testing nothing.
+
 ---
 
 ## Later, maybe

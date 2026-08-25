@@ -240,6 +240,54 @@ jobs:
 
       - run: npm run test:managers
 
+  # H3 (#55). The product's central claim, driven by a browser instead of by a person.
+  #
+  # Click an element in a running app and the comment arrives bound to a source file and line.
+  # Both halves are covered — the transform against fixtures, the endpoint against a real
+  # server — and until this nothing exercised the seam between them. The suite modifier-clicks
+  # a real element in Chromium, types, queues, opens the panel, submits, and reads the
+  # resulting .dogear/queue.json off disk, asserting `via: "attribute"` and the fixture's own
+  # file and line. A second leg drives the identical gesture against a server configured
+  # `transform: false` and requires NO attribute site, which is what stops the first leg from
+  # passing on a build where the transform had stopped running entirely.
+  #
+  # Ubuntu only. The seam is not platform-specific — the transform, the endpoint and the queue
+  # are each already covered on all three by verify.yml — and a browser binary download per
+  # platform buys nothing for it. WebKit would be the interesting axis rather than the OS, and
+  # that is B8 (#35), which this harness makes a small follow-up.
+  #
+  # Here and not in verify.yml, like every job in this file: the browser binaries are a
+  # download, verify.yml is what release.yml gates on, and a release must not be able to fail
+  # because a browser CDN was slow.
+  browser:
+    name: browser round trip
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          # One version, for the reason `packed` gives: what this job proves is about the
+          # browser, not about Node.
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # The fixture consumes dogear-vite through its exports map, and the plugin serves
+      # dogear-core's built dist/client.js. Without this the plugin answers with the
+      # missing-bundle stub, the overlay never loads, and every case fails as "no annotation
+      # arrived" — which is why the suite checks for these files up front and says so.
+      - run: npm run build
+
+      # Chromium only. The suite launches exactly one engine, and installing the other two
+      # would triple the download for browsers nothing runs. `--with-deps` is the Linux system
+      # libraries Chromium needs, which the runner does not ship.
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm run test:browser
+
   # H8 (#70). Two halves, and they are deliberately different KINDS of check.
   #
   # The GATE: a pull request must never lower a version below what is on the base branch. A

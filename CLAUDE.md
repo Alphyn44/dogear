@@ -408,6 +408,7 @@ rather than merely promised.
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
 | `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client. Needs a build first |
 | `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace, and runs the binary, `dogear init` and a real dev server. Needs a build first; deliberately not in `verify` |
+| `npm run test:browser` | **H3's round trip.** Drives Chromium against a real dev server: modifier-click, comment, submit, then reads `.dogear/queue.json`. Needs a build and a browser binary; deliberately not in `verify` |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
@@ -496,13 +497,13 @@ whether the package actually ships. H9 (#71) covers the ecosystem's blind spot: 
 `uses:` references, so H4's actionlint tarball (pinned by version and checksum as literals)
 is invisible to it.
 
-**`ci.yml` carries six jobs and `verify.yml` carries one, and the split is a rule rather
+**`ci.yml` carries seven jobs and `verify.yml` carries one, and the split is a rule rather
 than an accident.** Everything that reaches the network beyond `npm ci` lives in `ci.yml`:
-`workflows` (actionlint), `packed` and `managers` (the registry), `versions` and `dependencies`
-(H8 and H7).
+`workflows` (actionlint), `packed` and `managers` (the registry), `browser` (H3's Chromium
+download), `versions` and `dependencies` (H8 and H7).
 `verify.yml` is what `release.yml` gates on, so a release must never be able to fail because
-a registry, a GitHub Releases download or npm's audit endpoint was slow, or because an
-advisory was published that morning. `verify.yml`'s nine steps are the correctness gate and
+a registry, a GitHub Releases download, a browser CDN or npm's audit endpoint was slow, or
+because an advisory was published that morning. `verify.yml`'s nine steps are the correctness gate and
 nothing else belongs in them.
 
 **H8's `versions` job is the history half of a rule whose source half is already tested.**
@@ -574,21 +575,25 @@ are gone" assertion passes without testing anything. `teardown.test.ts` and
 `DOGEAR_HOME` at a temp directory so no suite can write to the real one. See the registry
 notes above for why that is a global rather than a convention.
 
-**Five vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
+**Six vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
 plus `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`
 runs it on every turn that touches TypeScript. Build-independent is the rule there, not
 hermeticity: `check-leak.test.ts` builds its own temp fixtures, while G1's
 `packaging.test.ts` and the two `docs.test.ts` suites read the repository's own committed
-files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other four need a build first:
+files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other five need a build first:
 `scripts/gate/*.test.ts` reads real build output under `npm run check:leak`,
 `packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`, H1's
-`test-packed/*.test.ts` packs the real tarballs under `npm run test:packed`, and H6's
+`test-packed/*.test.ts` packs the real tarballs under `npm run test:packed`, H6's
 `test-packed/managers/*.test.ts` installs them with pnpm and Yarn under
-`npm run test:managers`. Splitting
+`npm run test:managers`, and H3's `test-browser/*.test.ts` drives a real browser under
+`npm run test:browser`. Splitting
 on directory rather than filename means no config needs an `exclude` to stay out of another's
 way — and `test-packed/*.test.ts` being **non-recursive** is what keeps H1's suite from
 swallowing H6's, which is the difference between the `packed` job running four installs per
-platform and one. They are kept separate rather than merged because `check:leak` is a *gate* answering one
+platform and one. `test-browser/*.test.ts` is non-recursive for a second reason worth knowing:
+`test-browser/app/` is the fixture app's *own source*, served to a browser rather than run by
+vitest, and a recursive pattern is how a fixture directory ends up being collected as a suite.
+They are kept separate rather than merged because `check:leak` is a *gate* answering one
 question (did the sentinel leak into production?) — folding a behavioural suite into it would
 make the name lie.
 
@@ -599,6 +604,45 @@ job across all three platforms instead. `test-packed/fixture.ts` holds the share
 `packAll` → `createScratchProject` (under `tmpdir`, never inside the repo, because
 `findGitRoot` walks *up*) → `startDevServer` → `runInstalledCli`. One install is shared by the
 whole file; it is the slowest thing in the repository by an order of magnitude.
+
+**H3's browser suite could not use `examples/react-app`, and the reason generalises.** The
+endpoint writes to `queuePathFor(findGitRoot(server.config.root))`, the example's git root is
+*this repository*, and there is no override — so every run would append test annotations to the
+developer's own `.dogear/queue.json` and stamp paths naming this repo's real source. So
+`test-browser/` copies a committed fixture app into a `mkdtemp` directory with a bare `.git` of
+its own, the same conclusion `createScratchProject` reached for H1. It **installs nothing**:
+`react`, `@vitejs/plugin-react` and `vite` are hoisted to the workspace root, so one
+**junction** at `<scratch>/node_modules` reaches them along with the workspace symlinks for
+`dogear-vite` and `dogear-core` — which means the fixture consumes the *built* plugin through
+its exports map, exactly as the example app does and for the same F1-layer-3 reason. Two lines
+in the generated `vite.config.js` exist only because of that junction: `server.fs.allow` must
+name both roots, since Vite realpaths `react` and `dogear-vite` back into this repository and
+would otherwise 403 them; and `cacheDir` must be moved off its default of
+`<root>/node_modules/.vite`, which *is* this repository's `node_modules` through the link.
+`discardFixture` unlinks before it deletes — Node is documented not to follow links when
+removing, but that is not a basis for pointing `rmSync(recursive)` at a live handle on the
+developer's own tree.
+
+**Nothing in that suite queries dogear's DOM, because nothing can — and the constraint improved
+it.** The shadow root is `closed`, `window.__dogear` carries only `sentinel`/`stop`/`start`/
+`running`, and no test-only handle was added: B7's guarantee is a feature. So every step is
+real input — a keyboard-modified pointer event, `Enter`, a click on the badge, `Ctrl+Enter` —
+which is what the story asked for anyway. The badge is the panel's **only** handle
+(`registry.on(badge.element, 'click', togglePanel)`; there is no chord), so `badgePoint()` is
+derived from `.badge`'s two inset constants in `styles.ts` and **checked with a hit test before
+it is used** — a restyle then fails naming that function, instead of surfacing three steps
+later as a submit that silently wrote nothing. The one thing a closed root does leave visible
+is that hit test: a hit inside retargets to the host, so `elementFromPoint` naming
+`dogear-overlay` is how the suite knows anything at all.
+
+**The `transform: false` leg is the story, not a bonus case.** A test asserting only that *an
+annotation arrived* passes on a build where the attribute transform stopped running entirely,
+because C3's selector-and-text floor still produces an item. So the identical gesture runs
+against a second server configured `transform: false` and must produce an annotation with **no**
+`via: 'attribute'` site while still carrying a resolved selector — the overlay demonstrably
+working, only the resolution absent. Same standing rule as `check-leak.test.ts`, H8's
+classifier self-test and H7's `dependencies.total > 0`: a guard that would go green forever has
+not passed, it has failed to run.
 
 **The leak sentinel is internal to `dogear-core` on purpose.** `packages/core/src/sentinel.ts`
 is not re-exported from `index.ts`, because `noop.ts` mirrors index's public surface and

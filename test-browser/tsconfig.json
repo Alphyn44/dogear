@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // DOM as well as node, unlike test-packed's. The harness passes callbacks to
+    // `page.evaluate`, and those run in the browser — `document` and `Element` have to be in
+    // scope for them to typecheck at all. Everything outside those callbacks is ordinary
+    // Node: spawning vite, polling a file, reading the fixture's source.
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"]
+  },
+  // ../test-packed/fixture.ts is imported rather than copied — its `startDevServer` is
+  // already the right spawn, and this repository has been bitten by two copies of a thing
+  // drifting apart. It typechecks under its own project too; listing it here is what lets
+  // this one resolve the import.
+  "include": ["**/*.ts", "../test-packed/fixture.ts"],
+  // The fixture app is JSX served to a browser by vite, not TypeScript this project compiles.
+  "exclude": ["app"]
+}
