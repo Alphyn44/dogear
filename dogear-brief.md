@@ -1147,11 +1147,74 @@ Everything init writes points at the repo-relative, committed
 person cloning uses. That it does is currently reasoning, and the root README states it as
 fact. Lowest priority in the epic: the failure is narrow, documented and unreported.
 
+**H7 — Dependency health, reported on every pull request**
+- Every pull request surfaces the current `npm audit` result, ranked by severity.
+- The report distinguishes advisories that reach a user from advisories in build tooling.
+- It also reports what is out of date, so a deliberate upgrade can be planned rather than
+  discovered.
+- It works identically on a pull request from a fork.
+- It cannot publish, comment, or write anything outside the run.
+
+The counterpart to `.github/dependabot.yml` deliberately not covering npm: the signal is
+wanted, the routine pull requests are not. **Severity alone is the wrong ranking here.** Only
+three things ever reach a user (`magic-string` and `dogear-core` through the plugin,
+`@modelcontextprotocol/sdk` through the CLI); everything else is tooling that `npm run
+verify` exercises and nobody installs. A raw `npm audit` number puts a dev-tree advisory in
+front of the maintainer with the same weight as one in a shipped dependency, which is how a
+report becomes something people learn to ignore. `npm audit --omit=dev` is the other half of
+the picture, and the two numbers together are the ranking worth having.
+
+**Reporting and failing are separate decisions.** Report everything; gate on the part that
+ships, and only on high or critical. A dev-tree advisory that blocks a merge teaches people to
+override the check, and an override that becomes routine is worse than no check at all.
+
+**H8 — Block a version rollback, and report distance since the last bump**
+- A pull request that lowers a package version below the one on `main` fails.
+- A pull request that raises a version, or leaves every version alone, passes.
+- Every pull request reports how many merges to `main` have happened since the last version
+  bump.
+- It works identically on a pull request from a fork.
+- It cannot publish, comment, or write anything outside the run.
+
+Two checks over the same data, and both became live questions the moment a merge to `main`
+became the thing that publishes. Nothing stops a version going *backwards*, and nothing reports
+how far `main` has drifted from the last release, so a rollback merges silently and "are we
+due a release?" is answered by memory.
+
+**Lockstep is already covered; this is the other half.** `scripts/packaging.test.ts` asserts
+the three manifests carry the *same* version, which is a required status check. What it cannot
+see is history: `0.1.2 → 0.1.1` across all three passes it, because they still match each
+other. The two rollback shapes fail differently and the second is worse. A version already on
+npm makes the release run go **green having published nothing**, while a lower version never
+published gets published, and `npm publish` moves the `latest` tag backwards.
+
+**It cannot be a vitest source rule, which is where it would otherwise belong.** Comparing
+against a previous version needs either git history or the registry, and `npm test` has to stay
+build-independent and network-free because `verify` is what a release gates on: the same
+reason H7 keeps `npm audit` out of those nine steps.
+
+**H9 — The actionlint pin cannot go stale unnoticed**
+- A new actionlint release is surfaced without someone remembering to look.
+- Whatever replaces the download is pinned at least as tightly as the checksum it drops.
+
+H4 pins a version and a SHA256 as literals in `ci.yml`. `dependabot.yml` covers the
+`github-actions` ecosystem, which means `uses:` references only. A downloaded release tarball
+is invisible to it, so nothing will ever propose a bump and the pin rots silently.
+
+Low stakes, and the second criterion is what makes the obvious fixes wrong.
+`uses: docker://rhysd/actionlint:<tag>` would bring it under Dependabot at the cost of a
+*mutable* tag, which is strictly looser than the checksum it replaces; third-party wrapper
+actions add the supply-chain hop the checksum exists to avoid, in a repository where
+`release.yml` holds a publishing credential. Doing nothing is a legitimate outcome. The
+question this story answers is whether that is a decision or an oversight.
+
 **Delivery ordering: H4, then H2, then H1.** H4 first because every other story here adds
 workflow YAML and none of it is checked until it does. H2 before H1 so that H1's job inherits
 the platforms rather than adding them again. H3 is the expensive one and independent of all of
 them; H5 waits on the publish trigger being settled; H6 builds directly on H1's pack-and-install
-harness.
+harness. **H8 before H7, and H9 last.** H8 guards the publish path that #64 changed and needs
+the same branch-protection edit H2's job rename already forces, so the two settings changes
+happen once; H7 and H9 are reports and gate nothing that a release depends on.
 
 ### Non-functional requirements
 
@@ -2468,16 +2531,20 @@ is wrong.
 mostly churn: the devDependencies are tsup, vitest, prettier, typescript and happy-dom, all
 of which move constantly, `npm run verify` already fails if any of them breaks something,
 and a genuine vulnerability still arrives through security updates. For `github-actions` the
-risk is different in kind rather than degree: the workflows pin `actions/checkout@v5` and
+risk is different in kind rather than degree: the workflows pin `actions/checkout@v7` and
 `actions/setup-node@v5` by *major* tag, a major tag is mutable, and `release.yml` holds
 `id-token: write` against a live trusted publisher, so an action changing underneath us is
 the one supply-chain shape that could publish as us.
 
-What replaces npm version updates is #65: a report on every pull request, ranked by severity
-**and by whether the package ships**. Only `magic-string`, `dogear-core` and
+What replaces npm version updates is **H7 (#65)**: a report on every pull request, ranked by
+severity **and by whether the package ships**. Only `magic-string`, `dogear-core` and
 `@modelcontextprotocol/sdk` ever reach a user, so a raw `npm audit` number weights a
 build-tooling advisory the same as a shipped one, which is how a report becomes something
 people learn to ignore.
+
+The same reasoning has a blind spot, and **H9 (#71)** is it. `github-actions` covers `uses:`
+references and nothing else, so H4's actionlint tarball (pinned by version and checksum as
+literals) is invisible to Dependabot and would rot with nobody proposing a bump.
 
 ---
 

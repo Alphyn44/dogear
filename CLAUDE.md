@@ -473,8 +473,51 @@ version updates would be churn against a `verify` gate that already catches brea
 real advisory still arrives through Dependabot security updates, which are a repository
 setting rather than this file. The actions ecosystem is different in kind: the workflows pin
 by *major* tag, major tags are mutable, and `release.yml` holds a publishing credential.
-#65 is what replaces the npm half, reporting audit results per pull request ranked by
-whether the package actually ships.
+H7 (#65) is what replaces the npm half, reporting audit results per pull request ranked by
+whether the package actually ships. H9 (#71) covers the ecosystem's blind spot: it only sees
+`uses:` references, so H4's actionlint tarball (pinned by version and checksum as literals)
+is invisible to it.
+
+**`ci.yml` carries five jobs and `verify.yml` carries one, and the split is a rule rather
+than an accident.** Everything that reaches the network beyond `npm ci` lives in `ci.yml`:
+`workflows` (actionlint), `packed` (the registry), `versions` and `dependencies` (H8 and H7).
+`verify.yml` is what `release.yml` gates on, so a release must never be able to fail because
+a registry, a GitHub Releases download or npm's audit endpoint was slow, or because an
+advisory was published that morning. `verify.yml`'s nine steps are the correctness gate and
+nothing else belongs in them.
+
+**H8's `versions` job is the history half of a rule whose source half is already tested.**
+`scripts/packaging.test.ts` asserts the three manifests carry the *same* version; `0.1.2 →
+0.1.1` across all three passes it, because they still match each other. Comparing against a
+*previous* version needs git history or the registry, and `npm test` must stay
+build-independent and network-free, so it cannot be a vitest source rule and is a job
+instead. Three facts it depends on, each measured rather than reasoned: this repo
+**squash-merges**, so `--merges` counts 0 over the whole 0.1.0-to-0.1.1 interval where
+`--first-parent` counts 3; **no per-package tags exist yet**, so the "last bump" anchor is
+the newest commit whose `version` *blob* differs from its parent's, read as a blob rather
+than found with a pickaxe that would depend on Prettier's spacing of a JSON key; and
+`sort -V` (release.yml's own idiom, reused rather than reimplemented) **orders prereleases
+wrong**, putting `0.1.2-rc.1` after `0.1.2`, which fails open and so is safe for a gate.
+
+**A version is compared against `main`, not against the branch point, and only when the pull
+request changed it.** Both halves are load-bearing. Comparing an *unchanged* version against
+`main` fails every stale branch, and `strict_required_status_checks_policy` is off so
+branches legitimately lag. Comparing a *changed* version against the branch point misses the
+real rollback: cut at `0.1.1`, raised to `0.1.2`, while `main` released `0.1.3`.
+
+**Both new jobs carry a standing guard against going green forever, and it is the
+`check-leak.test.ts` lesson.** On a healthy repo nothing rolls back and nothing ships an
+advisory, so a classifier that always said `bump` and a report that always rendered "0
+vulnerabilities" would each pass CI indefinitely while testing nothing. `versions` therefore
+runs a **ten-row classifier self-test before the real comparison**, on every run, and refuses
+to judge a pull request with a rule that fails its own cases. `dependencies` asserts
+`auditReportVersion === 2` and `metadata.dependencies.total > 0`, the direct translation of
+`ScanResult.filesScanned`: a scan that examined nothing has not passed, it has failed to run.
+
+**Markdown backticks go in `echo` with `\``, never in a single-quoted `printf` format.**
+shellcheck reads a backtick inside single quotes as command substitution that will not expand
+and raises SC2016, which actionlint surfaces and exits non-zero on. `release.yml`'s `decide`
+job already writes its step-summary table the house way; match it.
 
 The example consumes the **built** plugin, never its source — and since B1 the plugin serves
 `dogear-core`'s **built** bundle at `<endpoint>/client.js`, so the overlay needs a build too.

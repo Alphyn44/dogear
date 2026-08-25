@@ -30,6 +30,13 @@ jobs:
     name: actionlint
     runs-on: ubuntu-latest
 
+    # Job-level since H9 (#71), because the staleness report at the end of this job reads
+    # VERSION and a step-level `env:` is not visible to the next step. Both literals still
+    # change together in one diff a reviewer can see, which was the point of pinning this way.
+    env:
+      VERSION: 1.7.12
+      SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
     steps:
       - uses: actions/checkout@v7
 
@@ -39,9 +46,6 @@ jobs:
       # fetching an unpinned remote script and executing it would be the opposite of that.
       # Bumping actionlint means changing both literals, in a diff a reviewer can see.
       - name: Install actionlint
-        env:
-          VERSION: 1.7.12
-          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
           set -euo pipefail
           archive="actionlint_${VERSION}_linux_amd64.tar.gz"
@@ -60,6 +64,98 @@ jobs:
       # classification, the step-summary table — checked at all. It is the highest-value half
       # of this job and it is completely invisible from the command line.
       - run: ./actionlint -color
+
+      # H9 (#71). The pin above is a version literal and a checksum, and nothing makes either
+      # of them move. .github/dependabot.yml covers the github-actions ecosystem, which means
+      # `uses:` references only. A downloaded release tarball is invisible to it, so nothing
+      # will ever propose a bump and the pin rots silently. This step is what notices.
+      #
+      # DELIBERATELY NOT A REPLACEMENT FOR THE DOWNLOAD. The story's second criterion is that
+      # whatever replaces it is pinned at least as tightly as the checksum it drops, and every
+      # obvious alternative loosens the pin: `uses: docker://rhysd/actionlint:<tag>` would bring
+      # it under Dependabot at the cost of a MUTABLE tag, and even pinned by digest it swaps a
+      # static binary whose hash we verify for a container image whose contents we would have to
+      # go and read, including which shellcheck it carries, which the comment above explains is
+      # the highest-value half of this job. A third-party wrapper action adds exactly the
+      # supply-chain hop the checksum exists to avoid. Keeping the download and adding a report
+      # satisfies both criteria: nothing is dropped, so "at least as tightly" is trivially true.
+      #
+      # ADVISORY ONLY. It never exits non-zero, on any branch, including when the API is
+      # unreachable; note the `|| true` shape around the call and the `exit 0` on failure. A
+      # stale linter checks LESS; it does not break. A check that turns every pull request red
+      # until somebody bumps an unrelated pin is a check that gets marked not-required, and then
+      # this job stops validating anything at all.
+      - name: Report whether the actionlint pin has gone stale
+        env:
+          # gh is preinstalled on ubuntu-latest. GITHUB_TOKEN is present and valid on a fork
+          # pull request too (read-only there), and reading another PUBLIC repository's
+          # releases needs no permission on THIS one, so the workflow's `contents: read` is
+          # enough and this step adds no scope. Unauthenticated would also work and is
+          # rate-limited to 60/hour per IP, shared across every runner in the fleet.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # /releases/latest returns the newest release that is neither a draft nor a
+          # prerelease, which is exactly what a pin should track. /tags would offer both.
+          set +e
+          latest=$(gh api repos/rhysd/actionlint/releases/latest --jq '.tag_name' 2>&1)
+          status=$?
+          set -e
+
+          if [ "$status" -ne 0 ] || [ -z "$latest" ]; then
+            {
+              echo "### actionlint"
+              echo
+              echo "Pinned at \`$VERSION\`. Could not reach the GitHub API, so this run does not"
+              echo "know whether that is current. Not a failure; see this step's comment."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          latest="${latest#v}"
+
+          # release.yml's npm-floor idiom, with need=$latest and have=$VERSION: if the pin does
+          # not sort first it is behind. "Behind" rather than "differs" on purpose: a pin
+          # deliberately held back, or a release yanked upstream, must not read as a thing to fix.
+          if [ "$(printf '%s\n%s\n' "$latest" "$VERSION" | sort -V | head -n1)" = "$latest" ]; then
+            {
+              echo "### actionlint"
+              echo
+              echo "Pinned at \`$VERSION\`, which is the latest release."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Fetch the checksum so the bump is a copy-paste rather than a scavenger hunt.
+          # Tolerant, like the call above: if this fails the summary still names the version and
+          # links the file. Asset naming and line format verified against the real release:
+          # `actionlint_<version>_checksums.txt`, and `<sha256>  <filename>` two spaces apart.
+          checksums="https://github.com/rhysd/actionlint/releases/download/v${latest}/actionlint_${latest}_checksums.txt"
+          sha=$(curl --fail --silent --show-error --location "$checksums" 2>/dev/null \
+            | awk -v f="actionlint_${latest}_linux_amd64.tar.gz" '$2 == f { print $1 }' || true)
+          if [ -z "$sha" ]; then sha="<see $checksums>"; fi
+
+          {
+            echo "### actionlint: the pin is behind"
+            echo
+            echo "| | version |"
+            echo "|---|---|"
+            echo "| pinned | \`$VERSION\` |"
+            echo "| latest | \`$latest\` |"
+            echo
+            echo "Bump BOTH literals in the \`workflows\` job's \`env:\` block in \`.github/workflows/ci.yml\`:"
+            echo
+            echo '```yaml'
+            echo "      VERSION: $latest"
+            echo "      SHA256: $sha"
+            echo '```'
+            echo
+            echo "This is a report, not a failure. A stale linter checks less; it does not break."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # H1 (#53). Every cross-package resolution in this workspace goes through a symlink into
   # packages/*, where dist/ already sits because the build put it there — so `files`, `exports`
@@ -101,3 +197,499 @@ jobs:
       - run: npm run build
 
       - run: npm run test:packed
+
+  # H8 (#70). Two halves, and they are deliberately different KINDS of check.
+  #
+  # The GATE: a pull request must never lower a version below what is on the base branch. A
+  # merge is what publishes since #64, and release.yml's `decide` job compares each manifest
+  # against the registry and skips what is already there, so a rollback to a version npm has
+  # already seen is silently skipped and the run goes GREEN HAVING PUBLISHED NOTHING, while a
+  # rollback to a lower version never published gets published and moves the `latest` tag
+  # backwards. Nothing else in this repository can catch either: scripts/packaging.test.ts
+  # asserts the three versions match EACH OTHER, which is the source half, and 0.1.2 -> 0.1.1
+  # across all three passes it. This is the history half, and a vitest source rule cannot do it
+  # without git or the registry, both of which `npm test` is deliberately free of, because
+  # verify.yml is what release.yml gates on.
+  #
+  # The REPORT: how far the base branch has travelled since the last bump. That number NEVER
+  # fails the job. Some distance between releases is the normal state; it is the whole reason
+  # #64 moved the trigger off tags and onto merges.
+  #
+  # Here and not in verify.yml, like the two jobs above: this is a pull-request check.
+  versions:
+    name: version history
+    # PULL REQUESTS ONLY, and the `if` is on the job rather than on the steps. ci.yml also runs
+    # on `push: branches: [main]`, where there is no base-versus-head to compare: main IS the
+    # base, and the gate would be comparing a commit against itself. The distance half would
+    # still compute, but on a push it renders "0 merges since the last bump" on the very commit
+    # that did the bump. The number is only actionable while a change can still carry one.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    # No job-level `permissions:` block, deliberately. The workflow-level `contents: read`
+    # applies to every job that does not declare its own, and a job-level block REPLACES rather
+    # than merges; that is the trap release.yml's publish job documents. This job holds read
+    # and nothing else: it cannot publish, comment, or write anything outside the run.
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history, and this is why the job needs a checkout of its own. The default depth
+          # of 1 has neither thing this job reads: the base branch's tip, and enough of it to
+          # walk back to the last commit that changed a version. A bounded `fetch-depth: 50`
+          # would work today and would break the first time a release is more than fifty merges
+          # old, reporting "never bumped" instead of a number, on precisely the repository
+          # state the report exists to describe. Measured before choosing rather than assumed:
+          # `git count-objects -vH` puts this repository at 1229 objects and 4.70 MiB, so full
+          # history costs nothing worth bounding.
+          fetch-depth: 0
+
+      # ubuntu-latest ships a node but which one drifts with the runner image, and the step
+      # below reads historical manifests with `node -p`. Pinned for the same reason release.yml's
+      # `tag` job pins it. No `cache: npm`, because this job never installs.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Refuse a rollback, and report the distance since the last bump
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Not relying on actions/checkout's refspec. At fetch-depth 0 it does fetch every
+          # branch, but that is an internal detail of the action rather than a documented input,
+          # and if it ever changes the failure is this job silently comparing against a ref that
+          # does not exist. One explicit fetch removes the assumption.
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
+          # THE BRANCH POINT, NOT BASE_SHA. BASE_SHA is the tip of the base branch, which moves;
+          # the merge base is where this branch was cut. The difference is the whole stale-branch
+          # problem: strict_required_status_checks_policy is off, so a branch may legitimately be
+          # behind main, and a pull request cut before a release carries the old version without
+          # having rolled anything back.
+          branch_point=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+
+          # Read the BLOB, not the working tree: a historical manifest is not a path on disk, so
+          # release.yml's `require('./packages/$dir/package.json')` does not apply here. Empty is
+          # an ordinary answer, meaning the manifest did not exist at that commit.
+          version_at() {
+            git show "$1:packages/$2/package.json" 2>/dev/null \
+              | node -p "try{JSON.parse(require('node:fs').readFileSync(0,'utf8')).version}catch(e){''}" \
+              || true
+          }
+
+          # release.yml's npm-floor idiom, extracted: true when $1 sorts strictly before $2.
+          # Deliberately the same comparison rather than a second implementation: a semver
+          # comparator written here could disagree with the one that decides whether to upgrade
+          # npm before a publish, and the brief says to reuse it.
+          #
+          # ONE KNOWN LIMIT, measured rather than assumed: `sort -V` orders 0.1.2-rc.1 AFTER
+          # 0.1.2, where semver orders it before. It gets 0.9.9 < 0.10.0 right, which is the case
+          # that actually matters. The error direction is safe, since a prerelease is never
+          # flagged as a rollback, and no package here has ever carried one, though
+          # packaging.test.ts's SEMVER regex does permit them.
+          is_below() {
+            [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" != "$2" ]
+          }
+
+          # classify BASE HEAD MAIN -> unchanged | stale | bump | rollback
+          #
+          # HEAD IS COMPARED AGAINST MAIN, NOT AGAINST BASE, and only when the pull request
+          # actually moved it. Both halves matter. Comparing an UNCHANGED version against main
+          # fails every stale branch. Comparing a CHANGED version against base misses the real
+          # rollback: cut at 0.1.1, raised to 0.1.2, while main released 0.1.3. Higher than
+          # where the author started, and still lower than what it would land on.
+          classify() {
+            if [ "$2" = "$1" ]; then
+              if is_below "$1" "$3"; then echo stale; else echo unchanged; fi
+              return
+            fi
+            if is_below "$2" "$3"; then echo rollback; else echo bump; fi
+          }
+
+          # THE SELF-TEST, and it is not decoration. On a healthy repository nothing ever rolls
+          # back, so a classifier that always said "bump" would pass every pull request forever
+          # and look exactly like a working one. That is the trap scripts/check-leak.test.ts
+          # documents: on a healthy repo the real scan finds nothing, so a scanner that always
+          # returned clean would pass CI forever. It applies here verbatim. These are the
+          # negative tests, run before the real comparison, on every run. Row 2 is the stale
+          # branch that must pass; row 5 is the rollback only a main-relative comparison catches;
+          # row 7 is the one a lexical comparison gets wrong.
+          failures=0
+          while read -r t_base t_head t_main expected; do
+            [ -n "$t_base" ] || continue
+            actual=$(classify "$t_base" "$t_head" "$t_main")
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::classifier self-test failed: base=$t_base head=$t_head main=$t_main expected=$expected got=$actual"
+              failures=$((failures + 1))
+            fi
+          done <<'CASES'
+          0.1.1 0.1.1 0.1.1 unchanged
+          0.1.1 0.1.1 0.1.2 stale
+          0.1.1 0.1.2 0.1.1 bump
+          0.1.1 0.1.0 0.1.1 rollback
+          0.1.1 0.1.2 0.1.3 rollback
+          0.1.1 0.2.0 0.1.3 bump
+          0.9.9 0.10.0 0.9.9 bump
+          0.9.9 0.9.9 0.10.0 stale
+          1.0.0 0.9.9 1.0.0 rollback
+          0.1.1 0.1.3 0.1.3 bump
+          CASES
+
+          if [ "$failures" -ne 0 ]; then
+            echo "::error::the version rule is broken; refusing to judge this pull request with it"
+            exit 1
+          fi
+
+          tmp=$(mktemp -d)
+          rolled_back=""
+
+          # ---- the gate ----------------------------------------------------------------------
+
+          for dir in core vite cli; do
+            base=$(version_at "$branch_point" "$dir")
+            head=$(version_at "$HEAD_SHA" "$dir")
+            main=$(version_at "origin/${BASE_REF}" "$dir")
+
+            # Guards, because an empty string sorts before every version and would otherwise
+            # classify a deleted manifest as a rollback and a brand-new one as a bump, with a
+            # message that explains neither. release.yml iterates this same hardcoded list, so a
+            # package that has genuinely gone needs an edit in both places.
+            if [ -z "$head" ]; then
+              echo "::error::packages/$dir/package.json is missing or unreadable at the pull request head"
+              exit 1
+            fi
+            if [ -z "$main" ]; then
+              echo "note      dogear-$dir is new; nothing on $BASE_REF to roll back from"
+              echo "| \`dogear-$dir\` | n/a | \`$head\` | n/a | new package |" >> "$tmp/versions.md"
+              continue
+            fi
+
+            verdict=$(classify "$base" "$head" "$main")
+            echo "$verdict  dogear-$dir  branch-point=$base head=$head $BASE_REF=$main"
+
+            if [ "$verdict" = "rollback" ]; then
+              rolled_back="$rolled_back dogear-$dir@$head(below $main)"
+            fi
+
+            # echo with escaped backticks rather than a single-quoted printf format: a markdown
+            # backtick inside single quotes is SC2016 to shellcheck, which reads it as command
+            # substitution that will not expand. release.yml's decide job writes its table the
+            # same way, so this is the house idiom rather than a workaround.
+            echo "| \`dogear-$dir\` | \`$base\` | \`$head\` | \`$main\` | $verdict |" >> "$tmp/versions.md"
+          done
+
+          # ---- the distance report -----------------------------------------------------------
+
+          for dir in core vite cli; do
+            # NO TAG ANCHOR, and that is a fact about this repository rather than a
+            # simplification. #64's `tag` job creates dogear-core@0.1.2-style tags, but the
+            # current version is 0.1.1 and the only tags that exist are the relic v0.1.0 and
+            # v0.1.1 from the tag-trigger era, repository-wide, so they could not answer "when
+            # did THIS package last move" even if they were current. The anchor is the newest
+            # commit whose `version` blob differs from its parent's, found by READING THE BLOB
+            # rather than by a pickaxe on `"version": "x"`, which would depend on Prettier's
+            # exact spacing of a JSON key.
+            anchor=""
+            while read -r commit; do
+              [ -n "$commit" ] || continue
+              here=$(version_at "$commit" "$dir")
+              there=""
+              if git rev-parse -q --verify "${commit}^" >/dev/null 2>&1; then
+                there=$(version_at "${commit}^" "$dir")
+              fi
+              if [ "$here" != "$there" ]; then anchor="$commit"; break; fi
+            done < <(git rev-list --first-parent "origin/${BASE_REF}" -- "packages/$dir/package.json")
+
+            if [ -z "$anchor" ]; then
+              echo "| \`dogear-$dir\` | n/a | never bumped on \`$BASE_REF\` | n/a |" >> "$tmp/distance.md"
+              continue
+            fi
+
+            # --first-parent, NOT --merges. This repository squash-merges: measured over the
+            # whole 0.1.0-to-0.1.1 interval, `--merges` counts 0 and `--first-parent` counts 3.
+            # One squash merge, one true merge commit and one direct push are each exactly one
+            # first-parent commit, which is what "landed on the base branch" means here.
+            distance=$(git rev-list --count --first-parent "${anchor}..origin/${BASE_REF}")
+
+            bumped_to=$(version_at "$anchor" "$dir")
+            short=$(git rev-parse --short "$anchor")
+            subject=$(git log -1 --format='%s' "$anchor")
+            when=$(git log -1 --format='%ad' --date=short "$anchor")
+            echo "| \`dogear-$dir\` | \`$bumped_to\` | \`$short\` $subject ($when) | $distance |" >> "$tmp/distance.md"
+          done
+
+          # ---- the summary -------------------------------------------------------------------
+
+          {
+            echo "### Versions"
+            echo
+            echo "| package | branch point | this PR | \`$BASE_REF\` | |"
+            echo "|---|---|---|---|---|"
+            cat "$tmp/versions.md"
+            echo
+            echo "\`unchanged\` and \`stale\` both pass: a branch cut before a release carries the"
+            echo "old version without having rolled anything back."
+            echo
+            echo "### Distance since the last bump"
+            echo
+            echo "| package | last bump | landed | merges to \`$BASE_REF\` since |"
+            echo "|---|---|---|---|"
+            cat "$tmp/distance.md"
+            echo
+            echo "This is a report and never a failure. Ordinary merges publish nothing, which is"
+            echo "the whole point of publishing from a merge rather than a tag."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Last, so the tables are written even when the gate fires. A gate whose report
+          # vanishes when it fails is a gate people re-run to find out what happened.
+          if [ -n "$rolled_back" ]; then
+            echo "::error::this pull request lowers a version below \`$BASE_REF\`:$rolled_back"
+            echo "::error::a merge is what publishes, and release.yml skips any version the registry already has, so a rolled-back version publishes nothing, silently"
+            exit 1
+          fi
+
+  # H7 (#65). Two questions with one shape, and the interesting one is not severity.
+  #
+  # Only three things in this tree reach a user: magic-string and dogear-core through the
+  # plugin, and @modelcontextprotocol/sdk through the CLI. Everything else (vite, vitest,
+  # esbuild, tsup, happy-dom, prettier, typescript) is a build tool that runs on a
+  # contributor's machine and is never installed by anyone downstream. So `npm audit --omit=dev`
+  # is "what ships" and plain `npm audit` is "what this machine runs", and the pair of numbers
+  # is the ranking worth having. Severity alone puts a critical in a test runner above a
+  # moderate in the one dependency that reaches production, which is backwards, and a report
+  # ranked that way is one people learn to ignore.
+  #
+  # This is the counterpart to .github/dependabot.yml deliberately not covering npm: the signal
+  # is wanted, the routine pull requests are not.
+  #
+  # FAILING IS A SEPARATE DECISION FROM REPORTING, and this job only fails on HIGH or CRITICAL
+  # in the production tree. A dev-tree advisory that blocks a merge teaches people to mark the
+  # check not-required, and then it reports nothing at all.
+  #
+  # Here and not in verify.yml: both commands reach the registry, and a release must not be able
+  # to fail because npm's audit endpoint was slow or an advisory was published that morning.
+  dependencies:
+    name: dependency health
+    # Pull requests only, matching the `versions` job. This report is for the person about to
+    # merge something. The honest limit: an advisory published while nobody is working goes
+    # unseen until the next pull request. Dependabot SECURITY updates, which are a repository
+    # setting rather than .github/dependabot.yml, cover the idle repository. This is not them.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    # No job-level `permissions:` block, for the reason the `versions` job above states: the
+    # workflow-level `contents: read` already applies, and a job-level block replaces rather
+    # than merges. This job cannot publish, comment, or write anything outside the run, and it
+    # writes to $GITHUB_STEP_SUMMARY rather than a pull request comment precisely so that it
+    # behaves identically on a fork, whose token is read-only.
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      # `npm audit` alone would not need this, since it builds its tree from package-lock.json.
+      # `npm outdated` does: `current` comes from the INSTALLED tree, and without it every row
+      # reads MISSING and the report becomes about the lockfile rather than about what a
+      # contributor actually has.
+      - run: npm ci
+
+      - name: Collect what npm knows
+        run: |
+          set -euo pipefail
+
+          # BOTH COMMANDS EXIT NON-ZERO ON THE ORDINARY CASE, and neither exit code is a signal
+          # this job can use:
+          #   npm audit    exits 1 the moment it finds ANY advisory at ANY severity in ANY tree.
+          #                One low in a test runner would kill the step before it writes the
+          #                report it exists to write. (Measured: this repository exits 1 today,
+          #                on a single low in esbuild, which is dev-only.)
+          #   npm outdated exits 1 whenever anything is behind, which is the normal state of a
+          #                healthy repository: seven rows as of writing.
+          # So the exits are captured and discarded here, exactly as release.yml's decide job
+          # does around `npm view`, and every decision below is made from parsed numbers. A
+          # command that genuinely failed leaves an empty or truncated file, which the guard in
+          # the next step refuses rather than reporting as "nothing wrong".
+          set +e
+          npm audit --json               > audit-all.json
+          npm audit --omit=dev --json    > audit-prod.json
+          npm outdated --json            > outdated-all.json
+          npm outdated --omit=dev --json > outdated-prod.json
+          set -e
+
+      - name: Report, and fail only on production high or critical
+        run: |
+          set -euo pipefail
+
+          # A heredoc rather than `node -e '…'`: the program below is ninety lines and contains
+          # apostrophes in its comments, either of which ends a single-quoted argument. stdout is
+          # the summary and stderr is the log, which is what lets one program write markdown and
+          # raise ::error:: annotations without an annotation landing in the middle of a table.
+          cat > report.js <<'REPORT'
+          const fs = require('node:fs')
+          const read = (p) => JSON.parse(fs.readFileSync(p, 'utf8').trim() || '{}')
+
+          const auditAll = read('audit-all.json')
+          const auditProd = read('audit-prod.json')
+          const outAll = read('outdated-all.json')
+          const outProd = read('outdated-prod.json')
+
+          // THE "DID THIS ACTUALLY RUN" GUARD, and it is the direct translation of
+          // check-leak.ts's ScanResult.filesScanned: a scan that examined nothing has not
+          // passed, it has failed to run. A report rendering "0 vulnerabilities" is
+          // indistinguishable from a working one on a healthy repository, so these two facts
+          // are what stop this job going green forever the day npm changes its output shape or
+          // the registry eats the request. Both measured against real output: auditReportVersion
+          // is 2, and metadata.dependencies.total is 295.
+          for (const [label, report] of [
+            ['npm audit', auditAll],
+            ['npm audit --omit=dev', auditProd],
+          ]) {
+            if (report.auditReportVersion !== 2) {
+              throw new Error(
+                label + ' did not return a v2 report (got ' + report.auditReportVersion +
+                  '); the parsing below is wrong for whatever it did return'
+              )
+            }
+            if (!report.metadata?.dependencies?.total) {
+              throw new Error(label + ' examined no dependencies, so it has not passed; it has failed to run')
+            }
+          }
+
+          const SEVERITY = ['critical', 'high', 'moderate', 'low', 'info']
+
+          // No hand-maintained list: npm decides what is in the production tree, so this cannot
+          // go stale the way scripts/check-leak.ts's PACKAGE_SPECIFIERS can.
+          //
+          // ONE KNOWN IMPRECISION, accepted deliberately. `--omit=dev` at the workspace root
+          // also pulls examples/react-app's react and react-dom into the production tree, and
+          // that example is private and ships to nobody, so "ships" here is slightly wider than
+          // "reaches a user", and a react advisory could fail an unrelated pull request. Over-
+          // reporting is the safe direction for a gate, the example is the dogfood app, and the
+          // alternative (cross-referencing each advisory's `nodes` against the three published
+          // subtrees) is considerably more machinery than the difference is worth.
+          const shipping = new Set(Object.keys(auditProd.vulnerabilities || {}))
+
+          const advisories = Object.values(auditAll.vulnerabilities || {}).map((v) => {
+            // `via` mixes advisory OBJECTS with plain STRINGS naming the package the advisory
+            // arrived through. Only the objects carry a title and a URL.
+            const direct = (v.via || []).filter((x) => typeof x === 'object')
+            return {
+              name: v.name,
+              severity: v.severity,
+              ships: shipping.has(v.name),
+              range: v.range,
+              fix: v.fixAvailable === true ? 'yes' : v.fixAvailable ? 'breaking' : 'no',
+              titles: direct.length
+                ? direct.map((x) => '[' + x.title + '](' + x.url + ')').join('<br>')
+                : 'via ' + (v.via || []).join(', '),
+            }
+          })
+
+          // SHIPPING FIRST, THEN SEVERITY. This is the ranking the story asks for, and the one a
+          // plain severity sort gets backwards.
+          advisories.sort(
+            (a, b) =>
+              Number(b.ships) - Number(a.ships) ||
+              SEVERITY.indexOf(a.severity) - SEVERITY.indexOf(b.severity) ||
+              a.name.localeCompare(b.name)
+          )
+
+          const shipsOut = new Set(Object.keys(outProd))
+          const stale = Object.entries(outAll).map(([name, value]) => {
+            // npm outdated --json IS NOT UNIFORMLY name -> object. In a workspace tree a package
+            // depended on by two workspaces comes back as an ARRAY of entries, one per dependent
+            // as observed here for `vite` and `@vitejs/plugin-react`. Reading .current off the
+            // array yields undefined for exactly the dependency it matters most to get right.
+            const entries = Array.isArray(value) ? value : [value]
+            const first = entries[0] || {}
+            return {
+              name,
+              ships: shipsOut.has(name),
+              current: first.current || '-',
+              wanted: first.wanted || '-',
+              latest: first.latest || '-',
+              // Display only, never a key: npm reports the root workspace as "dogear" (the
+              // directory) although the manifest is named dogear-monorepo. `location` is an
+              // absolute host path and is deliberately never emitted.
+              dependents: [...new Set(entries.map((e) => e.dependent))].sort().join(', '),
+            }
+          })
+          stale.sort((a, b) => Number(b.ships) - Number(a.ships) || a.name.localeCompare(b.name))
+
+          const prod = auditProd.metadata.vulnerabilities
+          const all = auditAll.metadata.vulnerabilities
+          const row = (label, v) =>
+            '| ' + label + ' | ' + v.critical + ' | ' + v.high + ' | ' + v.moderate +
+            ' | ' + v.low + ' | ' + v.info + ' | ' + v.total + ' |'
+
+          const out = []
+          out.push('### Dependency health', '')
+          out.push('| tree | critical | high | moderate | low | info | total |')
+          out.push('|---|---|---|---|---|---|---|')
+          out.push(row('**ships to users** (`--omit=dev`)', prod))
+          out.push(row('build tooling included', all))
+          out.push('')
+          out.push(
+            'Only `magic-string`, `dogear-core` and `@modelcontextprotocol/sdk` reach a user. ' +
+              'This job fails on **high or critical in the first row only**; a dev-tree advisory ' +
+              'is reported and does not block a merge.'
+          )
+          out.push('')
+
+          if (advisories.length === 0) {
+            out.push('No advisories in ' + auditAll.metadata.dependencies.total + ' dependencies.', '')
+          } else {
+            out.push('| | severity | package | affected | advisory | fix |')
+            out.push('|---|---|---|---|---|---|')
+            for (const a of advisories) {
+              out.push(
+                '| ' + (a.ships ? '**ships**' : 'tooling') + ' | ' + a.severity + ' | `' +
+                  a.name + '` | `' + a.range + '` | ' + a.titles + ' | ' + a.fix + ' |'
+              )
+            }
+            out.push('')
+          }
+
+          out.push('### Out of date', '')
+          if (stale.length === 0) {
+            out.push('Nothing is behind.', '')
+          } else {
+            out.push('| | package | current | wanted | latest | required by |')
+            out.push('|---|---|---|---|---|---|')
+            for (const s of stale) {
+              out.push(
+                '| ' + (s.ships ? '**ships**' : 'tooling') + ' | `' + s.name + '` | ' +
+                  s.current + ' | ' + s.wanted + ' | ' + s.latest + ' | ' + s.dependents + ' |'
+              )
+            }
+            out.push(
+              '',
+              '`wanted` is what the committed ranges already allow; `latest` needs a range change. ' +
+                'Being behind is never a failure here; this table exists so an upgrade can be ' +
+                'PLANNED rather than discovered during a release.',
+              ''
+            )
+          }
+
+          console.log(out.join('\n'))
+
+          const blocking = prod.high + prod.critical
+          if (blocking > 0) {
+            console.error(
+              '::error::' + blocking +
+                ' high or critical advisory in dependencies that reach a user. See the run summary.'
+            )
+            process.exitCode = 1
+          }
+          REPORT
+
+          node report.js >> "$GITHUB_STEP_SUMMARY"
