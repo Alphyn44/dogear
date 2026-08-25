@@ -127,19 +127,27 @@ describe.each(PUBLISHED)('the dogear-%s tarball', (dir) => {
 
 describe('the installed tree', () => {
   it('resolves dogear-core to the tarball, not to the registry', () => {
-    // The subtle failure this exists for. dogear-vite depends on dogear-core by RANGE, and
-    // `^` on a 0.x version is minor-locked — `^0.1.0` means `>=0.1.0 <0.2.0`. The first time
-    // core is bumped to 0.2.0 without widening that range, npm cannot satisfy it from the
-    // tarball and quietly installs a NESTED copy from the registry instead. The install
-    // succeeds, the dev server starts, and the served bundle still carries the sentinel,
-    // because the old core has one too — so every other assertion in this file passes while
-    // a real `npm i -D dogear-vite` pairs the new plugin with the old overlay.
+    // This enforces G2's decision rather than second-guessing it. The brief chose a caret
+    // range over a pin *because* the two packages version independently, and recorded the
+    // consequence: `^0.1.0` is `>=0.1.0 <0.2.0` under 0.x semver, so core ships patches on its
+    // own while "a 0.2.0 that changes what the plugin serves at <endpoint>/client.js forces a
+    // plugin release, which is the coupling that genuinely exists".
+    //
+    // The failure worth catching is not the range being tight — it is the moment that coupling
+    // goes unhonoured. Bump core's minor and leave the plugin alone, and npm cannot satisfy
+    // the range from the tarball, so it quietly installs a NESTED copy from the registry. The
+    // install succeeds, the dev server starts, and the served bundle still carries the
+    // sentinel — the old core has one too — so every other assertion in this file passes while
+    // a real `npm i -D dogear-vite` pairs the new plugin with the old overlay. Until now that
+    // rule lived only in the Decisions log; this is what makes it fail out loud.
     expect(
       existsSync(
         join(scratch, 'node_modules', 'dogear-vite', 'node_modules', 'dogear-core'),
       ),
-      "dogear-vite's declared dogear-core range does not admit the version in this tree, so " +
-        'npm installed a second copy from the registry underneath it.',
+      "dogear-vite's dogear-core range does not admit the core version in this tree, so npm " +
+        'installed a second copy from the registry underneath the plugin. A core minor bump ' +
+        "forces a plugin release: widen dogear-vite's range and bump it. See G2 in the " +
+        "brief's Decisions log.",
     ).toBe(false)
 
     // Resolved the way packages/vite/src/client.ts does it — from the installed plugin, by
