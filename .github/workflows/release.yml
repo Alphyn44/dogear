@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -171,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -228,7 +228,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           # Trusted publishing needs Node >= 22.14.0, which is above both floors in
           # `engines`. 24 is what development happens on and is well clear of it; the verify
@@ -347,7 +347,7 @@ jobs:
 
       # ubuntu-latest ships a node, but which one drifts with the runner image. Pinned because
       # the step below reads the manifests with `node -p` to build the tag names.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
