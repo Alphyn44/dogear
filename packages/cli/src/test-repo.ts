@@ -42,6 +42,7 @@ import type { Detection } from './detect.js'
 export const NO_DETECTION: Detection = Object.freeze({
   workspace: 'single',
   manager: 'npm',
+  linker: 'node-modules',
   packages: undefined,
   apps: Object.freeze([]),
   agents: Object.freeze([]),

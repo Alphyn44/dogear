@@ -195,10 +195,12 @@ init` writes are committed and point at `node_modules/dogear-cli/dist/cli.js`, a
 repo-relative path, so `npm i -D dogear-cli` has to have happened **at the git root** of
 this repository, not in an app subdirectory. A global install alone puts `dogear` on your
 PATH and leaves that path unresolvable. `dogear init` says so in a note when it wires an
-agent and nothing in the repository provides that file. npm, pnpm and yarn all link a direct
-dependency at the top level, so that path holds under each. The exception is Yarn's PnP
-linker, which has no `node_modules` at all and cannot support a committed path like this
-one.
+agent and nothing in the repository provides that file. npm, pnpm and Yarn's `node-modules`
+linker all place a direct dependency at the top level, so that path holds under each — CI
+installs the published tarballs with all three and checks it. The exception is Yarn's **PnP**
+linker, which has no `node_modules` at all and cannot support a committed path like this one;
+that is checked too, and `dogear init` says so when it sees a PnP project. Set
+`nodeLinker: node-modules` in `.yarnrc.yml` if you need the MCP server.
 
 **My comments are not reaching the agent.** Check `.dogear/queue.json` at your **git
 root**, not your Vite root, which in a monorepo is a different directory. `dogear status`
@@ -234,6 +236,21 @@ npm run typecheck      # tsc --noEmit, per package
 npm test               # vitest
 npm run format         # prettier --write
 ```
+
+Two checks run in CI and sit outside `verify`, both deliberately — `verify` is what a release
+gates on, and neither of these is a question about correctness that should be able to fail a
+release:
+
+```sh
+npm run build && npm run test:packed   # install the real tarballs into a scratch project
+actionlint                             # parse and lint .github/workflows/
+```
+
+`test:packed` is the one thing that exercises what npm *publishes* rather than what this
+repository contains: everything else resolves the three packages through workspace symlinks,
+so a tarball missing its `dist/` would pass all nine steps above. `actionlint` is a separate
+binary rather than an npm dependency; [CONTRIBUTING.md](./CONTRIBUTING.md) has the version
+and why shellcheck is worth having beside it.
 
 The example app under [`examples/react-app`](./examples/react-app) consumes the **built**
 plugin, and the plugin serves the overlay's **built** bundle, so both need building

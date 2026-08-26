@@ -54,9 +54,11 @@ implement → verify sequence.
 
 ### Issues
 
-Every issue you create follows `.github/ISSUE_TEMPLATE/story.md` (or `bug.md`).
+Every issue you create follows `.github/ISSUE_TEMPLATE/story.md` (or `bug.yml`).
 GitHub only applies those templates to the web form, never to `gh issue create
 --body`, so matching the format is on you — read the template file and follow it.
+`bug.yml` is an issue *form*, so there is no body to copy: reproduce its labels as
+headings, in order, and answer each one.
 
 Title format is `<story ID> — <short title>`, e.g. `C1 — Attribute transform`, so
 issues map back to the brief at a glance. **The brief is the spec; the issue is
@@ -255,6 +257,24 @@ across the whole matrix — two-space, four-space, tabs, CRLF, minified, BOM, no
 value-on-the-next-line, empty object — asserting valid JSON, byte preservation and idempotency
 for each, plus that CRLF files gain no lone `\n`.
 
+**H6 added `Detection.linker`, and it is separate from `Detection.manager` for the reason
+`manager` is separate from `workspace`.** Yarn spells the layout `nodeLinker` and pnpm has the
+same setting with the same `pnp` option, so *which tool installs here* cannot answer *is there a
+`node_modules` for `CLI_ENTRY` to resolve through* — and only the second question bears on the
+committed path. It is read from the generated `.pnp.cjs`/`.pnp.js`, never from `.yarnrc.yml`:
+the setting may be inherited from a parent directory or left at Yarn's default and written
+nowhere, while the artefact is always there. Same shape as `managerOf` reading the lockfile
+rather than the intent behind it. **The PnP arm of `cliNotInstalled` is checked *before*
+`wiring.cli`, and that order is the whole fix** — `cliIn` answers `'local'` from the manifest
+declaration when the file is absent, which is right for a repo mid-clone and wrong for one that
+will never have the file, so a PnP repo reached the old guard as `local` and init wrote a path
+resolving nowhere in silence. Reordering is not an option either: under PnP the install the
+other arm prescribes is the one the user has already done. It is a **remark**, not a step note
+and not a refusal, by the discriminator `cliNotInstalled` already documents — init wrote the
+registration correctly and it is the repository that is wrong. `test-packed/managers/` is the
+suite that proves all of it, including the negative; Yarn 1 is deliberately uncovered, since
+Berry supplies both the `node-modules` leg and the PnP one and classic has no PnP mode.
+
 **Everything E3 writes points at `node <path>`, never `dogear`** — a global npm bin on Windows is
 a `.cmd` shim the exec form cannot run. The MCP configs use the repo-relative
 `node_modules/dogear-cli/dist/cli.js` (an absolute global path would be committed and broken for
@@ -387,6 +407,8 @@ rather than merely promised.
 | `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
 | `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client. Needs a build first |
+| `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace, and runs the binary, `dogear init` and a real dev server. Needs a build first; deliberately not in `verify` |
+| `npm run test:browser` | **H3's round trip.** Drives Chromium against a real dev server: modifier-click, comment, submit, then reads `.dogear/queue.json`. Needs a build and a browser binary; deliberately not in `verify` |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
@@ -419,37 +441,103 @@ trusted-publisher configuration on npmjs.com names the repository, the workflow 
 the allowed action; renaming or moving the file revokes publishing, and the failure is an
 auth error that does not mention the filename.
 
-**The release tag is a trigger, not a manifest.** `git tag v0.1.0` starts the run; what
-publishes is decided by comparing each `package.json` version against the registry and
-skipping what is already there. That keeps core and vite versioning independently, per G2's
-decision, and makes a partially-failed run re-runnable. An `npm view` failure that is *not*
-an E404 fails the job on purpose — publishing against a registry that could not be read is
-how a version gets silently skipped and never published at all. Note that npm reports a
-missing *version* of an existing package with E404 too, exactly as it reports a missing
-package; the workflow's comment records this because it is easy to assume otherwise.
+**The manifest decides what publishes; a merge to `main` decides when.** `release.yml` runs on
+`push: branches: [main]`, and what publishes is decided by comparing each `package.json`
+version against the registry and skipping what is already there. That keeps core and vite
+versioning independently, per G2's decision, and makes a partially-failed run re-runnable. An
+`npm view` failure that is *not* an E404 fails the job on purpose — publishing against a
+registry that could not be read is how a version gets silently skipped and never published at
+all. Note that npm reports a missing *version* of an existing package with E404 too, exactly
+as it reports a missing package; the workflow's comment records this because it is easy to
+assume otherwise. **A merge never invents a version**, so the ordinary merges between releases
+find all three already published and go green having done nothing. `RELEASING.md` is the
+procedure.
 
-**The trigger is under review in #64, and the first release is the argument.** All three
-`0.1.0` packages record `gitHead = 0e4ee643`, which is not reachable from `main`: it lived
-on `m5-release` and PR #52 was squash-merged. A tag push happens outside CI and outside
-review, so nothing caught it. What *publishes* would not change under a merge trigger, since
-the registry comparison already skips everything on a merge that bumps nothing; what changes
-is that the version diff becomes reviewable. The objection to weigh is that it puts a job
-holding `id-token: write` on every merge instead of on rare tags, which #64 answers by
-splitting the decision out of the privileged job.
+**#64 moved the trigger, and the first release is the argument.** All three `0.1.0` packages
+record `gitHead = 0e4ee643`, which is not reachable from `main`: it lived on `m5-release` and
+PR #52 was squash-merged. A tag push happens outside CI and outside review, so nothing caught
+it. What *publishes* did not change — the registry comparison already skipped everything on a
+merge that bumps nothing — but the version diff is now reviewable. The objection was that it
+puts a job holding `id-token: write` on every merge instead of on rare tags, and the answer is
+the job split: an unprivileged **`decide`** does the comparison and emits what would publish,
+`verify` and `tarballs` gate on it, and the privileged **`publish`** runs only when it says
+yes. A `release:publish` label was considered as a second lock and declined — a gate that must
+be remembered is a step that will be forgotten, which is the failure mode this change removes.
 
-**`0.1.0` has no provenance and never can.** The repository was private when it published,
-GitHub withdrew provenance for private repositories in July 2023, and attestations are made
-at publish time. `dist.attestations` is empty on all three while `_npmUser` reads
-`npm-oidc-no-reply@github.com`, so OIDC worked and only the attestation was skipped, in
-silence. The first release after the repository goes public is what satisfies that criterion.
+**Tags are now a record, per package, pushed by the workflow.** `dogear-core@0.1.2` and
+friends, created by a **`tag`** job holding `contents: write` and no OIDC token, after npm
+accepts. A repo-wide `v0.1.2` was rejected because it is a name that lies the first time core
+patches without vite, which is exactly what G2's caret range exists to allow. `v0.1.0` and
+`v0.1.1` remain as relics. Since tags trigger nothing, P2 (#60)'s protection on `v*` stopped
+being the primary control and branch protection on `main` became it.
+
+**H5's rehearsal is `workflow_dispatch`, and the *event* is the safety.** Permissions are
+job-level, so a dispatched run never starts `publish` and never mints a token — an input
+gating the publish *command* (H5's original shape, filed before the trigger moved) would leave
+the credential present. The empty-tarball guard therefore lives in its own **`tarballs`** job
+rather than inside `publish`: a dry run must reach the guard and must not reach the publish.
+The cost is that `publish` builds a second time on a real release, bought so that what npm
+attests is what the publishing job itself built.
+
+**`0.1.0` has no provenance and never can; `0.1.1` has it.** The repository was private when
+`0.1.0` published, GitHub withdrew provenance for private repositories in July 2023, and
+attestations are made at publish time — so `dist.attestations` is empty on all three `0.1.0`
+packages while `_npmUser` reads `npm-oidc-no-reply@github.com`, meaning OIDC worked and only
+the attestation was skipped, in silence. `0.1.1` published after P5 (#63) flipped the
+repository and carries a `slsa.dev/provenance/v1` predicate, which is what satisfies G4's
+criterion. Checked against the registry, not assumed.
 
 **`.github/dependabot.yml` covers `github-actions` only, and that is deliberate.** npm
 version updates would be churn against a `verify` gate that already catches breakage, and a
 real advisory still arrives through Dependabot security updates, which are a repository
 setting rather than this file. The actions ecosystem is different in kind: the workflows pin
 by *major* tag, major tags are mutable, and `release.yml` holds a publishing credential.
-#65 is what replaces the npm half, reporting audit results per pull request ranked by
-whether the package actually ships.
+H7 (#65) is what replaces the npm half, reporting audit results per pull request ranked by
+whether the package actually ships. H9 (#71) covers the ecosystem's blind spot: it only sees
+`uses:` references, so H4's actionlint tarball (pinned by version and checksum as literals)
+is invisible to it.
+
+**`ci.yml` carries seven jobs and `verify.yml` carries one, and the split is a rule rather
+than an accident.** Everything that reaches the network beyond `npm ci` lives in `ci.yml`:
+`workflows` (actionlint), `packed` and `managers` (the registry), `browser` (H3's Chromium
+download), `versions` and `dependencies` (H8 and H7).
+`verify.yml` is what `release.yml` gates on, so a release must never be able to fail because
+a registry, a GitHub Releases download, a browser CDN or npm's audit endpoint was slow, or
+because an advisory was published that morning. `verify.yml`'s nine steps are the correctness gate and
+nothing else belongs in them.
+
+**H8's `versions` job is the history half of a rule whose source half is already tested.**
+`scripts/packaging.test.ts` asserts the three manifests carry the *same* version; `0.1.2 →
+0.1.1` across all three passes it, because they still match each other. Comparing against a
+*previous* version needs git history or the registry, and `npm test` must stay
+build-independent and network-free, so it cannot be a vitest source rule and is a job
+instead. Three facts it depends on, each measured rather than reasoned: this repo
+**squash-merges**, so `--merges` counts 0 over the whole 0.1.0-to-0.1.1 interval where
+`--first-parent` counts 3; **no per-package tags exist yet**, so the "last bump" anchor is
+the newest commit whose `version` *blob* differs from its parent's, read as a blob rather
+than found with a pickaxe that would depend on Prettier's spacing of a JSON key; and
+`sort -V` (release.yml's own idiom, reused rather than reimplemented) **orders prereleases
+wrong**, putting `0.1.2-rc.1` after `0.1.2`, which fails open and so is safe for a gate.
+
+**A version is compared against `main`, not against the branch point, and only when the pull
+request changed it.** Both halves are load-bearing. Comparing an *unchanged* version against
+`main` fails every stale branch, and `strict_required_status_checks_policy` is off so
+branches legitimately lag. Comparing a *changed* version against the branch point misses the
+real rollback: cut at `0.1.1`, raised to `0.1.2`, while `main` released `0.1.3`.
+
+**Both new jobs carry a standing guard against going green forever, and it is the
+`check-leak.test.ts` lesson.** On a healthy repo nothing rolls back and nothing ships an
+advisory, so a classifier that always said `bump` and a report that always rendered "0
+vulnerabilities" would each pass CI indefinitely while testing nothing. `versions` therefore
+runs a **ten-row classifier self-test before the real comparison**, on every run, and refuses
+to judge a pull request with a rule that fails its own cases. `dependencies` asserts
+`auditReportVersion === 2` and `metadata.dependencies.total > 0`, the direct translation of
+`ScanResult.filesScanned`: a scan that examined nothing has not passed, it has failed to run.
+
+**Markdown backticks go in `echo` with `\``, never in a single-quoted `printf` format.**
+shellcheck reads a backtick inside single quotes as command substitution that will not expand
+and raises SC2016, which actionlint surfaces and exits non-zero on. `release.yml`'s `decide`
+job already writes its step-summary table the house way; match it.
 
 The example consumes the **built** plugin, never its source — and since B1 the plugin serves
 `dogear-core`'s **built** bundle at `<endpoint>/client.js`, so the overlay needs a build too.
@@ -487,18 +575,74 @@ are gone" assertion passes without testing anything. `teardown.test.ts` and
 `DOGEAR_HOME` at a temp directory so no suite can write to the real one. See the registry
 notes above for why that is a global rather than a convention.
 
-**Three vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
+**Six vitest configs, selected by directory.** `npm test` takes `packages/*/src/**/*.test.ts`
 plus `scripts/*.test.ts` and stays build-independent, because `stop-verify.sh`
 runs it on every turn that touches TypeScript. Build-independent is the rule there, not
 hermeticity: `check-leak.test.ts` builds its own temp fixtures, while G1's
 `packaging.test.ts` and the two `docs.test.ts` suites read the repository's own committed
-files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other two need a build first:
-`scripts/gate/*.test.ts` reads real build output under `npm run check:leak`, and
-`packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`. Splitting
+files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other five need a build first:
+`scripts/gate/*.test.ts` reads real build output under `npm run check:leak`,
+`packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`, H1's
+`test-packed/*.test.ts` packs the real tarballs under `npm run test:packed`, H6's
+`test-packed/managers/*.test.ts` installs them with pnpm and Yarn under
+`npm run test:managers`, and H3's `test-browser/*.test.ts` drives a real browser under
+`npm run test:browser`. Splitting
 on directory rather than filename means no config needs an `exclude` to stay out of another's
-way. They are kept separate rather than merged because `check:leak` is a *gate* answering one
+way — and `test-packed/*.test.ts` being **non-recursive** is what keeps H1's suite from
+swallowing H6's, which is the difference between the `packed` job running four installs per
+platform and one. `test-browser/*.test.ts` is non-recursive for a second reason worth knowing:
+`test-browser/app/` is the fixture app's *own source*, served to a browser rather than run by
+vitest, and a recursive pattern is how a fixture directory ends up being collected as a suite.
+They are kept separate rather than merged because `check:leak` is a *gate* answering one
 question (did the sentinel leak into production?) — folding a behavioural suite into it would
 make the name lie.
+
+**`test:packed` is out of `verify` for a reason that is not speed.** It reaches the registry
+for `vite`, `magic-string` and the MCP SDK, and `verify.yml` is what `release.yml` gates on —
+a release must not be able to fail because a registry was slow. It runs as its own `ci.yml`
+job across all three platforms instead. `test-packed/fixture.ts` holds the shared harness:
+`packAll` → `createScratchProject` (under `tmpdir`, never inside the repo, because
+`findGitRoot` walks *up*) → `startDevServer` → `runInstalledCli`. One install is shared by the
+whole file; it is the slowest thing in the repository by an order of magnitude.
+
+**H3's browser suite could not use `examples/react-app`, and the reason generalises.** The
+endpoint writes to `queuePathFor(findGitRoot(server.config.root))`, the example's git root is
+*this repository*, and there is no override — so every run would append test annotations to the
+developer's own `.dogear/queue.json` and stamp paths naming this repo's real source. So
+`test-browser/` copies a committed fixture app into a `mkdtemp` directory with a bare `.git` of
+its own, the same conclusion `createScratchProject` reached for H1. It **installs nothing**:
+`react`, `@vitejs/plugin-react` and `vite` are hoisted to the workspace root, so one
+**junction** at `<scratch>/node_modules` reaches them along with the workspace symlinks for
+`dogear-vite` and `dogear-core` — which means the fixture consumes the *built* plugin through
+its exports map, exactly as the example app does and for the same F1-layer-3 reason. Two lines
+in the generated `vite.config.js` exist only because of that junction: `server.fs.allow` must
+name both roots, since Vite realpaths `react` and `dogear-vite` back into this repository and
+would otherwise 403 them; and `cacheDir` must be moved off its default of
+`<root>/node_modules/.vite`, which *is* this repository's `node_modules` through the link.
+`discardFixture` unlinks before it deletes — Node is documented not to follow links when
+removing, but that is not a basis for pointing `rmSync(recursive)` at a live handle on the
+developer's own tree.
+
+**Nothing in that suite queries dogear's DOM, because nothing can — and the constraint improved
+it.** The shadow root is `closed`, `window.__dogear` carries only `sentinel`/`stop`/`start`/
+`running`, and no test-only handle was added: B7's guarantee is a feature. So every step is
+real input — a keyboard-modified pointer event, `Enter`, a click on the badge, `Ctrl+Enter` —
+which is what the story asked for anyway. The badge is the panel's **only** handle
+(`registry.on(badge.element, 'click', togglePanel)`; there is no chord), so `badgePoint()` is
+derived from `.badge`'s two inset constants in `styles.ts` and **checked with a hit test before
+it is used** — a restyle then fails naming that function, instead of surfacing three steps
+later as a submit that silently wrote nothing. The one thing a closed root does leave visible
+is that hit test: a hit inside retargets to the host, so `elementFromPoint` naming
+`dogear-overlay` is how the suite knows anything at all.
+
+**The `transform: false` leg is the story, not a bonus case.** A test asserting only that *an
+annotation arrived* passes on a build where the attribute transform stopped running entirely,
+because C3's selector-and-text floor still produces an item. So the identical gesture runs
+against a second server configured `transform: false` and must produce an annotation with **no**
+`via: 'attribute'` site while still carrying a resolved selector — the overlay demonstrably
+working, only the resolution absent. Same standing rule as `check-leak.test.ts`, H8's
+classifier self-test and H7's `dependencies.total > 0`: a guard that would go green forever has
+not passed, it has failed to run.
 
 **The leak sentinel is internal to `dogear-core` on purpose.** `packages/core/src/sentinel.ts`
 is not re-exported from `index.ts`, because `noop.ts` mirrors index's public surface and

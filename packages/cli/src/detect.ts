@@ -55,6 +55,23 @@ export type Workspace = 'npm' | 'yarn' | 'pnpm' | 'single'
  */
 export type Manager = 'npm' | 'yarn' | 'pnpm'
 
+/**
+ * How installed packages are laid out on disk — H6 (#58).
+ *
+ * **Separate from {@link Manager} for the same reason {@link Manager} is separate from
+ * {@link Workspace}**, and not merely a synonym for "yarn". Yarn spells it `nodeLinker` and
+ * defaults to `pnp`; pnpm has the same setting and the same `pnp` option; and a repository can
+ * migrate between the two without its lockfile changing name. So the question "which tool
+ * installs here" cannot answer "is there a `node_modules` to resolve through", and only the
+ * second one bears on {@link CLI_ENTRY}.
+ *
+ * `node-modules` covers npm's hoisted tree, pnpm's symlinked one and Yarn's `node-modules`
+ * linker alike. What they share is the only property init depends on: a **direct** dependency
+ * appears at `node_modules/<name>` from the root. `pnp` is the layout where it does not,
+ * because there is no `node_modules` at all.
+ */
+export type Linker = 'node-modules' | 'pnp'
+
 /** Where a package is declared in a manifest, if it is. */
 export type Declaration = 'dev' | 'runtime' | 'absent'
 
@@ -132,6 +149,21 @@ export interface Detection {
   readonly workspace: Workspace
   /** Which tool installs here. `npm` when no lockfile answers — see {@link Manager}. */
   readonly manager: Manager
+  /**
+   * Whether there is a `node_modules` for {@link CLI_ENTRY} to resolve through — H6 (#58).
+   *
+   * **`pnp` is the one layout that path cannot hold**, and {@link Detection.cli} cannot report
+   * it: `cliIn` answers `local` from the manifest declaration when the file is absent, which is
+   * right for a repository that has simply not installed yet and wrong for one that never will
+   * have the file. Under PnP init would otherwise write a committed path that resolves nowhere
+   * and say nothing, and the failure surfaces later as an MCP server that exits 1 on spawn and
+   * a prompt hook that fails on every prompt the user types.
+   *
+   * Reported so ./scaffold.ts can remark on it. Init still writes the path — it is the only
+   * path it can honestly write into a committed file — and the remark is what makes the
+   * consequence visible at the moment it is created.
+   */
+  readonly linker: Linker
   /**
    * How many packages the workspace globs resolved to. `1` for a single-package repository.
    *
@@ -277,6 +309,7 @@ export function detect(root: string): Detection {
   return {
     workspace,
     manager,
+    linker: linkerOf(root),
     packages: packageDirs?.length,
     apps,
     agents: agentsIn(root),
@@ -332,6 +365,28 @@ function managerOf(root: string): Manager {
   if (isFile(join(root, 'pnpm-lock.yaml'))) return 'pnpm'
   if (isFile(join(root, 'yarn.lock'))) return 'yarn'
   return 'npm'
+}
+
+/**
+ * Which layout installed here, from the artefact the linker leaves at the root — H6 (#58).
+ *
+ * **The generated file rather than the setting that produced it.** `nodeLinker` may be set in
+ * `.yarnrc.yml`, inherited from a parent directory, or left at Yarn's default of `pnp` and
+ * written nowhere at all — so reading the config answers the question only sometimes, while the
+ * file it emits answers it always. This is the same shape as {@link managerOf} above: the
+ * lockfile, not the intent behind it.
+ *
+ * Both names, because Yarn 2 wrote `.pnp.js` and Berry writes `.pnp.cjs`; a repository pinned to
+ * the older release is still a repository {@link CLI_ENTRY} cannot resolve in.
+ *
+ * `node-modules` is the fallback for the same reason npm is {@link managerOf}'s: a repository
+ * that has installed nothing yet has no artefact either way, and the layout it will get is the
+ * one the committed path already assumes.
+ */
+function linkerOf(root: string): Linker {
+  if (isFile(join(root, '.pnp.cjs'))) return 'pnp'
+  if (isFile(join(root, '.pnp.js'))) return 'pnp'
+  return 'node-modules'
 }
 
 /** Which layout, from the root manifest and the lockfiles beside it. */

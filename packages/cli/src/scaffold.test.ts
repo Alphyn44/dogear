@@ -12,6 +12,7 @@ import { CONFIG_FILE, QUEUE_DIR, registryPath, shortenHome } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Agent, Cli, Detection } from './detect.js'
+import { CLI_ENTRY } from './detect.js'
 import type { Wiring } from './scaffold.js'
 import { resolveWiring, scaffold, stepsFor, undoSteps } from './scaffold.js'
 import {
@@ -759,6 +760,69 @@ describe('scaffold() wiring an agent — E3 (#28)', () => {
 
     it('says nothing once the CLI is installed', () => {
       expect(scaffold(root).output).not.toContain('npm i -D dogear-cli')
+    })
+
+    it.each([
+      ['pnpm-lock.yaml', 'pnpm add -D dogear-cli'],
+      ['yarn.lock', 'yarn add -D dogear-cli'],
+    ])('names the manager the repo actually uses, given %s', (lockfile, command) => {
+      // H6 (#58). This said `npm i -D` to every repository until then — including the pnpm and
+      // yarn ones ./guidance.ts's own table already got right for the plugin install one line
+      // below it, which is why the fix is an import rather than a second table.
+      withoutCli()
+      writeFileSync(join(root, lockfile), '')
+
+      expect(scaffold(root).output).toContain(command)
+    })
+
+    describe('under Yarn PnP — H6 (#58)', () => {
+      /**
+       * A repository that installs with PnP: the artefact at the root, and `dogear-cli`
+       * genuinely declared.
+       *
+       * The declaration is the point. `cliIn` answers `local` from it when the file is absent,
+       * which is right for a repo mid-clone and wrong for one that will never have the file —
+       * so this is the shape that reached `wiring.cli === 'local'` and returned silently.
+       */
+      function withPnp(): void {
+        writeFileSync(join(root, '.pnp.cjs'), '')
+      }
+
+      it('warns even though the CLI is declared and `cli` reads local', () => {
+        withPnp()
+
+        const output = scaffold(root).output
+
+        expect(output).toContain("Yarn's PnP linker")
+        expect(output).toContain(CLI_ENTRY)
+      })
+
+      it('does not tell the user to install what they have already installed', () => {
+        // The reason the PnP arm is checked before `wiring.cli` rather than after it: under PnP
+        // the install the other arm prescribes is the one the user has already done.
+        withPnp()
+
+        expect(scaffold(root).output).not.toContain('add -D dogear-cli')
+        expect(scaffold(root).output).not.toContain('npm i -D dogear-cli')
+      })
+
+      it('still gives a verdict on a re-run, because it is a remark', () => {
+        withPnp()
+        scaffold(root)
+
+        const output = scaffold(root).output
+
+        expect(output).toContain("Yarn's PnP linker")
+        expect(output).toContain('nothing changed')
+      })
+
+      it('says nothing when --agent=none wired nothing to point at it', () => {
+        // Nothing names CLI_ENTRY when nothing is wired, so there is no path to warn about —
+        // the guard the PnP arm was deliberately placed below.
+        withPnp()
+
+        expect(scaffold(root, { agents: [] }).output).not.toContain("Yarn's PnP linker")
+      })
     })
   })
 

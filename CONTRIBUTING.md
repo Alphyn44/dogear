@@ -57,8 +57,30 @@ test. The existing suites are the best guide to what that looks like here, and s
 them are "source rules" that read the repository's own files rather than exercising
 behaviour, which is deliberate.
 
-CI runs the same nine steps as `npm run verify`, across Node 20.19, 22.12 and 24. All three
-must pass.
+CI runs the same nine steps as `npm run verify` on five legs: Node 20.19, 22.12 and 24 on
+Linux, plus Node 24 on Windows and macOS. All five must pass. The Node versions are there to
+prove the `engines` floors; the platforms are there because dogear is developed on Windows
+and several things — the drive-letter casing in the project registry, and the `node <path>`
+that `dogear init` writes because a global npm bin on Windows is a `.cmd` shim — exist for
+reasons a Linux-only matrix cannot see.
+
+Two CI jobs run alongside that matrix and are **not** part of `npm run verify`:
+
+- **`actionlint`** parses `.github/workflows/`, which nothing in `verify` does — Prettier is
+  told to leave YAML alone, deliberately, and validity is a different question from
+  formatting. It also runs shellcheck over every `run:` block, which is what checks
+  `release.yml`'s publish script. To reproduce it, put
+  [actionlint](https://github.com/rhysd/actionlint) 1.7.12 and
+  [shellcheck](https://github.com/koalaman/shellcheck) on your PATH and run `actionlint` from
+  the repository root. Without shellcheck it still runs, and silently checks less.
+- **`npm run test:packed`** packs the three tarballs, installs them into a scratch project
+  outside the workspace, and runs the binary, `dogear init` and a real dev server against
+  them. It needs `npm run build` first. It is out of `verify` because the install reaches the
+  registry, and `verify` is what a release gates on.
+
+A release is a merge to `main` that bumps a package version — there is no tag to push.
+[RELEASING.md](./RELEASING.md) has the procedure, including which packages a given change
+forces to move.
 
 Fair warning on house style: the conventions here are unusual and load-bearing. Comments
 explain *why* rather than what, the brief carries the reasoning that would otherwise live

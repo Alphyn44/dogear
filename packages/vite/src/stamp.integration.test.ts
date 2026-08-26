@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -56,7 +56,18 @@ let server: ViteDevServer
 let output: string
 
 beforeAll(async () => {
-  root = mkdtempSync(join(tmpdir(), 'dogear-stamp-'))
+  // Resolved, because vite watches this root and libuv aborts the whole process if it was
+  // handed an 8.3 short name. The GitHub windows-latest runner's TEMP is exactly that
+  // (`C:\Users\RUNNER~1\…`, `runneradmin` being too long for the legacy form):
+  // ReadDirectoryChangesW reports the long name back, fs-event.c asserts the watched
+  // directory is a prefix of it, and the vitest worker dies with 0xC0000409 rather than
+  // failing a test. `.native` because only the OS call expands a short name; the JS
+  // realpathSync resolves symlinks and leaves `RUNNER~1` as it found it.
+  //
+  // This suite is the one that died, but ./persist.test.ts and ./inject.test.ts start real
+  // servers the same way and only escaped by not seeing a watch event first. All three
+  // resolve now. ../../../test-packed/fixture.ts carries the same call for the same reason.
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dogear-stamp-')))
   // A plain FILE, matching the shape findGitRoot has to support for worktrees and
   // submodules — and the same fixture shape index.test.ts and inject.test.ts use.
   writeFileSync(join(root, '.git'), 'gitdir: /elsewhere/.git/worktrees/fixture')

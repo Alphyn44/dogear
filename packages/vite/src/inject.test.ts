@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -35,7 +35,9 @@ let server: ViteDevServer
 let served: string
 
 beforeAll(async () => {
-  root = mkdtempSync(join(tmpdir(), 'dogear-inject-'))
+  // Resolved for the reason ./stamp.integration.test.ts records: vite watches this root, and
+  // libuv aborts the process when it was handed a Windows runner's 8.3 short TEMP name.
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dogear-inject-')))
   writeFileSync(join(root, 'index.html'), RAW_HTML)
   // B1 (#8) gated injection on finding a git root, so the fixture now needs one. A plain
   // FILE rather than a directory, deliberately: `findGitRoot` checks with `existsSync` and
@@ -147,7 +149,8 @@ describe('a project that is not in a git repository', () => {
   let outsideServed: string
 
   beforeAll(async () => {
-    outside = mkdtempSync(join(tmpdir(), 'dogear-nogit-'))
+    // Resolved for the same reason as `root` above: this one gets a real server too.
+    outside = realpathSync.native(mkdtempSync(join(tmpdir(), 'dogear-nogit-')))
     writeFileSync(join(outside, 'index.html'), RAW_HTML)
 
     outsideServer = await createServer({

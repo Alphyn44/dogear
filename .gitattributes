@@ -8,6 +8,12 @@
 
 # Source and config stay LF too. Prettier writes LF by default, so a CRLF
 # checkout would leave every file looking modified on Windows.
+#
+# `*.html` is on this list because it was the one Prettier checks that was left
+# off it. Under a plain `text=auto`, a Windows checkout with core.autocrlf=true
+# (the GitHub windows-latest default) gave the three HTML files CRLF, and
+# `format:check` failed on them and nothing else. Found by H2's Windows leg on
+# its first run, which is what that leg is for.
 *.ts   text eol=lf
 *.tsx  text eol=lf
 *.js   text eol=lf
@@ -16,6 +22,7 @@
 *.cjs  text eol=lf
 *.json text eol=lf
 *.css  text eol=lf
+*.html text eol=lf
 *.md   text eol=lf
 *.yml  text eol=lf
 *.yaml text eol=lf

@@ -1045,7 +1045,8 @@ what found the two facts in G3's Decisions entries.
   `Ctrl+Alt+D` can find the way back.
 
 **G4 — Publishing from CI, with provenance**
-- A tagged release publishes from GitHub Actions, and only the three packages.
+- A release publishes from GitHub Actions, and only the three packages. *Delivered against a
+  tag trigger; #64 later moved that to a merge to `main` without changing what publishes.*
 - Publishing uses OIDC trusted publishing — no stored credential, and provenance
   attestations emitted automatically. See Repo and publishing for why this is not optional.
 - `npm i -g dogear-cli` from the public registry works on a machine that has never seen
@@ -1054,6 +1055,181 @@ what found the two facts in G3's Decisions entries.
 G4 is last, and G5 and G6 are before it for the same reason: npm renders the README a
 package carried *at publish time*, and a name cannot be corrected after someone has
 installed it.
+
+### Epic H — Testing (M6)
+
+Every epic above tested the thing it built, and each did it well: the transform has fixtures,
+the endpoint has a real server, the queue has a tolerance suite, `dogear init` has a built
+binary spawned as a subprocess. What none of them could test is the *seams between* the
+things they built — and every one of those seams is currently held by a person having checked
+once.
+
+Three of them, specifically. Every cross-package resolution in this repository goes through a
+workspace symlink, so nothing has ever exercised the shape npm publishes. CI has only ever run
+one operating system, and it is not the one dogear is developed on. And the product's central
+claim — click an element, the comment arrives bound to a file and a line — has never been
+verified end to end by anything but a click.
+
+This epic is filed after the release rather than before it because the first release is what
+turned each of these from a theoretical gap into an argument with evidence.
+
+**H1 — Installing from a packed tarball, in CI**
+- CI packs all three packages and installs the tarballs into a scratch project outside the
+  workspace.
+- The installed `dogear` binary runs, and `dogear init` sets that project up.
+- The installed plugin resolves `dogear-core`'s bundle — the resolution a wrong `exports` map
+  breaks.
+- A package whose `files` array is missing `dist` fails this job.
+
+The largest gap in the epic and the cheapest to close. A tarball that shipped no `dist` at all
+would pass all nine steps of `npm run verify`, because every resolution lands in the source
+tree where the build output already sits.
+
+**H2 — CI on the platforms dogear is used on**
+- The verify matrix runs on Windows and macOS as well as Linux.
+- A path or casing regression that reproduces on only one platform fails a pull request there.
+- The cost is bounded — the full Node matrix need not run on every platform.
+
+Two pieces of code exist *because* of Windows, and both were reasoned out rather than observed
+failing: `registryKey` upper-cases the drive letter, and everything `dogear init` writes points
+at `node <path>` rather than `dogear`. Neither has been tested on Windows by anything but a
+developer noticing.
+
+**H3 — The browser round trip, tested**
+- A headless browser loads a page served by a real dev server with the plugin loaded.
+- It modifier-clicks an element, types a comment, queues it, opens the panel and submits.
+- The annotation arrives in `.dogear/queue.json` with a `sites` entry naming a real file and
+  line, `via: "attribute"` — not the selector floor.
+- A transform regression that leaves the overlay working but the resolution wrong fails.
+
+The last criterion is the story. A test asserting only that *an annotation arrived* would pass
+on a build where the attribute transform had stopped running entirely, because the selector and
+text floor would still produce an item.
+
+**H4 — The workflow files are checked before a tag**
+- A malformed workflow file fails a pull request.
+- The check covers `ci.yml`, `verify.yml` and `release.yml`.
+- It runs as part of `npm run verify`, or as a CI step a contributor can reproduce locally.
+
+Nothing in `verify` parses YAML, so GitHub's own parser at push time is the only validator
+these files have — and on the release path push time is *after* the tag exists. The
+`.prettierignore` exclusion of `*.yml` is **not** what to undo here; that file states its own
+reason, and formatting is not the problem. Validity is.
+
+**H5 — A release rehearsal**
+- `release.yml` can be run manually against a branch in a mode that publishes nothing.
+- The dry run exercises the version comparison, the empty-tarball guard and the step summary,
+  and reports what *would* publish.
+- The mode cannot publish by accident.
+
+The publish job is the least-exercised code in the repository, and under the old trigger its
+first run was against a tag that already existed. What a rehearsal cannot cover is the OIDC
+exchange itself, which is the part most likely to be misconfigured — this reduces the unknown
+surface, it does not remove it.
+
+**The rehearsal is `workflow_dispatch`, and the *event* is what makes it safe rather than an
+input.** #64 split the workflow into an unprivileged `decide` and a privileged `publish`, so
+gating `publish` on `github.event_name == 'push'` means a dispatched run never starts the job
+that holds `id-token: write` and therefore never mints a token at all. An input gating the
+publish *command* — H5's original shape, filed before the trigger moved — leaves the
+credential present and rests on getting an `if:` right. An input can be set wrong; an event
+cannot.
+
+**H6 — The committed CLI path under pnpm and Yarn**
+- The path `dogear init` writes is asserted to resolve after a real install under npm, pnpm and
+  Yarn's `node-modules` linker.
+- Yarn PnP is either supported or documented as unsupported, on the strength of a test rather
+  than reasoning.
+- A package manager whose layout breaks the path fails a pull request.
+
+Everything init writes points at the repo-relative, committed
+`node_modules/dogear-cli/dist/cli.js`, so it has to resolve under whatever package manager the
+person cloning uses. That it does was reasoning until this story, and the root README stated it
+as fact. Lowest priority in the epic: the failure is narrow, documented and unreported.
+
+**Landed with a second half the acceptance criteria did not name.** Proving PnP unsupported
+meant running init under it, which is how the silent case surfaced: `cliIn` answers `local`
+from the *manifest declaration* when the file is absent — right for a repository mid-clone,
+wrong for one that will never have the file — so init wrote a committed path that resolved
+nowhere and said nothing. `Detection.linker` is the fix, and it is separate from
+`Detection.manager` for the reason `manager` is separate from `workspace`: Yarn spells the
+linker `nodeLinker` and pnpm has the same setting, so "which tool installs here" cannot answer
+"is there a `node_modules` to resolve through", and only the second question bears on the path.
+Read from the generated `.pnp.cjs`/`.pnp.js` rather than from `.yarnrc.yml`, because the
+setting may be inherited or left at Yarn's default and written nowhere, while the artefact is
+always there. It earns a **remark** rather than a refusal or a step note — init writes the
+registration correctly and it is the repository that is wrong, which is the discriminator
+`cliNotInstalled` already documents. Yarn 1 is not covered: Berry supplies both the
+`node-modules` leg and the PnP one, and classic has no PnP mode to test.
+
+**H7 — Dependency health, reported on every pull request**
+- Every pull request surfaces the current `npm audit` result, ranked by severity.
+- The report distinguishes advisories that reach a user from advisories in build tooling.
+- It also reports what is out of date, so a deliberate upgrade can be planned rather than
+  discovered.
+- It works identically on a pull request from a fork.
+- It cannot publish, comment, or write anything outside the run.
+
+The counterpart to `.github/dependabot.yml` deliberately not covering npm: the signal is
+wanted, the routine pull requests are not. **Severity alone is the wrong ranking here.** Only
+three things ever reach a user (`magic-string` and `dogear-core` through the plugin,
+`@modelcontextprotocol/sdk` through the CLI); everything else is tooling that `npm run
+verify` exercises and nobody installs. A raw `npm audit` number puts a dev-tree advisory in
+front of the maintainer with the same weight as one in a shipped dependency, which is how a
+report becomes something people learn to ignore. `npm audit --omit=dev` is the other half of
+the picture, and the two numbers together are the ranking worth having.
+
+**Reporting and failing are separate decisions.** Report everything; gate on the part that
+ships, and only on high or critical. A dev-tree advisory that blocks a merge teaches people to
+override the check, and an override that becomes routine is worse than no check at all.
+
+**H8 — Block a version rollback, and report distance since the last bump**
+- A pull request that lowers a package version below the one on `main` fails.
+- A pull request that raises a version, or leaves every version alone, passes.
+- Every pull request reports how many merges to `main` have happened since the last version
+  bump.
+- It works identically on a pull request from a fork.
+- It cannot publish, comment, or write anything outside the run.
+
+Two checks over the same data, and both became live questions the moment a merge to `main`
+became the thing that publishes. Nothing stops a version going *backwards*, and nothing reports
+how far `main` has drifted from the last release, so a rollback merges silently and "are we
+due a release?" is answered by memory.
+
+**Lockstep is already covered; this is the other half.** `scripts/packaging.test.ts` asserts
+the three manifests carry the *same* version, which is a required status check. What it cannot
+see is history: `0.1.2 → 0.1.1` across all three passes it, because they still match each
+other. The two rollback shapes fail differently and the second is worse. A version already on
+npm makes the release run go **green having published nothing**, while a lower version never
+published gets published, and `npm publish` moves the `latest` tag backwards.
+
+**It cannot be a vitest source rule, which is where it would otherwise belong.** Comparing
+against a previous version needs either git history or the registry, and `npm test` has to stay
+build-independent and network-free because `verify` is what a release gates on: the same
+reason H7 keeps `npm audit` out of those nine steps.
+
+**H9 — The actionlint pin cannot go stale unnoticed**
+- A new actionlint release is surfaced without someone remembering to look.
+- Whatever replaces the download is pinned at least as tightly as the checksum it drops.
+
+H4 pins a version and a SHA256 as literals in `ci.yml`. `dependabot.yml` covers the
+`github-actions` ecosystem, which means `uses:` references only. A downloaded release tarball
+is invisible to it, so nothing will ever propose a bump and the pin rots silently.
+
+Low stakes, and the second criterion is what makes the obvious fixes wrong.
+`uses: docker://rhysd/actionlint:<tag>` would bring it under Dependabot at the cost of a
+*mutable* tag, which is strictly looser than the checksum it replaces; third-party wrapper
+actions add the supply-chain hop the checksum exists to avoid, in a repository where
+`release.yml` holds a publishing credential. Doing nothing is a legitimate outcome. The
+question this story answers is whether that is a decision or an oversight.
+
+**Delivery ordering: H4, then H2, then H1.** H4 first because every other story here adds
+workflow YAML and none of it is checked until it does. H2 before H1 so that H1's job inherits
+the platforms rather than adding them again. H3 is the expensive one and independent of all of
+them; H5 waits on the publish trigger being settled; H6 builds directly on H1's pack-and-install
+harness. **H8 before H7, and H9 last.** H8 guards the publish path that #64 changed and needs
+the same branch-protection edit H2's job rename already forces, so the two settings changes
+happen once; H7 and H9 are reports and gate nothing that a release depends on.
 
 ### Non-functional requirements
 
@@ -1080,6 +1256,7 @@ Increasing order of how much can go wrong.
 | **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
 | **M4** | Install and init | E1–E8 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
 | **M5** | Release | G1–G6 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages were private and unpublished until this milestone, so `npm i -D dogear-vite` resolved to nothing and the install path M4 prints instructions for had never been run by anyone. |
+| **M6** | Testing | H1–H6 | After the release, because the release is what turned each gap here from theoretical into evidenced. Every milestone above tested what it built; this one tests the seams *between* what they built — the published tarball, the operating systems, the browser round trip — each of which currently rests on a person having checked once. |
 | — | Safety | F1–F4 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
 
 Two deliberate orderings worth noting:
@@ -2119,6 +2296,27 @@ convention: `scripts/packaging.test.ts` refuses `*`, `latest` and the `workspace
 forms, because `*` is what `npm install -w` writes back and the regression would otherwise be
 silent until someone installed the published plugin.
 
+**The three packages release in lockstep. Settled during M6, and it narrows G2 rather than
+reversing it.**
+Every release bumps `dogear-core`, `dogear-vite` and `dogear-cli` to the same version,
+including packages with no change in it. Core at `0.1.1`, vite at `0.1.5` and cli at `0.1.8`
+is a state nobody can reason about from a version number: three numbers describing one
+product, where the only question a user actually has is "which dogear am I on". The npm cost
+of a no-op bump is a version nobody needed; the cost of divergence is every future support
+question.
+
+**This is a release policy, and it does not touch the caret range or the `hosts` entry above,
+because those are about installed trees rather than published ones.** Lockstep controls what
+leaves this repository together. It cannot control what a user's `node_modules` holds — a
+caret range still admits a core that moved without the plugin, which is exactly the drift the
+`hosts` omission and `test-packed/install.test.ts`'s nested-copy assertion exist to survive.
+Pinning the range would close that, and would also mean a core patch could not reach anyone
+without a plugin republish, which is a worse trade than the one it fixes.
+
+`scripts/packaging.test.ts` asserts the three versions are identical, so a release pull request
+that bumps two of three goes red before it merges. That matters more since #64 than it would
+have before: merging is what publishes, so there is no later step at which someone notices.
+
 **Being wired is two independent facts — a manifest declaration and a config that calls the
 plugin — and init checks both. Settled during G3.**
 E8 keyed `guidance()` on `DetectedApp.plugin` alone, which is a *manifest* fact, on the
@@ -2190,32 +2388,54 @@ rules sit in the same table. So the gate now names each package explicitly, and
 `packaging.test.ts` asserts every published name is in that list — an explicit list is a
 list that can go stale, and the test is what stops it.
 
-**The tag is a trigger, not a manifest. Settled during G4.**
-`git tag v0.1.0` starts the release; what publishes is decided by comparing each
-`package.json` version against the registry and skipping what is already there. The
-alternative — the tag naming the version, refusing to publish if a manifest disagrees — is
-simpler to read and quietly forces lockstep versions, which is the thing G2 decided against
-when it gave `dogear-vite` a caret range on `dogear-core` rather than a pin. A release where
-core is at `0.1.2` and vite at `0.3.0` is expressible under one tag only if the tag is not
-authoritative. Two consequences worth having: a partially-failed run is re-runnable, because
-the packages that made it are skipped rather than colliding; and tagging without bumping
-publishes nothing and goes green, which is why the job emits a warning line and a
-step-summary table rather than a silent success.
+**The manifest is the manifest. Settled during G4, and untouched by #64.**
+What publishes is decided by comparing each `package.json` version against the registry and
+skipping what is already there. The alternative — a name that declares the version, refusing
+to publish if a manifest disagrees — is simpler to read and makes the trigger authoritative
+over the manifests, which is the wrong way round: the manifests are what a consumer resolves.
+Two consequences worth having: a partially-failed run is re-runnable, because the packages
+that made it are skipped rather than colliding; and a trigger that fires with nothing bumped
+publishes nothing and goes green, which is why the job emits a step-summary table rather than
+a silent success.
 
-**Reopened by #64, and the first release is the evidence against the tag.** All three
-`0.1.0` packages record `gitHead = 0e4ee643`, a commit that is not reachable from `main`:
-it lived on `m5-release`, PR #52 was squash-merged, and the branch commits went with it. So
-the published packages point at a commit that is not in the repository's history. It still
-resolves on github.com, because GitHub retains commits referenced by a pull request, but
-`git cat-file -e` fails in a fresh clone.
+The lockstep entry above does *not* make this redundant. Lockstep is a rule about what a
+release pull request must contain, enforced by a test before the merge; the registry
+comparison is what the workflow does after it, and it stays the authority on what is already
+out there. A release that failed halfway leaves the three genuinely out of step on the
+registry, and only the comparison can tell the re-run which two to skip.
+
+**What triggers it moved from a tag to a merge. #64, and the first release is the
+evidence.** All three `0.1.0` packages record `gitHead = 0e4ee643`, a commit that is not
+reachable from `main`: it lived on `m5-release`, PR #52 was squash-merged, and the branch
+commits went with it. So the published packages point at a commit that is not in the
+repository's history. It still resolves on github.com, because GitHub retains commits
+referenced by a pull request, but `git cat-file -e` fails in a fresh clone.
 
 Nothing caught that and nothing could have, because tagging happens outside CI and outside
-review, against whatever commit is checked out. The decision above is about *what*
-publishes, and it stands. What #64 questions is what does the *triggering*: a merge to
-`main` is reviewed, has a visible `"version"` diff and three green CI legs, while a tag push
-has none of those. The version comparison already behaves correctly under either trigger,
-so the change is small; the objection is that it would run a job holding `id-token: write`
-on every merge rather than on rare tags, which is answerable by splitting the job.
+review, against whatever commit is checked out. So `release.yml` now runs on
+`push: branches: [main]`, and a release is a pull request whose diff reads
+`"version": "0.1.1" -> "0.1.2"` with the full CI matrix green against it. **A merge never
+invents a version** — the comparison above is unchanged, so the ordinary merges between
+releases find every version already published, skip all three and go green. `RELEASING.md`
+is the procedure; this entry is the reasoning.
+
+**The credential objection is answered by splitting the job, not by a second lock.** A
+merge-triggered publish would otherwise hold `id-token: write` on every merge rather than on
+rare tags, and that matters more here than elsewhere because Dependabot proposes bumps to the
+very actions that job uses. So the decision is split from the act: an unprivileged `decide`
+job does the registry comparison and emits what would publish, and the privileged job runs
+only if it says yes. A `release:publish` label was considered as a second lock and declined —
+the reviewed version diff is already a deliberate act, and a gate that must be remembered is
+a step that will be forgotten, which is the failure mode this whole change exists to remove.
+
+**Tags survive as a record, and are per package.** The workflow pushes `dogear-core@0.1.2`
+after npm accepts the publish, one per package that actually shipped, from a job holding
+`contents: write` and no OIDC token. Under lockstep a repo-wide `v0.1.2` would also be honest,
+and it was weighed: what decides it is that a *partial* release is the case the record has to
+survive, and that is precisely when the three are not at one version. A per-package tag names
+what npm actually received and needs no rule for the exception. `v0.1.0` and `v0.1.1` remain
+as relics of the tag-trigger era. Since tags no longer trigger anything, P2 (#60)'s protection
+on `v*` stops being the primary control and branch protection on `main` becomes it.
 
 **The first publish of each package cannot use OIDC, and that is npm's constraint rather
 than ours. Settled during G4.**
@@ -2276,6 +2496,13 @@ None of these blocked M0, and none of them blocks the release.
 - The packages are unscoped, so `--access public` does not apply — only scoped packages
   default to restricted. See the naming entry in the Decisions log.
 
+**A release is a merge to `main`, not a tag.** Bump the manifests that moved, let the
+lockfile follow, and open a pull request whose diff is versions and nothing else; merging it
+is what publishes. Every other merge finds all three versions already on the registry and
+goes green having published nothing. **`RELEASING.md` is the procedure** — including which
+packages a given change forces to move, which is the part that is easy to get wrong. The
+reasoning behind the trigger is in the Decisions log; the runbook does not belong here.
+
 **Publishing uses OIDC trusted publishing from GitHub Actions. This is no longer
 optional:**
 
@@ -2284,16 +2511,17 @@ optional:**
 - Trusted publishing needs no stored credential and **emits provenance attestations
   automatically** — no `--provenance` flag. Provenance is a meaningful trust signal for a
   tool people install into their build pipeline.
-- **Provenance requires a public source repository, and this one is private.** GitHub
-  withdrew support for provenance from private repositories in July 2023, and trusted
-  publishing does not exempt it: the attestation names a repository and a commit that a
-  verifier has to be able to reach. **`0.1.0` proved the worse of the two failure modes.**
+- **Provenance requires a public source repository, and this one was private until P5
+  (#63).** GitHub withdrew support for provenance from private repositories in July 2023, and
+  trusted publishing does not exempt it: the attestation names a repository and a commit that
+  a verifier has to be able to reach. **`0.1.0` proved the worse of the two failure modes.**
   The release did not fail; it published cleanly and skipped the attestation in silence, so
   `dist.attestations` is empty on all three packages while `_npmUser` correctly reads
   `npm-oidc-no-reply@github.com`. OIDC worked, provenance did not, and nothing reported it.
-  Attestations are made at publish time and cannot be added later, so `0.1.0` can never
-  carry one: **G4's provenance criterion is met by the first release published after M7's
-  P5 (#63) flips the repository**, not by anything that can be done to what is already out.
+  Attestations are made at publish time and cannot be added later, so `0.1.0` can never carry
+  one. **G4's provenance criterion is met by `0.1.1`**, the first release from the public
+  repository: `dist.attestations` now names a `slsa.dev/provenance/v1` predicate on all three.
+  Checked against the registry rather than assumed.
 - Trusted-publisher configurations created **after 20 May 2026** must explicitly select at
   least one allowed action. Ours are, so each config names `npm publish` rather than
   relying on the old implicit default.
@@ -2318,16 +2546,57 @@ is wrong.
 mostly churn: the devDependencies are tsup, vitest, prettier, typescript and happy-dom, all
 of which move constantly, `npm run verify` already fails if any of them breaks something,
 and a genuine vulnerability still arrives through security updates. For `github-actions` the
-risk is different in kind rather than degree: the workflows pin `actions/checkout@v5` and
+risk is different in kind rather than degree: the workflows pin `actions/checkout@v7` and
 `actions/setup-node@v5` by *major* tag, a major tag is mutable, and `release.yml` holds
 `id-token: write` against a live trusted publisher, so an action changing underneath us is
 the one supply-chain shape that could publish as us.
 
-What replaces npm version updates is #65: a report on every pull request, ranked by severity
-**and by whether the package ships**. Only `magic-string`, `dogear-core` and
+What replaces npm version updates is **H7 (#65)**: a report on every pull request, ranked by
+severity **and by whether the package ships**. Only `magic-string`, `dogear-core` and
 `@modelcontextprotocol/sdk` ever reach a user, so a raw `npm audit` number weights a
 build-tooling advisory the same as a shipped one, which is how a report becomes something
 people learn to ignore.
+
+The same reasoning has a blind spot, and **H9 (#71)** is it. `github-actions` covers `uses:`
+references and nothing else, so H4's actionlint tarball (pinned by version and checksum as
+literals) is invisible to Dependabot and would rot with nobody proposing a bump.
+
+**The browser suite runs against a scratch project, not `examples/react-app`. Settled during
+H3.** The story names the example app as the obvious host, and it is disqualified by one line
+of the plugin: the endpoint writes to `queuePathFor(findGitRoot(server.config.root))`, the
+example's git root is this repository, and no option overrides it. Every run would append test
+annotations to the developer's own `.dogear/queue.json` and stamp paths naming this repo's real
+source files — the test would pass while measuring something nobody asked for. So a committed
+fixture app is copied into a temp directory with a bare `.git` of its own, which is the same
+conclusion H1 reached about `createScratchProject` and for a closely related reason.
+
+It installs nothing, and that is what keeps it out of H1's territory rather than merely fast.
+The workspace already hoists `react`, `@vitejs/plugin-react` and `vite`, so one junction
+reaches them and the `dogear-vite` symlink together — meaning the fixture consumes the **built**
+plugin through its exports map, exactly as the example app does and for the same reason F1's
+layer 3 gives. H1 owns *what npm publishes*; this owns *what the browser does*, and folding
+them together would put a registry on the critical path of a suite that needs none.
+
+**No test-only handle was added to reach the overlay, and the refusal made the test better.
+Settled during H3.** The shadow root is `closed`, so nothing outside it can query dogear's DOM
+— which is B7's guarantee working, not an obstacle. Exposing the root on `window.__dogear` for
+the suite's benefit would have put a hole in the one property the overlay's isolation rests on,
+in order to test it. The alternative turned out to be what the story asked for anyway: every
+step is real input — a keyboard-modified pointer event, `Enter`, a click on the badge,
+`Ctrl+Enter` — and the only thing the suite reads is `.dogear/queue.json`, which is the
+artefact under test. The badge's screen position had to be derived from its CSS rather than
+found with a locator, and that is the real cost; it is paid down by hit-testing the point
+before clicking it, so a restyle fails naming the function to fix.
+
+**The `transform: false` leg is what makes the `via` assertion mean anything. Settled during
+H3.** This is the story's fourth criterion made literal. An annotation still arrives with the
+transform off — C3's floor resolves a selector and a text snippet, which is exactly what that
+floor is for — so a suite that asserted only "something reached the queue" would stay green
+through a build where the attribute transform had stopped running entirely. Driving the
+identical gesture against a second server and requiring **no** `via: 'attribute'` site is the
+same standing rule this repository already applies to `check-leak.test.ts`, to H8's classifier
+self-test and to H7's `dependencies.total > 0`: on a healthy repo a guard that cannot fail will
+pass forever while testing nothing.
 
 ---
 

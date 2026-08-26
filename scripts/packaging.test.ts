@@ -194,6 +194,38 @@ describe('dogear-vite', () => {
   })
 })
 
+describe('the published versions', () => {
+  /**
+   * Lockstep, and it is a rule rather than an accident of them having been released
+   * together so far.
+   *
+   * The three packages are one product with one version. A tree where core is at 0.1.1,
+   * vite at 0.1.5 and cli at 0.1.8 is a support question nobody can answer from a version
+   * number, and the caret range between vite and core means such a tree also *installs*,
+   * silently, in several combinations. So every release moves all three, including packages
+   * with no change in it.
+   *
+   * Asserted here rather than described in RELEASING.md alone, because the failure is a
+   * release that has already happened by the time anyone reads a document. This runs in the
+   * fast `npm test` suite, so a release pull request that bumps two of three goes red before
+   * it merges — and merging is what publishes since #64.
+   */
+  it('are identical across all three packages', () => {
+    const versions = PUBLISHED.map((dir) => [dir, manifest(dir).version] as const)
+    const distinct = new Set(versions.map(([, version]) => version))
+
+    expect(
+      distinct.size,
+      `the three packages must carry the same version, and they do not: ${versions
+        .map(([dir, version]) => `dogear-${dir}@${String(version)}`)
+        .join(
+          ', ',
+        )}. Every release bumps all three, including ones with no change in it. ` +
+        'See RELEASING.md.',
+    ).toBe(1)
+  })
+})
+
 describe('dogear-cli', () => {
   it('still puts `dogear` on PATH, not `dogear-cli`', () => {
     // The one field G5's rename would plausibly have swept up, and the failure is silent
