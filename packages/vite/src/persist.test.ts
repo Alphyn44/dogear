@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -62,7 +63,10 @@ async function startFixture(
     app?: string
   } = {},
 ): Promise<Fixture> {
-  const gitRoot = mkdtempSync(join(tmpdir(), 'dogear-persist-'))
+  // Resolved for the reason ./stamp.integration.test.ts records at length: vite watches the
+  // root below, and libuv aborts the process when it was handed the 8.3 short TEMP name a
+  // Windows CI runner has. Resolving the git root covers `viteRoot`, which is built from it.
+  const gitRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'dogear-persist-')))
   if (options.git !== false) mkdirSync(join(gitRoot, '.git'))
 
   const viteRoot = join(gitRoot, 'packages', 'apps', 'web')
