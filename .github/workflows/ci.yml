@@ -182,7 +182,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           # One version. What this job proves is per-platform and per-package-manager, not
           # per-Node — the engines floors are verify.yml's job.
@@ -226,7 +226,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           # One version, for the reason `packed` gives: what this job proves is per-package
           # manager, not per-Node.
@@ -266,7 +266,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           # One version, for the reason `packed` gives: what this job proves is about the
           # browser, not about Node.
@@ -337,7 +337,7 @@ jobs:
       # ubuntu-latest ships a node but which one drifts with the runner image, and the step
       # below reads historical manifests with `node -p`. Pinned for the same reason release.yml's
       # `tag` job pins it. No `cache: npm`, because this job never installs.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -581,7 +581,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
