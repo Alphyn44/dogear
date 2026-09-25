@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Agent } from './detect.js'
+import { CLI_ENTRY, cliEntry } from './detect.js'
 import { createHookStep, hookRemoval } from './hook-config.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
@@ -30,8 +31,17 @@ afterEach(() => {
   removeRepo(root)
 })
 
+/** The path #75's layout writes: a repository whose only package is `web/`. */
+const WEB = cliEntry('web')
+
 function wiring(over: Partial<Wiring> = {}): Wiring {
-  return { agents: ['claude'] as readonly Agent[], hook: true, cli: 'local', ...over }
+  return {
+    agents: ['claude'] as readonly Agent[],
+    hook: true,
+    entry: CLI_ENTRY,
+    withheld: [],
+    ...over,
+  }
 }
 
 function plan(over: Partial<Wiring> = {}): Plan | undefined {
@@ -247,6 +257,51 @@ describe('createHookStep() re-running', () => {
   })
 })
 
+describe('createHookStep() in a repository whose only package is web/ (#75)', () => {
+  it('runs the hook through the web/ path', () => {
+    const parsed = JSON.parse(run({ entry: WEB })) as Settings
+
+    expect(parsed.hooks?.UserPromptSubmit?.[0]?.hooks?.[0]?.args).toEqual([
+      '${CLAUDE_PROJECT_DIR}/web/node_modules/dogear-cli/dist/cli.js',
+      'hook',
+    ])
+  })
+
+  it('is a no-op the second time', () => {
+    run({ entry: WEB })
+
+    expect(plan({ entry: WEB })).toBeUndefined()
+  })
+
+  it('names the web/ path in the note when the file cannot be edited', () => {
+    seed('{\n  "hooks": "x"\n}\n')
+
+    expect(plan({ entry: WEB })?.notes?.[0]).toContain(
+      '`node ${CLAUDE_PROJECT_DIR}/web/node_modules/dogear-cli/dist/cli.js hook`',
+    )
+  })
+
+  // The migration case, and the reason #75 went unseen: a hook running the root's path is
+  // `wired()`, so without this a re-run reported `nothing changed` over a hook that failed on
+  // every prompt.
+  it('notes a hook running another path, and changes nothing', () => {
+    run()
+    const before = read()
+
+    const result = plan({ entry: WEB })
+
+    expect(result?.change).toBeUndefined()
+    expect(result?.notes).toEqual([
+      '.claude/settings.json runs the prompt hook from ' +
+        '${CLAUDE_PROJECT_DIR}/node_modules/dogear-cli/dist/cli.js, but this ' +
+        "repository's dogear-cli belongs at " +
+        '${CLAUDE_PROJECT_DIR}/web/node_modules/dogear-cli/dist/cli.js. Run ' +
+        '`dogear init --undo` and then `dogear init` to repoint it.',
+    ])
+    expect(read()).toBe(before)
+  })
+})
+
 describe('taking the hook back out — E6 (#39)', () => {
   function undo(): Plan | undefined {
     const planned = hookRemoval.plan(root)
@@ -341,6 +396,16 @@ describe('taking the hook back out — E6 (#39)', () => {
 
     expect(planned?.change).toBeUndefined()
     expect(planned?.notes?.[0]).toContain('could not be parsed')
+    expect(planned?.notes?.[0]).toContain('dogear-cli/dist/cli.js hook')
     expect(read()).toBe(broken)
+  })
+
+  // #75, for the reason ./mcp-config.test.ts gives: undo cannot know init chose web/, and a
+  // comparison against the root's fresh file alone would splice this to `{}` instead.
+  it('deletes a settings.json init wrote whole with the web/ path', () => {
+    run({ entry: WEB })
+
+    expect(undo()?.change?.summary).toBe(`deleted ${SETTINGS}`)
+    expect(existsSync(join(root, ...SETTINGS.split('/')))).toBe(false)
   })
 })

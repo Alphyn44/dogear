@@ -2,7 +2,6 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:f
 import { dirname, join } from 'node:path'
 
 import type { Agent } from './detect.js'
-import { CLI_ENTRY } from './detect.js'
 import { insertAt, pruneEmpty, removeAt, stripBom } from './json-insert.js'
 import type { Plan, Step, Undo, Wiring } from './scaffold.js'
 
@@ -46,11 +45,20 @@ const TARGETS: Record<Agent, Target> = {
   vscode: { file: '.vscode/mcp.json', container: 'servers' },
 }
 
-/** The server entry itself. `node <path>`, for the Windows reason at {@link CLI_ENTRY}. */
-const SERVER = {
-  command: 'node',
-  args: [CLI_ENTRY, 'mcp'],
-} as const
+/**
+ * The server entry itself. `node <path>`, for the Windows reason at
+ * {@link import('./detect.js').CLI_ENTRY}.
+ *
+ * A function of the path since #75, which made the path depend on where the repository keeps
+ * `dogear-cli`. Every caller passes `Wiring.entry`, apart from undo, which passes the path the
+ * file already names.
+ */
+function server(entry: string): {
+  readonly command: 'node'
+  readonly args: readonly string[]
+} {
+  return { command: 'node', args: [entry, 'mcp'] }
+}
 
 /** The key the entry lives under, and what makes re-running a no-op. */
 const NAME = 'dogear'
@@ -60,6 +68,8 @@ interface Job {
   readonly file: string
   /** The full text to write. */
   readonly contents: string
+  /** The CLI path it names, which `apply` needs to splice a second time. */
+  readonly entry: string
 }
 
 export function createMcpStep(wiring: Wiring): Step {
@@ -71,7 +81,7 @@ export function createMcpStep(wiring: Wiring): Step {
 
       for (const agent of wiring.agents) {
         const target = TARGETS[agent]
-        const outcome = planOne(root, target)
+        const outcome = planOne(root, target, wiring.entry)
 
         if (outcome === undefined) continue
         if (typeof outcome === 'string') notes.push(outcome)
@@ -125,22 +135,27 @@ function createMcpRemoval(target: Target): Undo {
       const existing = readIfFile(path)
       if (existing === undefined) return undefined
 
+      const parsed = parse(existing)
+      if (parsed === undefined) return { notes: [unreadableRemoval(target)] }
+      if (!registered(parsed, target)) return undefined
+
       // Byte-identical to what init writes into a repository that had no config at all: init
       // created this file, nobody has touched it since, and dogear's entry is the only thing in
       // it. Deleting is the honest inverse — leaving `{"mcpServers": {}}` behind is litter that
       // still says dogear was here. Anything else, down to a changed indent, is spliced.
-      if (existing === fresh(target)) {
+      //
+      // The fresh file is rebuilt from the path the entry itself names (#75). Undo never runs
+      // detection, so it cannot know which package init chose, and a comparison against the
+      // root's path alone would splice a `web/node_modules/...` file init wrote whole.
+      const entry = registeredPath(parsed, target)
+      if (entry !== undefined && existing === fresh(target, entry)) {
         return {
           change: {
             summary: `deleted ${target.file}`,
-            apply: () => discard(path, target, fresh(target)),
+            apply: () => discard(path, target, existing),
           },
         }
       }
-
-      const parsed = parse(existing)
-      if (parsed === undefined) return { notes: [unreadableRemoval(target)] }
-      if (!registered(parsed, target)) return undefined
 
       if (withoutServer(existing, target) === undefined) {
         return { notes: [unremovable(target)] }
@@ -227,29 +242,69 @@ function unremovable(target: Target): string {
  * place this safely" becomes a `Plan.note` instead of an `apply()` that fails half way through a
  * list of files. `apply` re-reads and re-splices anyway; see {@link apply}.
  */
-function planOne(root: string, target: Target): Job | string | undefined {
+function planOne(root: string, target: Target, entry: string): Job | string | undefined {
   const path = join(root, ...target.file.split('/'))
   const existing = readIfFile(path)
 
   if (existing === undefined) {
     // Nothing there — or something there that is not a regular file, which `apply` re-checks
     // and reports properly rather than letting `writeFileSync` produce a bare EISDIR.
-    return { file: target.file, contents: fresh(target) }
+    return { file: target.file, contents: fresh(target, entry), entry }
   }
 
   const parsed = parse(existing)
-  if (parsed === undefined) return unreadable(target)
-  if (registered(parsed, target)) return undefined
+  if (parsed === undefined) return unreadable(target, entry)
 
-  const merged = merge(existing, parsed, target)
+  if (registered(parsed, target)) {
+    const current = registeredPath(parsed, target)
+    return current === entry ? undefined : stale(target, current, entry)
+  }
+
+  const merged = merge(existing, parsed, target, entry)
   return merged === undefined
-    ? unplaceable(target)
-    : { file: target.file, contents: merged }
+    ? unplaceable(target, entry)
+    : { file: target.file, contents: merged, entry }
 }
 
 /** A whole file, for a repository that had none. */
-function fresh(target: Target): string {
-  return `${JSON.stringify({ [target.container]: { [NAME]: SERVER } }, null, 2)}\n`
+function fresh(target: Target, entry: string): string {
+  return `${JSON.stringify({ [target.container]: { [NAME]: server(entry) } }, null, 2)}\n`
+}
+
+/**
+ * The CLI path dogear's entry names, or `undefined` if it does not name one as `args[0]`.
+ *
+ * Read by the stale check and by undo, both since #75. Neither may assume the root's path any
+ * more: the stale check exists because a registration can name a path init would no longer
+ * write, and undo has to rebuild the file init wrote from whatever path init chose at the time.
+ */
+function registeredPath(parsed: Parsed, target: Target): string | undefined {
+  const container = parsed[target.container]
+  const entry = isObject(container) ? container[NAME] : undefined
+  const args = isObject(entry) ? entry.args : undefined
+  return Array.isArray(args) && typeof args[0] === 'string' ? args[0] : undefined
+}
+
+/**
+ * A registration naming a different path from the one init would write now (#75).
+ *
+ * **A note, never a rewrite.** Every repository set up before #75 in a layout with no root
+ * `package.json` carries the root's path, which never resolves there, and `registered()` alone
+ * would report `nothing changed` over it forever. Repointing it in place was the alternative and
+ * was declined: an entry pointing somewhere else may have been pointed there on purpose, and
+ * editing a value someone chose is the line ./gitignore.ts already declines to cross. The note
+ * names the undo-then-init round trip, which does the repair with machinery that already exists.
+ */
+function stale(target: Target, current: string | undefined, entry: string): string {
+  const now =
+    current === undefined
+      ? `registers "${NAME}" without a CLI path dogear can read`
+      : `registers "${NAME}" at ${current}`
+
+  return (
+    `${target.file} ${now}, but this repository's dogear-cli belongs at ${entry}. Run ` +
+    '`dogear init --undo` and then `dogear init` to repoint it.'
+  )
 }
 
 /**
@@ -260,16 +315,21 @@ function fresh(target: Target): string {
  * the entry. Anything else (a container that is not an object, a document whose root is an
  * array) falls out of `insertAt` as `undefined` and becomes a note.
  */
-function merge(source: string, parsed: Parsed, target: Target): string | undefined {
+function merge(
+  source: string,
+  parsed: Parsed,
+  target: Target,
+  entry: string,
+): string | undefined {
   // Relative indentation only. `insertAt` prefixes every line of the snippet with the indent it
   // found in the file, so a snippet that arrived pre-indented would come out doubly so.
-  const entry = `${JSON.stringify(NAME)}: ${JSON.stringify(SERVER, null, 2)}`
+  const snippet = `${JSON.stringify(NAME)}: ${JSON.stringify(server(entry), null, 2)}`
 
   if (!has(parsed, target.container)) {
     return insertAt(
       source,
       [],
-      `${JSON.stringify(target.container)}: {\n  ${indent(entry)}\n}`,
+      `${JSON.stringify(target.container)}: {\n  ${indent(snippet)}\n}`,
     )
   }
 
@@ -279,7 +339,7 @@ function merge(source: string, parsed: Parsed, target: Target): string | undefin
   // would be silently shadowed. ./hook-config.ts has the same trap and the same answer, and
   // ./malformed.test.ts covers both.
   return isObject(parsed[target.container])
-    ? insertAt(source, [target.container], entry)
+    ? insertAt(source, [target.container], snippet)
     : undefined
 }
 
@@ -299,18 +359,18 @@ function registered(parsed: Parsed, target: Target): boolean {
   return isObject(container) && Object.prototype.hasOwnProperty.call(container, NAME)
 }
 
-function unreadable(target: Target): string {
+function unreadable(target: Target, entry: string): string {
   return (
     `${target.file} could not be parsed, so dogear left it alone. Add a "${NAME}" entry ` +
-    `under "${target.container}": {"command": "node", "args": ["${CLI_ENTRY}", "mcp"]}`
+    `under "${target.container}": {"command": "node", "args": ["${entry}", "mcp"]}`
   )
 }
 
-function unplaceable(target: Target): string {
+function unplaceable(target: Target, entry: string): string {
   return (
     `${target.file} is not a shape dogear can edit safely, so it left it alone. Add a ` +
     `"${NAME}" entry under "${target.container}": {"command": "node", "args": ` +
-    `["${CLI_ENTRY}", "mcp"]}`
+    `["${entry}", "mcp"]}`
   )
 }
 
@@ -346,7 +406,8 @@ function apply(root: string, job: Job): void {
   // It arrived while we were planning, which is a no-op rather than a failure.
   if (parsed !== undefined && registered(parsed, target)) return
 
-  const merged = parsed === undefined ? undefined : merge(current, parsed, target)
+  const merged =
+    parsed === undefined ? undefined : merge(current, parsed, target, job.entry)
 
   if (merged === undefined) {
     throw new Error(

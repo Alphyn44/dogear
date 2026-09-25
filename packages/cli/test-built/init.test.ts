@@ -82,6 +82,10 @@ let root: string
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'dogear-init-built-'))
   mkdirSync(join(root, '.git'))
+  // A package for the CLI to live in. Since #75 a repository with no package.json anywhere has
+  // nowhere for a committed path to resolve, and init wires no agent there. ./init.subdir.test.ts
+  // is the layout suite; these cases are about the binary.
+  writeFileSync(join(root, 'package.json'), '{}')
 })
 
 afterEach(() => {

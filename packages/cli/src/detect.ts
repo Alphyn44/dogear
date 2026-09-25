@@ -45,7 +45,10 @@ export type Framework = 'preact' | 'solid' | 'svelte' | 'vue' | 'react'
 export type Workspace = 'npm' | 'yarn' | 'pnpm' | 'single'
 
 /**
- * Which tool installs things here, from the lockfile at the root.
+ * Which tool installs a package, from the nearest lockfile at or above it.
+ *
+ * Nearest rather than the root's since #75: a repository with no root `package.json` has no root
+ * lockfile either, and a pnpm app in `web/` was being told to run `npm`.
  *
  * **Separate from {@link Workspace} rather than folded into it** — E8 (#41). That type answers
  * "how are the packages organised", and its `npm`/`yarn` split is a lockfile question wearing a
@@ -93,8 +96,53 @@ export interface DetectedAgent {
   readonly marker: string
 }
 
-/** Whether `dogear-cli` is reachable from inside the repository. */
+/** Whether `dogear-cli` is installed in, or declared by, a package. */
 export type Cli = 'local' | 'absent'
+
+/**
+ * The package every config init commits reaches `dogear-cli` through (#75).
+ *
+ * **The root, unless the repository has no root `package.json`.** Every committed path used to
+ * start at the root's `node_modules`, and in a Go repository with its frontend in `web/` there is
+ * no such directory and never will be: the prompt hook init committed there failed on every
+ * prompt, for everyone who cloned. So when the root has no package, the path runs through the one
+ * that holds `dogear-cli` instead. `homeOf` has the order it is looked for in.
+ *
+ * `manager` and `linker` used to be read once, at the root, for the whole repository. In this
+ * layout the root is the one directory nothing is installed in, so they are read here for the CLI
+ * and on each {@link DetectedApp} for its own install line.
+ */
+export interface CliHome {
+  /** Repository-relative and forward-slashed. `''` is the repository root itself. */
+  readonly dir: string
+  /**
+   * Whether `dogear-cli` is installed there, or declared by that package (E3, #28).
+   *
+   * **Two questions, either of which is a yes**, and they are not redundant. The file on disk is
+   * the state that makes the written config work *today*; the manifest declaration is the state
+   * that makes it work after the next `npm ci` on a machine that has not installed yet. A
+   * package that declares it but has not installed is mid-clone, not misconfigured, and does not
+   * need telling. `absent` earns ./scaffold.ts's `cliNotInstalled` remark.
+   */
+  readonly state: Cli
+  /** Which tool installs there. `npm` when no lockfile answers — see {@link Manager}. */
+  readonly manager: Manager
+  /**
+   * Whether there is a `node_modules` there for {@link cliEntry} to resolve through (H6, #58).
+   *
+   * **`pnp` is the one layout that path cannot hold**, and {@link CliHome.state} cannot report
+   * it: it answers `local` from the manifest declaration when the file is absent, which is right
+   * for a package that has simply not installed yet and wrong for one that never will have the
+   * file. Under PnP init would otherwise write a committed path that resolves nowhere and say
+   * nothing, and the failure surfaces later as an MCP server that exits 1 on spawn and a prompt
+   * hook that fails on every prompt the user types.
+   *
+   * Reported so ./scaffold.ts can remark on it. Init still writes the path, because it is the
+   * only path it can honestly write into a committed file, and the remark is what makes the
+   * consequence visible at the moment it is created.
+   */
+  readonly linker: Linker
+}
 
 /** One directory with a Vite config in it — an app, as far as init is concerned. */
 export interface DetectedApp {
@@ -118,6 +166,14 @@ export interface DetectedApp {
    * package an app belongs to.
    */
   readonly manifestDir: string | undefined
+  /**
+   * Which tool installs that package, from the nearest lockfile at or above it (#75).
+   *
+   * Per app rather than per repository, because E8's install line names a package and has to use
+   * the command that package is installed with. With no manifest above the app, the lockfile is
+   * looked for from the app's own directory.
+   */
+  readonly manager: Manager
   /**
    * Whether that manifest declares `dogear-vite`, and in which field — E8 (#41).
    *
@@ -147,23 +203,6 @@ export interface DetectedApp {
 
 export interface Detection {
   readonly workspace: Workspace
-  /** Which tool installs here. `npm` when no lockfile answers — see {@link Manager}. */
-  readonly manager: Manager
-  /**
-   * Whether there is a `node_modules` for {@link CLI_ENTRY} to resolve through — H6 (#58).
-   *
-   * **`pnp` is the one layout that path cannot hold**, and {@link Detection.cli} cannot report
-   * it: `cliIn` answers `local` from the manifest declaration when the file is absent, which is
-   * right for a repository that has simply not installed yet and wrong for one that never will
-   * have the file. Under PnP init would otherwise write a committed path that resolves nowhere
-   * and say nothing, and the failure surfaces later as an MCP server that exits 1 on spawn and
-   * a prompt hook that fails on every prompt the user types.
-   *
-   * Reported so ./scaffold.ts can remark on it. Init still writes the path — it is the only
-   * path it can honestly write into a committed file — and the remark is what makes the
-   * consequence visible at the moment it is created.
-   */
-  readonly linker: Linker
   /**
    * How many packages the workspace globs resolved to. `1` for a single-package repository.
    *
@@ -187,15 +226,19 @@ export interface Detection {
    */
   readonly agents: readonly DetectedAgent[]
   /**
-   * Whether `dogear-cli` is installed in, or declared by, this repository — E3 (#28).
+   * Where the agent configs `dogear init` writes reach `dogear-cli` (E3, #28; #75).
    *
-   * The agent configs `dogear init` writes name `node_modules/dogear-cli/dist/cli.js`, which
-   * is repo-relative so that the file stays correct for everyone who clones. That path is
-   * written whatever this says; `absent` earns a `Plan.note` telling the user to install it,
-   * because the alternative — resolving the *global* install and writing an absolute path into
-   * a committed file — is broken for every other machine the moment it lands.
+   * Those configs name {@link cliEntry} of `cli.dir`, which is repo-relative so the file stays
+   * correct for everyone who clones. The path is written whether or not the CLI is installed yet;
+   * `state: 'absent'` earns a remark telling the user to install it, because the alternative, an
+   * absolute path out of the *global* install in a committed file, is broken for every other
+   * machine the moment it lands.
+   *
+   * **`undefined` means there is nowhere to point**: no root `package.json`, no package that
+   * declares `dogear-cli`, and no Vite app with a package of its own. Every path init could commit
+   * would resolve nowhere, so ./scaffold.ts wires no agent and says why.
    */
-  readonly cli: Cli
+  readonly cli: CliHome | undefined
 }
 
 /** Every filename Vite itself will load a config from. */
@@ -260,8 +303,23 @@ const CLI = 'dogear-cli'
  * **`node <path>`, never `dogear`.** A global npm bin on Windows is a `.cmd` shim, and the exec
  * form these configs use cannot run one. Same rule as the `UserPromptSubmit` hook, from the
  * brief's Delivery section.
+ *
+ * This is the root's form. {@link cliEntry} is what the writers call, because since #75 the
+ * package the path runs through is not always the root's.
  */
 export const CLI_ENTRY = 'node_modules/dogear-cli/dist/cli.js'
+
+/**
+ * {@link CLI_ENTRY} as seen from the repository root, when `dogear-cli` lives in `dir` (#75).
+ *
+ * `''` gives the constant unchanged, so every repository with a root `package.json` writes
+ * exactly what it did before. Still repo-relative, still portable: `web/node_modules/...` is as
+ * correct on every clone as the root form, and it is the one that resolves when `web/` is the
+ * only package there is.
+ */
+export function cliEntry(dir: string): string {
+  return dir === '' ? CLI_ENTRY : `${dir}/${CLI_ENTRY}`
+}
 
 /**
  * What proves an agent is in use here — E3 (#28), first match wins per agent.
@@ -287,7 +345,6 @@ const MARKERS: readonly (readonly [Agent, string, 'dir' | 'file'])[] = [
 export function detect(root: string): Detection {
   const manifest = readManifest(join(root, 'package.json'))
   const workspace = workspaceOf(root, manifest)
-  const manager = managerOf(root)
 
   // Only the `workspaces` array is readable, so only npm and yarn get the guided path. pnpm
   // and single-package repositories fall to the walk, which is also what makes a pnpm repo
@@ -308,12 +365,10 @@ export function detect(root: string): Detection {
 
   return {
     workspace,
-    manager,
-    linker: linkerOf(root),
     packages: packageDirs?.length,
     apps,
     agents: agentsIn(root),
-    cli: cliIn(root, manifest),
+    cli: cliHomeOf(root, candidates, apps),
   }
 }
 
@@ -339,36 +394,90 @@ function agentsIn(root: string): readonly DetectedAgent[] {
 }
 
 /**
- * Is `dogear-cli` reachable from inside this repository?
+ * Where the committed configs reach `dogear-cli`, or `undefined` for nowhere (#75).
  *
- * **Two questions, either of which is a yes**, and they are not redundant. The file on disk is
- * the state that makes the written config work *today*; the manifest declaration is the state
- * that makes it work after the next `npm ci` on a machine that has not installed yet. A
- * repository that declares it but has not installed is mid-clone, not misconfigured, and does
- * not need telling.
+ * Three places, in order, and the first that answers wins:
+ *
+ * 1. **The root, whenever it has a `package.json` or already holds the CLI.** Every repository
+ *    that worked before #75 has one or the other, so every such repository writes exactly the
+ *    path it always did. Existence rather than a parse: a root manifest with a syntax error is
+ *    still the package the user means to install into, and fixing it is theirs.
+ * 2. **The first package in the walk that declares `dogear-cli` or has it installed.** The
+ *    declaration rather than a Vite app, because the question is where the CLI lives: the
+ *    adopter who found #75 had a Next.js frontend, which this file does not detect at all, and
+ *    it declared `dogear-cli` in `web/package.json` all the same. Installed counts as well as
+ *    declared for the reason {@link CliHome.state} gives.
+ * 3. **The first Vite app's own package**, when nothing declares the CLI yet. That is where
+ *    ./scaffold.ts's remark then says to install it, so the path and the advice agree.
+ *
+ * `candidates` is the walk {@link detect} already made for Vite configs. It is sorted (see
+ * {@link childrenOf}), which is what makes "first" the same answer on every filesystem.
  */
-function cliIn(root: string, manifest: Manifest | undefined): Cli {
-  if (isFile(join(root, ...CLI_ENTRY.split('/')))) return 'local'
+function cliHomeOf(
+  root: string,
+  candidates: readonly string[],
+  apps: readonly DetectedApp[],
+): CliHome | undefined {
+  const dir = homeOf(root, candidates, apps)
+  if (dir === undefined) return undefined
+
+  return {
+    dir,
+    state: cliIn(root, dir),
+    manager: managerOf(root, dir),
+    linker: linkerOf(root, dir),
+  }
+}
+
+/** The directory half of {@link cliHomeOf}, which carries the reasoning. */
+function homeOf(
+  root: string,
+  candidates: readonly string[],
+  apps: readonly DetectedApp[],
+): string | undefined {
+  if (isFile(join(root, 'package.json')) || cliIn(root, '') === 'local') return ''
+
+  const holding = candidates.find((dir) => dir !== '' && cliIn(root, dir) === 'local')
+  if (holding !== undefined) return holding
+
+  return apps.find((app) => app.manifestDir !== undefined)?.manifestDir
+}
+
+/** Is `dogear-cli` installed in `dir`, or declared by its `package.json`? See {@link CliHome.state}. */
+function cliIn(root: string, dir: string): Cli {
+  const at = absolute(root, dir)
+  if (isFile(join(at, ...CLI_ENTRY.split('/')))) return 'local'
+
+  const manifest = readManifest(join(at, 'package.json'))
   return declarationOf(manifest, CLI) === 'absent' ? 'absent' : 'local'
 }
 
 /**
- * Which tool installs here, from the lockfile at the root.
+ * Which tool installs `dir`, from the nearest lockfile at or above it.
  *
- * **npm is the fallback, not a detection.** A repository with no lockfile has not installed
- * anything yet, and there is nothing to read; npm is the floor this project targets and the
- * command most users can translate. Checked in this order because a repository that migrated
- * between managers keeps the old lockfile more often than it deletes it, and pnpm's and yarn's
- * are the ones deliberately adopted.
+ * **npm is the fallback, not a detection.** A package with no lockfile anywhere above it has not
+ * installed anything yet, and there is nothing to read; npm is the floor this project targets and
+ * the command most users can translate. Within one directory, pnpm's and yarn's are checked first
+ * because a repository that migrated between managers keeps the old lockfile more often than it
+ * deletes it, and those two are the ones deliberately adopted.
+ *
+ * `package-lock.json` is checked since #75, and only to stop the climb. When the root held the
+ * only lockfile there was nothing above it to reach, but a `web/package-lock.json` has to win over
+ * a stray `yarn.lock` further up, or the nearest lockfile would not be the one that answers.
  */
-function managerOf(root: string): Manager {
-  if (isFile(join(root, 'pnpm-lock.yaml'))) return 'pnpm'
-  if (isFile(join(root, 'yarn.lock'))) return 'yarn'
+function managerOf(root: string, dir: string): Manager {
+  for (const at of ancestry(dir)) {
+    const base = absolute(root, at)
+    if (isFile(join(base, 'pnpm-lock.yaml'))) return 'pnpm'
+    if (isFile(join(base, 'yarn.lock'))) return 'yarn'
+    if (isFile(join(base, 'package-lock.json'))) return 'npm'
+  }
+
   return 'npm'
 }
 
 /**
- * Which layout installed here, from the artefact the linker leaves at the root — H6 (#58).
+ * Which layout installed `dir`, from the artefact the linker leaves at or above it (H6, #58).
  *
  * **The generated file rather than the setting that produced it.** `nodeLinker` may be set in
  * `.yarnrc.yml`, inherited from a parent directory, or left at Yarn's default of `pnp` and
@@ -383,10 +492,31 @@ function managerOf(root: string): Manager {
  * that has installed nothing yet has no artefact either way, and the layout it will get is the
  * one the committed path already assumes.
  */
-function linkerOf(root: string): Linker {
-  if (isFile(join(root, '.pnp.cjs'))) return 'pnp'
-  if (isFile(join(root, '.pnp.js'))) return 'pnp'
+function linkerOf(root: string, dir: string): Linker {
+  for (const at of ancestry(dir)) {
+    const base = absolute(root, at)
+    if (isFile(join(base, '.pnp.cjs'))) return 'pnp'
+    if (isFile(join(base, '.pnp.js'))) return 'pnp'
+  }
+
   return 'node-modules'
+}
+
+/** `dir` and every directory above it, up to and including the root: `a/b` → `a/b`, `a`, `''`. */
+function ancestry(dir: string): readonly string[] {
+  const segments = dir === '' ? [] : dir.split('/')
+  const dirs: string[] = []
+
+  for (let depth = segments.length; depth >= 0; depth -= 1) {
+    dirs.push(segments.slice(0, depth).join('/'))
+  }
+
+  return dirs
+}
+
+/** A repository-relative, forward-slashed directory as an absolute path. */
+function absolute(root: string, dir: string): string {
+  return dir === '' ? root : join(root, ...dir.split('/'))
 }
 
 /** Which layout, from the root manifest and the lockfiles beside it. */
@@ -499,7 +629,14 @@ function walk(from: string): readonly string[] {
   return found
 }
 
-/** Sub-directory names worth descending into. Never throws; an unreadable directory is empty. */
+/**
+ * Sub-directory names worth descending into. Never throws; an unreadable directory is empty.
+ *
+ * **Sorted since #75**, because `readdirSync` returns whatever order the filesystem keeps. NTFS
+ * happens to keep names sorted and ext4 does not, and {@link cliHomeOf} picks the *first* package
+ * that declares `dogear-cli`, so an unsorted walk could commit a different path on a Linux clone
+ * than on the Windows machine that ran init. It also fixes the order apps are reported in.
+ */
 function childrenOf(dir: string): readonly string[] {
   let entries
   try {
@@ -512,12 +649,13 @@ function childrenOf(dir: string): readonly string[] {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .filter((name) => !name.startsWith('.') && !SKIP.has(name))
+    .sort()
 }
 
 /** The app in `dir`, or `undefined` if there is no Vite config there. */
 function appAt(root: string, dir: string): DetectedApp | undefined {
-  const absolute = dir === '' ? root : join(root, dir)
-  const name = CONFIG_NAMES.find((candidate) => isFile(join(absolute, candidate)))
+  const at = absolute(root, dir)
+  const name = CONFIG_NAMES.find((candidate) => isFile(join(at, candidate)))
   if (name === undefined) return undefined
 
   // The nearest manifest, not the root's: in a workspace the app's own `package.json` is what
@@ -537,8 +675,9 @@ function appAt(root: string, dir: string): DetectedApp | undefined {
       framework === undefined ? undefined : versionOf(manifest, framework[1]),
     viteVersion: versionOf(manifest, 'vite'),
     manifestDir: nearest?.dir,
+    manager: managerOf(root, nearest?.dir ?? dir),
     plugin: declarationOf(manifest, PLUGIN),
-    configured: mentionsDogear(join(absolute, name)),
+    configured: mentionsDogear(join(at, name)),
   }
 }
 
@@ -575,12 +714,9 @@ function nearestManifest(
   root: string,
   dir: string,
 ): { readonly dir: string; readonly manifest: Manifest } | undefined {
-  const segments = dir === '' ? [] : dir.split('/')
-
-  for (let depth = segments.length; depth >= 0; depth -= 1) {
-    const at = segments.slice(0, depth)
-    const manifest = readManifest(join(root, ...at, 'package.json'))
-    if (manifest !== undefined) return { dir: at.join('/'), manifest }
+  for (const at of ancestry(dir)) {
+    const manifest = readManifest(join(absolute(root, at), 'package.json'))
+    if (manifest !== undefined) return { dir: at, manifest }
   }
 
   return undefined

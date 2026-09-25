@@ -23,7 +23,8 @@ dogear init
 
 Then follow what `init` prints: the plugin install for each app it found, and the import and
 `plugins` entry your `vite.config` needs. Install `dogear-cli` at the git root too, with
-`npm i -D dogear-cli`. The plugin is the browser half; see
+`npm i -D dogear-cli`, or in the package that runs your app if the repository has no root
+`package.json`. The plugin is the browser half; see
 [`dogear-vite`](https://www.npmjs.com/package/dogear-vite).
 
 This package is installed **twice on purpose**: globally, so `dogear` is on your PATH, and
@@ -31,6 +32,12 @@ locally, because the MCP server and prompt-hook entries `init` writes are commit
 point at `node_modules/dogear-cli/dist/cli.js`. That path is repo-relative so it resolves
 for everyone who clones the repository. An absolute path out of one machine's npm prefix
 would be broken for everyone else. Without the local copy the MCP server cannot start.
+
+In a repository with no root `package.json` there is no root `node_modules` for that path to
+reach, so `init` writes it through the package that declares `dogear-cli` instead (for
+example `web/node_modules/dogear-cli/dist/cli.js`) and reports that directory on its `cli:`
+line. If nothing declares it, `init` wires no agent rather than commit a path that cannot
+resolve, and says where to add it.
 
 ## Commands
 

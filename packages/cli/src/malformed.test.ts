@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { CLI_ENTRY } from './detect.js'
 import { createHookStep } from './hook-config.js'
 import { createMcpStep } from './mcp-config.js'
 import type { Plan, Wiring } from './scaffold.js'
@@ -36,7 +37,7 @@ afterEach(() => {
   removeRepo(root)
 })
 
-const WIRING: Wiring = { agents: ['claude'], hook: true, cli: 'local' }
+const WIRING: Wiring = { agents: ['claude'], hook: true, entry: CLI_ENTRY, withheld: [] }
 
 function hookPlan(): Plan | undefined {
   return createHookStep(WIRING).plan(root, NO_DETECTION)

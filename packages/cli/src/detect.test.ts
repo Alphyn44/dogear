@@ -61,6 +61,7 @@ describe('detect() on a single-package repository', () => {
         frameworkVersion: '^19.2.0',
         viteVersion: '^8.2.1',
         manifestDir: '',
+        manager: 'npm',
         plugin: 'absent',
         configured: false,
       },
@@ -82,6 +83,7 @@ describe('detect() on a single-package repository', () => {
         frameworkVersion: undefined,
         viteVersion: '^8.2.1',
         manifestDir: '',
+        manager: 'npm',
         plugin: 'absent',
         configured: false,
       },
@@ -136,13 +138,15 @@ describe('detect() and the package manager', () => {
   ])('reads %s as %s', (lockfile, manager) => {
     file(lockfile, '')
 
-    expect(detect(root).manager).toBe(manager)
+    // Both readers of it agree: the CLI's home and the app are the same root package here.
+    expect(detect(root).cli?.manager).toBe(manager)
+    expect(detect(root).apps[0]?.manager).toBe(manager)
   })
 
   it('answers npm when nothing has been installed yet', () => {
     // A fallback rather than a detection. There is no lockfile to read in a repository that has
     // never installed, and npm is the floor this project targets.
-    expect(detect(root).manager).toBe('npm')
+    expect(detect(root).cli?.manager).toBe('npm')
   })
 
   it('reports the manager of a SINGLE-package pnpm repo, which the layout cannot', () => {
@@ -152,14 +156,38 @@ describe('detect() and the package manager', () => {
     file('pnpm-lock.yaml', '')
 
     expect(detect(root).workspace).toBe('single')
-    expect(detect(root).manager).toBe('pnpm')
+    expect(detect(root).cli?.manager).toBe('pnpm')
   })
 
   it('prefers pnpm over a yarn.lock left behind by a migration', () => {
     file('yarn.lock', '')
     file('pnpm-lock.yaml', '')
 
-    expect(detect(root).manager).toBe('pnpm')
+    expect(detect(root).cli?.manager).toBe('pnpm')
+  })
+
+  it('reads an app’s manager from the nearest lockfile above it (#75)', () => {
+    // A workspace member has no lockfile of its own, so the climb reaches the root's.
+    manifest('package.json', { workspaces: ['packages/*'] })
+    manifest('packages/web/package.json', {})
+    file('packages/web/vite.config.ts', '')
+    file('yarn.lock', '')
+
+    expect(detect(root).apps.find((app) => app.dir === 'packages/web')?.manager).toBe(
+      'yarn',
+    )
+  })
+
+  it('stops at the nearest lockfile, so a package-lock.json wins over a yarn.lock above it', () => {
+    // npm's lockfile only started being read in #75, and only to stop the climb. Without it the
+    // nearest lockfile would not be the one that answers.
+    manifest('package.json', {})
+    file('yarn.lock', '')
+    manifest('web/package.json', {})
+    file('web/package-lock.json', '')
+    file('web/vite.config.ts', '')
+
+    expect(detect(root).apps.find((app) => app.dir === 'web')?.manager).toBe('npm')
   })
 })
 
@@ -177,13 +205,13 @@ describe('detect() and the linker — H6 (#58)', () => {
     // the older release is still one CLI_ENTRY cannot resolve in.
     file(artefact, '')
 
-    expect(detect(root).linker).toBe(linker)
+    expect(detect(root).cli?.linker).toBe(linker)
   })
 
   it('answers node-modules when nothing has been installed yet', () => {
     // A fallback, like npm is for the manager: a repository that has installed nothing has no
     // artefact either way, and node-modules is the layout the committed path already assumes.
-    expect(detect(root).linker).toBe('node-modules')
+    expect(detect(root).cli?.linker).toBe('node-modules')
   })
 
   it('answers node-modules for a yarn repo that is not using PnP', () => {
@@ -192,8 +220,8 @@ describe('detect() and the linker — H6 (#58)', () => {
     // reading the linker off the manager would condemn every yarn user to H6's warning.
     file('yarn.lock', '')
 
-    expect(detect(root).manager).toBe('yarn')
-    expect(detect(root).linker).toBe('node-modules')
+    expect(detect(root).cli?.manager).toBe('yarn')
+    expect(detect(root).cli?.linker).toBe('node-modules')
   })
 
   it('reports the linker and the manager independently', () => {
@@ -202,8 +230,8 @@ describe('detect() and the linker — H6 (#58)', () => {
     file('yarn.lock', '')
     file('.pnp.cjs', '')
 
-    expect(detect(root).manager).toBe('yarn')
-    expect(detect(root).linker).toBe('pnp')
+    expect(detect(root).cli?.manager).toBe('yarn')
+    expect(detect(root).cli?.linker).toBe('pnp')
   })
 })
 
@@ -410,6 +438,7 @@ describe('detect() on a workspace', () => {
         frameworkVersion: '^19.2.0',
         viteVersion: '^8.2.1',
         manifestDir: 'examples/web',
+        manager: 'npm',
         plugin: 'absent',
         configured: false,
       },
@@ -629,7 +658,7 @@ describe('detect() and whether the CLI resolves locally — E3 (#28)', () => {
   it('reads an installed dist/cli.js as local', () => {
     file('node_modules/dogear-cli/dist/cli.js', '')
 
-    expect(detect(root).cli).toBe('local')
+    expect(detect(root).cli?.state).toBe('local')
   })
 
   it('reads a declaration as local even before anything is installed', () => {
@@ -637,7 +666,7 @@ describe('detect() and whether the CLI resolves locally — E3 (#28)', () => {
     // install, so there is nothing to tell the user about.
     manifest('package.json', { devDependencies: { 'dogear-cli': '^0.1.0' } })
 
-    expect(detect(root).cli).toBe('local')
+    expect(detect(root).cli?.state).toBe('local')
   })
 
   it('reads a runtime declaration as local too', () => {
@@ -645,12 +674,113 @@ describe('detect() and whether the CLI resolves locally — E3 (#28)', () => {
     // this field answers. E8's remark is what has opinions about the field it sits in.
     manifest('package.json', { dependencies: { 'dogear-cli': '^0.1.0' } })
 
-    expect(detect(root).cli).toBe('local')
+    expect(detect(root).cli?.state).toBe('local')
   })
 
   it('reads neither as absent', () => {
     manifest('package.json', { devDependencies: { vite: '^8.2.1' } })
 
-    expect(detect(root).cli).toBe('absent')
+    expect(detect(root).cli?.state).toBe('absent')
+  })
+})
+
+/**
+ * #75: where the committed configs reach the CLI, in a repository whose root has no package.
+ *
+ * The adopter who found it had a Go repository with a Next.js frontend in `web/`. Every path init
+ * committed started at a root `node_modules` that could never exist, and the prompt hook failed on
+ * every prompt for everyone who cloned.
+ */
+describe('detect() and where the CLI lives (#75)', () => {
+  const DECLARES = { devDependencies: { 'dogear-cli': '^0.1.0' } }
+
+  it('keeps the root whenever the root has a package.json, as it always did', () => {
+    // The scope line. A root manifest keeps the root even with web/ declaring the CLI; that
+    // layout and the pnpm-workspace one are follow-ups, not this ticket.
+    manifest('package.json', {})
+    manifest('web/package.json', DECLARES)
+
+    expect(detect(root).cli?.dir).toBe('')
+  })
+
+  it('keeps the root for a root package.json that does not parse', () => {
+    // It is still the package the user means to install into; fixing it is theirs.
+    file('package.json', '{ "devDependencies": ')
+
+    expect(detect(root).cli?.dir).toBe('')
+  })
+
+  it('takes the package that declares dogear-cli when the root has none', () => {
+    manifest('web/package.json', DECLARES)
+    file('web/vite.config.ts', '')
+
+    expect(detect(root).cli).toEqual({
+      dir: 'web',
+      state: 'local',
+      manager: 'npm',
+      linker: 'node-modules',
+    })
+  })
+
+  it('takes a package that has it installed without declaring it', () => {
+    manifest('web/package.json', {})
+    file('web/node_modules/dogear-cli/dist/cli.js', '')
+
+    expect(detect(root).cli).toMatchObject({ dir: 'web', state: 'local' })
+  })
+
+  it('finds a declaration in a package that is not a Vite app', () => {
+    // The reporter's own layout: detection sees no app in a Next.js frontend, and the question
+    // is where the CLI lives rather than where Vite does. The declaration outranks the one Vite
+    // app there is.
+    manifest('admin/package.json', {})
+    file('admin/vite.config.ts', '')
+    manifest('web/package.json', DECLARES)
+
+    expect(detect(root).cli?.dir).toBe('web')
+  })
+
+  it('takes the first declarer in sorted order, whatever order the disk lists them in', () => {
+    // Created in reverse, so a walk that trusted readdir order on a filesystem that keeps
+    // insertion order would say `web`.
+    manifest('web/package.json', DECLARES)
+    manifest('admin/package.json', DECLARES)
+
+    expect(detect(root).cli?.dir).toBe('admin')
+  })
+
+  it('falls back to the first Vite app’s own package when nothing declares the CLI', () => {
+    manifest('web/package.json', { devDependencies: { vite: '^8.2.1' } })
+    file('web/vite.config.ts', '')
+
+    expect(detect(root).cli).toMatchObject({ dir: 'web', state: 'absent' })
+  })
+
+  it('reads the manager and the linker where the CLI lives, not at the root', () => {
+    manifest('web/package.json', DECLARES)
+    file('web/yarn.lock', '')
+    file('web/.pnp.cjs', '')
+
+    expect(detect(root).cli).toMatchObject({ dir: 'web', manager: 'yarn', linker: 'pnp' })
+  })
+
+  it('does not take a package inside node_modules as the home', () => {
+    // The walk's SKIP list, doing a second job: a dependency that happens to declare the CLI is
+    // not a package the user owns.
+    file('web/vite.config.ts', '')
+    manifest('node_modules/some-lib/package.json', DECLARES)
+
+    expect(detect(root).cli).toBeUndefined()
+  })
+
+  it('is undefined when there is no package anywhere to put it in', () => {
+    // A Vite config with no package.json above it, and nothing that declares the CLI.
+    file('web/vite.config.ts', '')
+
+    expect(detect(root).cli).toBeUndefined()
+  })
+
+  it('is undefined in a repository with nothing in it', () => {
+    expect(detect(root).cli).toBeUndefined()
   })
 })

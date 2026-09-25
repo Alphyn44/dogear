@@ -23,7 +23,8 @@ dogear init
 
 `dogear init` finds your git root, detects your setup, registers dogear's MCP server with
 your agent, and prints the import and `plugins` entry your `vite.config` needs. Install the
-plugin where your app lives, and `dogear-cli` at the git root:
+plugin where your app lives, and `dogear-cli` at the git root (or, if the repository has no
+root `package.json`, in the package that runs your app):
 
 ```sh
 npm i -D dogear-vite dogear-cli
@@ -42,6 +43,12 @@ locally, because the MCP server and prompt-hook entries `init` writes are **comm
 point at `node_modules/dogear-cli/dist/cli.js`, a repo-relative path, so that they resolve
 for everyone who clones the repository rather than only on the machine that ran `init`.
 Without the local copy the MCP server cannot start.
+
+A repository with no root `package.json` (a Go service with its frontend in `web/`, say) has
+no root `node_modules` for that path to reach, so `init` points the entries through the
+package that declares `dogear-cli` instead, `web/node_modules/dogear-cli/dist/cli.js`, and
+names that directory on a `cli:` line in its report. If no package declares it, `init` wires
+no agent at all rather than commit a path that cannot resolve, and says where to add it.
 
 It is non-interactive and safe to re-run: it diffs against what is already there and
 reports only what changed. `dogear init --dry-run` shows you every change without writing
@@ -193,7 +200,9 @@ prints starts with `[dogear]`, so that is the first place to look.
 **The MCP server will not start.** Almost always the local install: the entries `dogear
 init` writes are committed and point at `node_modules/dogear-cli/dist/cli.js`, a
 repo-relative path, so `npm i -D dogear-cli` has to have happened **at the git root** of
-this repository, not in an app subdirectory. A global install alone puts `dogear` on your
+this repository, not in an app subdirectory. The exception is a repository with no root
+`package.json`, where the entries run through the package `init` named on its `cli:` line,
+and the install belongs there. A global install alone puts `dogear` on your
 PATH and leaves that path unresolvable. `dogear init` says so in a note when it wires an
 agent and nothing in the repository provides that file. npm, pnpm and Yarn's `node-modules`
 linker all place a direct dependency at the top level, so that path holds under each — CI

@@ -257,15 +257,15 @@ across the whole matrix — two-space, four-space, tabs, CRLF, minified, BOM, no
 value-on-the-next-line, empty object — asserting valid JSON, byte preservation and idempotency
 for each, plus that CRLF files gain no lone `\n`.
 
-**H6 added `Detection.linker`, and it is separate from `Detection.manager` for the reason
-`manager` is separate from `workspace`.** Yarn spells the layout `nodeLinker` and pnpm has the
+**H6 added the linker (now `CliHome.linker`, read where the CLI lives since #75), and it is
+separate from the manager for the reason `manager` is separate from `workspace`.** Yarn spells the layout `nodeLinker` and pnpm has the
 same setting with the same `pnp` option, so *which tool installs here* cannot answer *is there a
 `node_modules` for `CLI_ENTRY` to resolve through* — and only the second question bears on the
 committed path. It is read from the generated `.pnp.cjs`/`.pnp.js`, never from `.yarnrc.yml`:
 the setting may be inherited from a parent directory or left at Yarn's default and written
 nowhere, while the artefact is always there. Same shape as `managerOf` reading the lockfile
 rather than the intent behind it. **The PnP arm of `cliNotInstalled` is checked *before*
-`wiring.cli`, and that order is the whole fix** — `cliIn` answers `'local'` from the manifest
+`CliHome.state`, and that order is the whole fix** — `cliIn` answers `'local'` from the manifest
 declaration when the file is absent, which is right for a repo mid-clone and wrong for one that
 will never have the file, so a PnP repo reached the old guard as `local` and init wrote a path
 resolving nowhere in silence. Reordering is not an option either: under PnP the install the
@@ -281,6 +281,21 @@ a `.cmd` shim the exec form cannot run. The MCP configs use the repo-relative
 everyone else who clones; `Detection.cli` earns a note when it is not installed yet), and the hook
 uses `${CLAUDE_PROJECT_DIR}/…` because a hook's working directory is the session's, not the
 repo's. `test-built/init.test.ts` asserts both.
+
+**#75 made that path depend on where the CLI lives, and `Detection.cli` is now a `CliHome`.** A
+repository with a root `package.json` (or a CLI installed at the root) keeps the root form,
+byte for byte. One without, such as a Go repository with its frontend in `web/`, gets
+`web/node_modules/…` through `cliEntry(dir)`: the first package in the *sorted* walk that declares
+or holds `dogear-cli`, else the first Vite app's own package. `childrenOf` sorts because
+`readdirSync` order is the filesystem's and "first" must match on every clone. With nowhere at
+all, `Detection.cli` is `undefined`, `resolveWiring` wires **no agent, `--agent` included**, and
+`nowhereToInstall` says why as a remark. Three consequences to keep: `Wiring.entry` is resolved
+once so the MCP registration and the hook cannot disagree; a registration naming any other path
+earns a **stale note, never a rewrite**, because `registered()` alone reported `nothing changed`
+over #75's broken hook; and **undo rebuilds `fresh()` from the path the file itself names**,
+since it never runs detection and a root-only comparison would splice a file init wrote whole.
+`test-built/init.subdir.test.ts` executes the committed entries through a junction, with a
+negative control proving the root path fails there.
 
 **E8 added a second runner phase, and `dogear init` writes nothing for it.** `guidance.ts`
 prints the `vite.config` change and the install command for every app that is not fully wired;
@@ -298,8 +313,10 @@ edit does nothing anyway because the config's `import` fails until someone insta
 step has no `Change`, which is what makes it a phase beside `remarks()` rather than a `Step`,
 and E6 inherits no teardown from it. Its block is appended **outside** the report's two-space
 indent — the snippet's own leading whitespace is content the user copies, and the body's indent
-would corrupt it. The install command follows `Detection.manager` (from the root lockfile) and
-names `DetectedApp.manifestDir`, which is not always the app's own directory.
+would corrupt it. The install command follows `DetectedApp.manager` (the lockfile nearest the
+app's package, since #75; it was the root's alone) and names `DetectedApp.manifestDir`, which is
+not always the app's own directory. With no manifest above the app it names the app's own
+directory, never a root that has none.
 
 **E7 gave `.dogear/config.json` its reader, and the layering is three lines of `??` guarding
 one rule.** `packages/vite/src/config-file.ts` returns *only the keys that survived

@@ -669,6 +669,14 @@ name. G3 (#44) found this by running the install path: without the local copy th
 does not start and the prompt hook fails on every prompt, which is why `init` says so — see
 the Decisions log.
 
+**Where the local copy goes depends on whether the repository has a root `package.json`.** With
+one, it is the root, and the path is `node_modules/dogear-cli/dist/cli.js`. Without one (a Go
+repository with its frontend in `web/`, say) there is no root `node_modules` to install into, so
+init points through the package that declares `dogear-cli` instead:
+`web/node_modules/dogear-cli/dist/cli.js`. If no package declares it and no Vite app has a
+package of its own, no path init could commit would resolve, and it wires no agent at all rather
+than commit one that cannot. #75 found this; see the Decisions log.
+
 `dogear init` is non-interactive and idempotent. It:
 
 1. **Finds the git root.** Refuses to run outside a repo — the queue location depends
@@ -902,6 +910,9 @@ Decisions log)*
 **E3 — Agent wiring**
 - **Every agent gets the MCP server registered.** That is the baseline path and is never
   skipped. Claude Code, Cursor and VS Code, each through its own project-local config.
+  Amended during #75: the one exception is a repository with no package for `dogear-cli` to
+  install into, where init wires no agent and says why, because any path it committed would
+  resolve nowhere. See the Decisions log.
 - init writes an `AGENTS.md` / rules stanza telling the agent to check pending
   annotations, since MCP is pull and needs the nudge.
 - The prompt hook is offered only where the chosen agent supports one, and `--no-hook`
@@ -911,7 +922,9 @@ Decisions log)*
   and no line init did not write is reformatted.
 - The hook is written as `node <path> hook`, never `dogear hook`, so it works on Windows.
 - The path is repo-relative and portable whether or not `dogear-cli` is installed yet;
-  a missing local install is reported, not worked around.
+  a missing local install is reported, not worked around. Amended during #75: in a repository
+  with no root `package.json`, the path runs through the package that declares `dogear-cli`,
+  since there is no root `node_modules` for it to resolve in.
 
 **E4 — Gitignore and config**
 - `.dogear/queue.json` and `.dogear/*.tmp` are gitignored; `.dogear/config.json` is not.
@@ -965,6 +978,9 @@ that named E4 for this work now name E7; see the Decisions log.
   `vite.config` change to make. It writes neither.
 - The install command matches the repository's package manager, and names the package the
   dependency belongs to — which in a monorepo is not always the app's own directory.
+  Amended during #75: the manager is read from the lockfile nearest that package rather than
+  from the root's alone, and an app with no `package.json` above it is told to install in its
+  own directory, never at a root that has none.
 - An app that already declares the plugin **and calls it in its config** gets nothing. An app
   with only one of the two gets exactly the half it is missing. A repo with no Vite app gets
   nothing. Amended during G3 (#44) — see the Decisions log.
@@ -2520,6 +2536,60 @@ failures: an MCP server that will not start is silent until you ask for it, whil
 the same shape E6 (#39) was filed to prevent, arrived at from the other direction. The wording
 comes from `Wiring.hook`, so `--no-hook` is not told about a hook it declined, and
 `--agent=none` gets nothing at all because nothing then points at `CLI_ENTRY`.
+
+**In a repository with no root `package.json`, the committed path runs through the package that
+declares `dogear-cli`. Settled during #75.**
+Everything init wires named `node_modules/dogear-cli/dist/cli.js` at the git root, and E3 wrote
+that down as "repo-relative and portable". It is both, and in a repository whose only
+`package.json` is in a subdirectory it is also a path nothing will ever install to. The first
+outside adopter had exactly that layout (a Go repository with its frontend in `web/`), so the
+prompt hook init committed failed on every prompt, for everyone who cloned. init's own advice
+made it worse: it called the CLI "not installed here" when it was installed one directory down,
+and prescribed a root `npm i -D dogear-cli`, which in that repository creates a root manifest
+nobody wanted.
+
+**The path goes through the directory that holds `dogear-cli`, found in this order.** A root
+manifest, or a CLI already installed at the root, keeps the root, so every repository that worked
+before is unchanged. Otherwise, the first directory in detection's bounded walk, sorted, whose
+manifest declares `dogear-cli` or whose `node_modules` already holds it. Otherwise, the first Vite
+app's own package, which is where the remark then says to install. Searching for the declaration
+rather than for a Vite app is deliberate: the reporter's frontend was Next.js, which detection
+does not see, and the question is where the CLI lives rather than where Vite does. The walk is
+sorted because `readdirSync` order is the filesystem's, and "first" has to mean the same thing on
+every machine that runs init.
+
+**Nowhere to install means no agent is wired, and that amends E3's "never skipped".** If no
+package declares the CLI and no app has a package of its own, every path init could write would
+resolve nowhere. Writing one anyway is the bug. Writing the MCP registration without the hook was
+weighed and declined: it leaves a dead entry behind, and a rules stanza telling the agent to call
+tools that are not there. So init wires nothing, an explicit `--agent` included, and says so. It
+is a remark rather than a step note, by G3's discriminator: nothing about what init did needs
+qualifying, the repository is what is missing a piece, and a re-run should still get a verdict.
+
+**A registration that already names a different path gets a note, never a rewrite.** Repositories
+set up before this fix carry the root path, and `registered()` finds dogear's key and plans
+nothing, so without a check a re-run would report `nothing changed` over the same broken hook.
+The note names both paths and the repair (`dogear init --undo`, then `dogear init`). Repointing in
+place was declined because the entry may have been pointed elsewhere on purpose, and editing a
+value someone else chose is the line E4 already declines to cross.
+
+**E8's fallback to the root is reversed.** `guidance.ts` told an app with no `package.json` above
+it to install at the root, because "an install there creates the manifest that repository was
+always going to need". #75 is the counterexample: that repository was never going to need one.
+Such an app is now told to install in its own directory, and the install command reads the
+lockfile nearest the package rather than the root's alone, so a pnpm app in `web/` is no longer
+told `npm`.
+
+**Undo reads the path back out of the file.** `--undo` deletes a config only when it is
+byte-identical to what init would write fresh, and it never runs detection, so it cannot know
+which directory init chose. It rebuilds the fresh file from the path dogear's own entry names
+instead, which keeps that rule exact for both forms.
+
+**The scope stops at the repository with no root manifest.** Two neighbours probably fail the
+same way and are not fixed here: a root `package.json` kept only for tooling beside a separate
+package in `web/`, and a pnpm workspace member that declares `dogear-cli`, which pnpm installs
+into that member's `node_modules` rather than the root's. Both keep the root, as before, and each
+is to be tracked as a bug of its own.
 
 **Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
 G5.**

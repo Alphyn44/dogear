@@ -1,7 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { CLI_ENTRY } from './detect.js'
 import { insertAt, pruneEmpty, removeAt, stripBom } from './json-insert.js'
 import type { Plan, Step, Undo, Wiring } from './scaffold.js'
 
@@ -36,23 +35,32 @@ const SETTINGS = '.claude/settings.json'
 /** The event. It takes no matcher — any `matcher` field is silently ignored. */
 const EVENT = 'UserPromptSubmit'
 
+/** What every form of the CLI path ends with, whichever package it runs through (#75). */
+const TAIL = 'dogear-cli/dist/cli.js'
+
 /**
- * The entry, exactly as the brief specifies it.
+ * The path argument, from the repo-relative CLI path in `Wiring.entry`.
  *
  * `${CLAUDE_PROJECT_DIR}` rather than a bare relative path because a hook's working directory
  * is the session's, not the repository's — unlike an MCP server, which the client spawns at the
  * project root. That asymmetry is why this path and ./mcp-config.ts's differ.
  */
-const ENTRY = {
-  hooks: [
-    {
-      type: 'command',
-      command: 'node',
-      args: [`\${CLAUDE_PROJECT_DIR}/${CLI_ENTRY}`, 'hook'],
-      timeout: 10,
-    },
-  ],
-} as const
+function argFor(entry: string): string {
+  return `\${CLAUDE_PROJECT_DIR}/${entry}`
+}
+
+/**
+ * The entry, exactly as the brief specifies it, naming `arg`.
+ *
+ * A function of the path since #75, for the reason ./mcp-config.ts's `server` gives: the path now
+ * depends on where the repository keeps `dogear-cli`, and undo has to rebuild this from whichever
+ * path the file already names.
+ */
+function entryFor(arg: string): Parsed {
+  return {
+    hooks: [{ type: 'command', command: 'node', args: [arg, 'hook'], timeout: 10 }],
+  }
+}
 
 export function createHookStep(wiring: Wiring): Step {
   return {
@@ -63,6 +71,7 @@ export function createHookStep(wiring: Wiring): Step {
       if (!wiring.hook) return undefined
       if (!wiring.agents.includes('claude')) return undefined
 
+      const arg = argFor(wiring.entry)
       const path = join(root, ...SETTINGS.split('/'))
       const existing = readIfFile(path)
 
@@ -70,17 +79,21 @@ export function createHookStep(wiring: Wiring): Step {
         return {
           change: {
             summary: `created ${SETTINGS}`,
-            apply: () => write(root, path, fresh()),
+            apply: () => write(root, path, fresh(arg)),
           },
         }
       }
 
       const parsed = parse(existing)
       if (parsed === undefined) return { notes: [unreadable()] }
-      if (wired(parsed)) return undefined
 
-      const merged = merge(existing, parsed)
-      if (merged === undefined) return { notes: [unplaceable()] }
+      if (wired(parsed)) {
+        const current = dogearPath(parsed)
+        return current === arg ? undefined : { notes: [stale(current, arg)] }
+      }
+
+      const merged = merge(existing, parsed, arg)
+      if (merged === undefined) return { notes: [unplaceable(arg)] }
 
       const plan: Plan = {
         change: {
@@ -90,12 +103,12 @@ export function createHookStep(wiring: Wiring): Step {
             // init touches this is the likeliest to be open in an editor, since it is where
             // the user configures the agent they are running init from.
             const current = readIfFile(path)
-            if (current === undefined) return write(root, path, fresh())
+            if (current === undefined) return write(root, path, fresh(arg))
 
             const now = parse(current)
             if (now !== undefined && wired(now)) return
 
-            const second = now === undefined ? undefined : merge(current, now)
+            const second = now === undefined ? undefined : merge(current, now, arg)
 
             if (second === undefined) {
               throw new Error(
@@ -140,22 +153,26 @@ export const hookRemoval: Undo = {
     const existing = readIfFile(path)
     if (existing === undefined) return undefined
 
+    const parsed = parse(existing)
+    if (parsed === undefined) return { notes: [unreadableRemoval()] }
+    if (!wired(parsed)) return undefined
+
     // Byte-identical to what init writes into a repository that had no settings file: init
     // created it, nobody has touched it since, and dogear's hook is the only thing in it.
     // Deleting is the honest inverse — leaving `{"hooks": {"UserPromptSubmit": []}}` behind is
     // litter that still says dogear was here.
-    if (existing === fresh()) {
+    //
+    // Rebuilt from the path the hook itself names, as ./mcp-config.ts's undo does and for its
+    // reason (#75): undo never runs detection, so it cannot know which package init chose.
+    const arg = dogearPath(parsed)
+    if (arg !== undefined && existing === fresh(arg)) {
       return {
         change: {
           summary: `deleted ${SETTINGS}`,
-          apply: () => discard(path, fresh()),
+          apply: () => discard(path, existing),
         },
       }
     }
-
-    const parsed = parse(existing)
-    if (parsed === undefined) return { notes: [unreadableRemoval()] }
-    if (!wired(parsed)) return undefined
 
     if (withoutHook(existing, parsed) === undefined) {
       return { notes: [unremovable()] }
@@ -241,17 +258,20 @@ function discard(path: string, expected: string): void {
   rmSync(path)
 }
 
+// Neither names the full path, because undo does not know it: the file could not be read, or
+// could not be edited, so the path it holds is exactly what is unavailable. The package-relative
+// tail is the same whichever package init chose (#75), and it is what the user searches for.
 function unreadableRemoval(): string {
   return (
     `${SETTINGS} could not be parsed, so dogear left it alone and its prompt hook is still ` +
-    `there. Remove the "${EVENT}" entry running \`${CLI_ENTRY} hook\` by hand.`
+    `there. Remove the "${EVENT}" entry running \`${TAIL} hook\` by hand.`
   )
 }
 
 function unremovable(): string {
   return (
     `${SETTINGS} is not a shape dogear can edit safely, so it left it alone and its prompt ` +
-    `hook is still there. Remove the "${EVENT}" entry running \`${CLI_ENTRY} hook\` by hand.`
+    `hook is still there. Remove the "${EVENT}" entry running \`${TAIL} hook\` by hand.`
   )
 }
 
@@ -278,8 +298,8 @@ function unremovable(): string {
  * typo it should route around from data it would be destroying, so it says so and writes
  * nothing. ./malformed.test.ts is the guard, and it found this rather than predicting it.
  */
-function merge(source: string, parsed: Parsed): string | undefined {
-  const entry = JSON.stringify(ENTRY, null, 2)
+function merge(source: string, parsed: Parsed, arg: string): string | undefined {
+  const entry = JSON.stringify(entryFor(arg), null, 2)
 
   if (!has(parsed, 'hooks')) {
     return insertAt(
@@ -320,8 +340,8 @@ function indent(snippet: string): string {
 }
 
 /** A whole file, for a repository with no `.claude/settings.json`. */
-function fresh(): string {
-  return `${JSON.stringify({ hooks: { [EVENT]: [ENTRY] } }, null, 2)}\n`
+function fresh(arg: string): string {
+  return `${JSON.stringify({ hooks: { [EVENT]: [entryFor(arg)] } }, null, 2)}\n`
 }
 
 function write(root: string, path: string, contents: string): void {
@@ -390,11 +410,61 @@ function unreadable(): string {
   )
 }
 
-function unplaceable(): string {
+function unplaceable(arg: string): string {
   return (
     `${SETTINGS} is not a shape dogear can edit safely, so it left it alone and registered ` +
     `no prompt hook. MCP still works; add a "${EVENT}" entry running ` +
-    `\`node \${CLAUDE_PROJECT_DIR}/${CLI_ENTRY} hook\` to enable it.`
+    `\`node ${arg} hook\` to enable it.`
+  )
+}
+
+/**
+ * A hook running the CLI from a different path than init would write now (#75).
+ *
+ * The hook's half of ./mcp-config.ts's `stale`, and a note rather than a rewrite for the reason
+ * given there. It matters more here: this is the entry that fails on every prompt when its path
+ * does not resolve, and a re-run that said `nothing changed` over it is how #75 went unnoticed.
+ */
+function stale(current: string | undefined, arg: string): string {
+  const now =
+    current === undefined
+      ? 'runs the prompt hook without a CLI path dogear can read'
+      : `runs the prompt hook from ${current}`
+
+  return (
+    `${SETTINGS} ${now}, but this repository's dogear-cli belongs at ${arg}. Run ` +
+    '`dogear init --undo` and then `dogear init` to repoint it.'
+  )
+}
+
+/**
+ * The CLI path dogear's hook runs, found the way {@link dogearIndex} finds the hook itself.
+ *
+ * The argument naming `dogear-cli`, rather than `args[0]`, because that is what identified the
+ * entry as dogear's in the first place ({@link isDogear}), so the two cannot disagree about which
+ * argument is the path. Read by the stale check and by undo.
+ */
+function dogearPath(parsed: Parsed): string | undefined {
+  const hooks = parsed.hooks
+  const entries = isObject(hooks) ? hooks[EVENT] : undefined
+  if (!Array.isArray(entries)) return undefined
+
+  for (const entry of entries) {
+    if (!isObject(entry)) continue
+
+    const command = commands(entry).find(isDogear)
+    if (command !== undefined) return pathIn(command)
+  }
+
+  return undefined
+}
+
+function pathIn(command: Parsed): string | undefined {
+  const args = command.args
+  if (!Array.isArray(args)) return undefined
+
+  return args.find(
+    (arg): arg is string => typeof arg === 'string' && arg.includes('dogear-cli'),
   )
 }
 

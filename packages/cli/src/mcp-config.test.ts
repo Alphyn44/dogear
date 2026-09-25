@@ -3,7 +3,8 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import type { Agent, Cli } from './detect.js'
+import type { Agent } from './detect.js'
+import { CLI_ENTRY, cliEntry } from './detect.js'
 import { createMcpStep, mcpRemovals } from './mcp-config.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
@@ -26,17 +27,20 @@ afterEach(() => {
   removeRepo(root)
 })
 
-function wiring(agents: readonly Agent[], cli: Cli = 'local'): Wiring {
-  return { agents, hook: true, cli }
+/** The path #75's layout writes: a repository whose only package is `web/`. */
+const WEB = cliEntry('web')
+
+function wiring(agents: readonly Agent[], entry = CLI_ENTRY): Wiring {
+  return { agents, hook: true, entry, withheld: [] }
 }
 
-function plan(agents: readonly Agent[], cli: Cli = 'local'): Plan | undefined {
-  return createMcpStep(wiring(agents, cli)).plan(root, NO_DETECTION)
+function plan(agents: readonly Agent[], entry = CLI_ENTRY): Plan | undefined {
+  return createMcpStep(wiring(agents, entry)).plan(root, NO_DETECTION)
 }
 
 /** Plan, apply, and hand back what is now on disk. */
-function run(agents: readonly Agent[], file = '.mcp.json', cli: Cli = 'local'): string {
-  plan(agents, cli)?.change?.apply()
+function run(agents: readonly Agent[], file = '.mcp.json', entry = CLI_ENTRY): string {
+  plan(agents, entry)?.change?.apply()
   return read(file)
 }
 
@@ -90,10 +94,21 @@ describe('createMcpStep() on a repository with no config', () => {
 
 describe('createMcpStep() on a repository that already has one', () => {
   it('leaves an existing dogear entry alone', () => {
-    seed(
-      '.mcp.json',
-      '{\n  "mcpServers": {\n    "dogear": { "command": "whatever" }\n  }\n}\n',
-    )
+    const before =
+      '{\n  "mcpServers": {\n    "dogear": { "command": "whatever" }\n  }\n}\n'
+    seed('.mcp.json', before)
+
+    // Left alone, and since #75 not silently: this entry names no CLI path at all, which is a
+    // path other than the one init would write, so it earns the stale note. See the stale suite.
+    const result = plan(['claude'])
+
+    expect(result?.change).toBeUndefined()
+    expect(result?.notes).toHaveLength(1)
+    expect(read('.mcp.json')).toBe(before)
+  })
+
+  it('plans nothing over an entry naming exactly the path init would write', () => {
+    run(['claude'])
 
     expect(plan(['claude'])).toBeUndefined()
   })
@@ -178,11 +193,84 @@ describe('createMcpStep() when it cannot edit safely', () => {
  * to ./scaffold.ts's `remarks()`: it describes the repository rather than what this step did,
  * which is what lets it print on every run without suppressing `nothing changed`. The cases
  * live in ./scaffold.test.ts now; this one pins that the step itself stays out of it.
+ *
+ * Since #75 the step cannot see install state at all (`Wiring` carries the path, not whether
+ * anything is installed at it), so what is left to pin is that a fresh registration notes nothing.
  */
 describe('createMcpStep() and a missing local CLI', () => {
-  it('says nothing either way — the remark is scaffold’s', () => {
-    expect(plan(['claude'], 'absent')?.notes ?? []).toEqual([])
-    expect(plan(['claude'], 'local')?.notes ?? []).toEqual([])
+  it('says nothing about installing it; the remark is scaffold’s', () => {
+    expect(plan(['claude'])?.notes ?? []).toEqual([])
+    expect(plan(['claude'], WEB)?.notes ?? []).toEqual([])
+  })
+})
+
+describe('createMcpStep() in a repository whose only package is web/ (#75)', () => {
+  it.each([
+    { agent: 'claude' as const, file: '.mcp.json', key: 'mcpServers' },
+    { agent: 'cursor' as const, file: '.cursor/mcp.json', key: 'mcpServers' },
+    { agent: 'vscode' as const, file: '.vscode/mcp.json', key: 'servers' },
+  ])('writes the web/ path into $file', ({ agent, file, key }) => {
+    const parsed = JSON.parse(run([agent], file, WEB)) as Record<string, unknown>
+
+    expect(parsed[key]).toEqual({
+      dogear: {
+        command: 'node',
+        args: ['web/node_modules/dogear-cli/dist/cli.js', 'mcp'],
+      },
+    })
+  })
+
+  it('is a no-op the second time', () => {
+    run(['claude'], '.mcp.json', WEB)
+
+    expect(plan(['claude'], WEB)).toBeUndefined()
+  })
+
+  it('names the web/ path in the note when the file cannot be edited', () => {
+    seed('.mcp.json', '{ nope')
+
+    expect(plan(['claude'], WEB)?.notes?.[0]).toContain(`["${WEB}", "mcp"]`)
+  })
+})
+
+/**
+ * #75's migration case: a repository set up before the fix carries the root's path, and a re-run
+ * after it must not report `nothing changed` over a registration that never resolves.
+ */
+describe('createMcpStep() over a registration naming another path (#75)', () => {
+  it('notes both paths and the repair, and changes nothing', () => {
+    run(['claude'])
+    const before = read('.mcp.json')
+
+    const result = plan(['claude'], WEB)
+
+    expect(result?.change).toBeUndefined()
+    expect(result?.notes).toEqual([
+      `.mcp.json registers "dogear" at ${CLI_ENTRY}, but this repository's dogear-cli ` +
+        `belongs at ${WEB}. Run \`dogear init --undo\` and then \`dogear init\` to repoint it.`,
+    ])
+    expect(read('.mcp.json')).toBe(before)
+  })
+
+  it('notes each file that is stale, and registers the ones that are missing', () => {
+    run(['claude'])
+
+    const result = plan(['claude', 'cursor'], WEB)
+
+    expect(result?.change?.summary).toBe('registered dogear in .cursor/mcp.json')
+    expect(result?.notes).toHaveLength(1)
+    expect(result?.notes?.[0]).toMatch(/^\.mcp\.json registers/)
+  })
+
+  it('says so when the entry names no path it can read', () => {
+    seed(
+      '.mcp.json',
+      '{\n  "mcpServers": {\n    "dogear": { "command": "npx" }\n  }\n}\n',
+    )
+
+    expect(plan(['claude'])?.notes?.[0]).toContain(
+      'registers "dogear" without a CLI path dogear can read',
+    )
   })
 })
 
@@ -293,5 +381,26 @@ describe('unregistering the server — E6 (#39)', () => {
     expect(notes[0]).toContain('could not be parsed')
     expect(notes[0]).toContain('dogear')
     expect(read('.mcp.json')).toBe(broken)
+  })
+
+  // #75. Undo never runs detection, so it cannot know init chose web/. Comparing against the
+  // root's fresh file alone would splice this one to `{}` instead of deleting it.
+  it('deletes a file init wrote whole with the web/ path', () => {
+    run(['claude'], '.mcp.json', WEB)
+
+    expect(undo().find((planned) => planned !== undefined)?.change?.summary).toBe(
+      'deleted .mcp.json',
+    )
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+  })
+
+  it('splices, rather than deletes, a web/ registration beside another server', () => {
+    const before = '{\n  "mcpServers": {\n    "other": { "command": "node" }\n  }\n}\n'
+    seed('.mcp.json', before)
+    run(['claude'], '.mcp.json', WEB)
+
+    undo()
+
+    expect(read('.mcp.json')).toBe(before)
   })
 })

@@ -11,10 +11,10 @@ import { join } from 'node:path'
 import { CONFIG_FILE, QUEUE_DIR, registryPath, shortenHome } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import type { Agent, Cli, Detection } from './detect.js'
-import { CLI_ENTRY } from './detect.js'
+import type { Agent, CliHome, Detection } from './detect.js'
+import { CLI_ENTRY, cliEntry } from './detect.js'
 import type { Wiring } from './scaffold.js'
-import { resolveWiring, scaffold, stepsFor, undoSteps } from './scaffold.js'
+import { resolveWiring, scaffold, stepsFor, undoSteps, unscaffold } from './scaffold.js'
 import {
   createRepo,
   isolateGitConfig,
@@ -613,11 +613,22 @@ describe('scaffold() with dryRun', () => {
 })
 
 describe('resolveWiring() reconciling flags with detection — E3 (#28)', () => {
-  const detection = (agents: readonly Agent[], cli: Cli = 'local'): Detection => ({
+  const detection = (
+    agents: readonly Agent[],
+    cli: CliHome | undefined = NO_DETECTION.cli,
+  ): Detection => ({
     ...NO_DETECTION,
     agents: agents.map((agent) => ({ agent, marker: `.${agent}/` })),
     cli,
   })
+
+  /** Where #75's layout keeps the CLI: `web/`, the only package in the repository. */
+  const WEB: CliHome = {
+    dir: 'web',
+    state: 'local',
+    manager: 'npm',
+    linker: 'node-modules',
+  }
 
   it('uses what detection found when no flag was given', () => {
     expect(resolveWiring(detection(['cursor', 'vscode']), {}).agents).toEqual([
@@ -650,8 +661,43 @@ describe('resolveWiring() reconciling flags with detection — E3 (#28)', () => 
     expect(resolveWiring(detection([]), { hook: false }).hook).toBe(false)
   })
 
-  it('carries detection’s view of the local CLI through untouched', () => {
-    expect(resolveWiring(detection([], 'absent'), {}).cli).toBe('absent')
+  it('names the root’s path when the CLI lives at the root', () => {
+    expect(resolveWiring(detection([]), {}).entry).toBe(CLI_ENTRY)
+  })
+
+  it('names the web/ path when the CLI lives in web/ (#75)', () => {
+    expect(resolveWiring(detection([], WEB), {}).entry).toBe(
+      'web/node_modules/dogear-cli/dist/cli.js',
+    )
+  })
+
+  it('withholds nothing when there is somewhere for the CLI to live', () => {
+    expect(resolveWiring(detection(['cursor']), {}).withheld).toEqual([])
+  })
+
+  // Not `detection(agents, undefined)`: an explicit `undefined` takes the parameter's default,
+  // which is a home at the root, and the first draft of these cases tested nothing but that.
+  const nowhere = (agents: readonly Agent[]): Detection => ({
+    ...detection(agents),
+    cli: undefined,
+  })
+
+  it('wires nothing when the CLI has nowhere to live, and keeps what it held back (#75)', () => {
+    const wiring = resolveWiring(nowhere([]), {})
+
+    expect(wiring.agents).toEqual([])
+    expect(wiring.withheld).toEqual(['claude'])
+  })
+
+  it('holds back an explicit --agent too, since no flag makes a path resolve', () => {
+    const wiring = resolveWiring(nowhere([]), { agents: ['cursor'] })
+
+    expect(wiring.agents).toEqual([])
+    expect(wiring.withheld).toEqual(['cursor'])
+  })
+
+  it('holds back nothing under --agent=none, which asked for nothing', () => {
+    expect(resolveWiring(nowhere(['claude']), { agents: [] }).withheld).toEqual([])
   })
 })
 
@@ -782,7 +828,7 @@ describe('scaffold() wiring an agent — E3 (#28)', () => {
        *
        * The declaration is the point. `cliIn` answers `local` from it when the file is absent,
        * which is right for a repo mid-clone and wrong for one that will never have the file —
-       * so this is the shape that reached `wiring.cli === 'local'` and returned silently.
+       * so this is the shape that reached `state === 'local'` and returned silently.
        */
       function withPnp(): void {
         writeFileSync(join(root, '.pnp.cjs'), '')
@@ -798,7 +844,7 @@ describe('scaffold() wiring an agent — E3 (#28)', () => {
       })
 
       it('does not tell the user to install what they have already installed', () => {
-        // The reason the PnP arm is checked before `wiring.cli` rather than after it: under PnP
+        // The reason the PnP arm is checked before `home.state` rather than after it: under PnP
         // the install the other arm prescribes is the one the user has already done.
         withPnp()
 
@@ -838,6 +884,225 @@ describe('scaffold() wiring an agent — E3 (#28)', () => {
   })
 })
 
+/**
+ * #75, end to end through the runner: a repository whose only `package.json` is in `web/`, the
+ * layout of a Go repository with its frontend in a subdirectory.
+ *
+ * Before #75 init committed `node_modules/dogear-cli/dist/cli.js` from the root here, a path no
+ * install would ever create, and told the user to fix it with a root install that would have
+ * created a root `package.json`. ./detect.test.ts pins where detection puts the CLI; this pins
+ * what init writes and says as a result. `test-built/init.subdir.test.ts` runs what it writes.
+ */
+describe('scaffold() in a repository whose only package.json is in web/ (#75)', () => {
+  const WEB_ENTRY = cliEntry('web')
+
+  /** `web/package.json`, declaring the CLI unless told otherwise. */
+  function webPackage(cli = true): void {
+    writeFileSync(
+      join(root, 'web', 'package.json'),
+      JSON.stringify({
+        devDependencies: { vite: '^8.2.1', ...(cli ? { 'dogear-cli': '^0.1.0' } : {}) },
+      }),
+    )
+  }
+
+  beforeEach(() => {
+    // The shared fixture is a root package; this layout is the absence of one.
+    rmSync(join(root, 'package.json'))
+    rmSync(join(root, 'vite.config.ts'))
+    mkdirSync(join(root, 'web'))
+    writeFileSync(join(root, 'web', 'vite.config.ts'), '')
+    webPackage()
+  })
+
+  it('reports where the CLI lives, among the findings and above the changes', () => {
+    const lines = scaffold(root, { dryRun: true }).output.split('\n')
+
+    expect(lines).toContain('  cli:       web/')
+    expect(lines.indexOf('  cli:       web/')).toBeLessThan(
+      lines.findIndex((line) => line.includes('would register')),
+    )
+  })
+
+  it('writes the web/ path into the MCP registration and the prompt hook', () => {
+    scaffold(root)
+
+    const mcp = readFileSync(join(root, '.mcp.json'), 'utf8')
+    const settings = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+
+    expect(JSON.parse(mcp) as unknown).toMatchObject({
+      mcpServers: { dogear: { args: [WEB_ENTRY, 'mcp'] } },
+    })
+    expect(settings).toContain(`"\${CLAUDE_PROJECT_DIR}/${WEB_ENTRY}"`)
+    // The bug itself: no committed path may start at a root that has no node_modules.
+    expect(mcp).not.toContain(`"${CLI_ENTRY}"`)
+    expect(settings).not.toContain(`"\${CLAUDE_PROJECT_DIR}/${CLI_ENTRY}"`)
+  })
+
+  it('says nothing about installing the CLI when web/ declares it', () => {
+    expect(scaffold(root).output).not.toContain('dogear-cli`')
+  })
+
+  it('names web/ and never the root when the CLI is not installed yet', () => {
+    webPackage(false)
+
+    const output = scaffold(root).output
+
+    expect(output).toContain(
+      `note: the MCP registration and the prompt hook both point at ${WEB_ENTRY}, which is ` +
+        'not installed there. Run `npm i -D dogear-cli` in web so the path resolves for ' +
+        'everyone who clones this repository.',
+    )
+    expect(output).not.toContain('at the repo root')
+  })
+
+  it('names the manager web/ installs with, from its own lockfile', () => {
+    webPackage(false)
+    writeFileSync(join(root, 'web', 'pnpm-lock.yaml'), '')
+
+    const output = scaffold(root).output
+
+    expect(output).toContain('Run `pnpm add -D dogear-cli` in web')
+    expect(output).toContain('then, in web: pnpm add -D dogear-vite')
+  })
+
+  it('tells the plugin install to go in web/, never at the root', () => {
+    expect(scaffold(root).output).toContain('then, in web: npm i -D dogear-vite')
+  })
+
+  it('is idempotent: the second run changes nothing and says so', () => {
+    scaffold(root)
+
+    expect(scaffold(root).output).toContain('nothing changed')
+  })
+
+  it('undoes cleanly, deleting the configs it wrote whole', () => {
+    scaffold(root)
+
+    expect(unscaffold(root).exitCode).toBe(0)
+    expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+    expect(existsSync(join(root, '.claude', 'settings.json'))).toBe(false)
+  })
+
+  /**
+   * A repository init had already set up before #75 carries the root's path, and `registered()`
+   * finds dogear's key either way. Without the note a re-run reported `nothing changed` over a
+   * hook that failed on every prompt, which is how #75 went unseen.
+   */
+  describe('over configs an older init wrote with the root’s path', () => {
+    beforeEach(() => {
+      mkdirSync(join(root, '.claude'))
+      writeFileSync(
+        join(root, '.mcp.json'),
+        `${JSON.stringify(
+          { mcpServers: { dogear: { command: 'node', args: [CLI_ENTRY, 'mcp'] } } },
+          null,
+          2,
+        )}\n`,
+      )
+      writeFileSync(
+        join(root, '.claude', 'settings.json'),
+        JSON.stringify({
+          hooks: {
+            UserPromptSubmit: [
+              {
+                hooks: [
+                  {
+                    type: 'command',
+                    command: 'node',
+                    args: [`\${CLAUDE_PROJECT_DIR}/${CLI_ENTRY}`, 'hook'],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      )
+    })
+
+    it('notes both files, and leaves them exactly as they were', () => {
+      const mcp = readFileSync(join(root, '.mcp.json'), 'utf8')
+      const settings = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+
+      const output = scaffold(root).output
+
+      expect(output).toContain(`note: .mcp.json registers "dogear" at ${CLI_ENTRY}`)
+      expect(output).toContain(
+        `note: .claude/settings.json runs the prompt hook from \${CLAUDE_PROJECT_DIR}/${CLI_ENTRY}`,
+      )
+      expect(output).toContain('`dogear init --undo` and then `dogear init`')
+      expect(readFileSync(join(root, '.mcp.json'), 'utf8')).toBe(mcp)
+      expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe(settings)
+    })
+
+    it('is repaired by the round trip the note names', () => {
+      scaffold(root)
+      unscaffold(root)
+      scaffold(root)
+
+      expect(readFileSync(join(root, '.mcp.json'), 'utf8')).toContain(`"${WEB_ENTRY}"`)
+      expect(scaffold(root).output).toContain('nothing changed')
+    })
+  })
+
+  describe('and no package anywhere for the CLI to live in', () => {
+    beforeEach(() => {
+      // A Vite config and nothing else: no root package.json, no web/package.json.
+      rmSync(join(root, 'web', 'package.json'))
+    })
+
+    it('wires no agent, and still sets up .dogear/', () => {
+      const result = scaffold(root)
+
+      expect(result.exitCode).toBe(0)
+      expect(existsSync(join(root, QUEUE_DIR))).toBe(true)
+      expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+      expect(existsSync(join(root, 'AGENTS.md'))).toBe(false)
+      expect(existsSync(join(root, '.claude', 'settings.json'))).toBe(false)
+    })
+
+    it('says why, and what to do about it', () => {
+      expect(scaffold(root).output).toContain(
+        'note: dogear found no package.json that declares dogear-cli, and there is none at ' +
+          'the root to install it into, so no agent was wired: every path init could commit ' +
+          'would resolve nowhere. Add dogear-cli to the devDependencies of the package that ' +
+          'runs your app, install it there, and re-run dogear init.',
+      )
+    })
+
+    it('says so again on a re-run, and still gives a verdict', () => {
+      scaffold(root)
+
+      const output = scaffold(root).output
+
+      expect(output).toContain('so no agent was wired')
+      expect(output).toContain('nothing changed')
+    })
+
+    it('names an explicit --agent it did not apply', () => {
+      const output = scaffold(root, { agents: ['claude'] }).output
+
+      expect(output).toContain('--agent=claude was not applied for the same reason.')
+      expect(existsSync(join(root, '.mcp.json'))).toBe(false)
+    })
+
+    it('says nothing under --agent=none, which asked for nothing', () => {
+      expect(scaffold(root, { agents: [] }).output).not.toContain('no agent was wired')
+    })
+
+    it('never proposes a root package.json, for the CLI or for the plugin', () => {
+      const output = scaffold(root).output
+
+      expect(output).not.toContain('at the repo root')
+      expect(output).toContain('then, in web: npm i -D dogear-vite')
+    })
+
+    it('prints no cli: finding, because there is nowhere to report', () => {
+      expect(scaffold(root).output).not.toContain('cli:')
+    })
+  })
+})
+
 describe('every step can be undone — E6 (#39)', () => {
   it('has an Undo for every Step, matched by name', () => {
     // **This is what a `revert` on `Step` would have given the compiler**, recovered as a test.
@@ -848,7 +1113,8 @@ describe('every step can be undone — E6 (#39)', () => {
     const wiring: Wiring = {
       agents: ['claude', 'cursor', 'vscode'],
       hook: true,
-      cli: 'local',
+      entry: CLI_ENTRY,
+      withheld: [],
     }
     const undone = new Set(undoSteps().map((step) => step.name))
 
@@ -863,7 +1129,8 @@ describe('every step can be undone — E6 (#39)', () => {
     const wiring: Wiring = {
       agents: ['claude', 'cursor', 'vscode'],
       hook: true,
-      cli: 'local',
+      entry: CLI_ENTRY,
+      withheld: [],
     }
     const steps = new Set(stepsFor(wiring).map((step) => step.name))
 

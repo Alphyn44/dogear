@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Agent } from './detect.js'
+import { CLI_ENTRY } from './detect.js'
 import { createRulesStep, rulesRemovals } from './rules.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
@@ -26,7 +27,7 @@ afterEach(() => {
 })
 
 function wiring(agents: readonly Agent[] = ['claude']): Wiring {
-  return { agents, hook: true, cli: 'local' }
+  return { agents, hook: true, entry: CLI_ENTRY, withheld: [] }
 }
 
 function plan(agents: readonly Agent[] = ['claude']): Plan | undefined {

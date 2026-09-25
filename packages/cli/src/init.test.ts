@@ -30,6 +30,10 @@ beforeEach(() => {
   // exist. It was found by looking, not by a red test.
   registry = isolateRegistry()
   root = mkdtempSync(join(tmpdir(), 'dogear-init-'))
+  // A package for the CLI to live in. Since #75 a repository with no package.json anywhere has
+  // nowhere for a committed path to resolve, so init wires no agent there; that case has its own
+  // suite in ./scaffold.test.ts, and these are about the adapter, not the layout.
+  writeFileSync(join(root, 'package.json'), '{}')
 })
 
 afterEach(() => {

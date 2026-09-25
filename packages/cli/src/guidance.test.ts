@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { DetectedApp, Detection, Manager } from './detect.js'
+import type { DetectedApp, Detection } from './detect.js'
 import { guidance } from './guidance.js'
 
 /**
@@ -25,6 +25,7 @@ function app(overrides: Partial<DetectedApp> = {}): DetectedApp {
     frameworkVersion: '^19.2.0',
     viteVersion: '^8.2.1',
     manifestDir: 'apps/web',
+    manager: 'npm',
     plugin: 'absent',
     // The unwired baseline: neither declared nor in the config. G3 (#44) made these two
     // independent, so every case below says which of them it is varying.
@@ -35,17 +36,16 @@ function app(overrides: Partial<DetectedApp> = {}): DetectedApp {
 
 // `agents` and `cli` are E3's (#28) and guidance() reads neither — it prints the plugin
 // install, which is a question about the Vite apps. Spelled out rather than cast so that a
-// future field has to be answered here too.
-function detection(apps: readonly DetectedApp[], manager: Manager = 'npm'): Detection {
+// future field has to be answered here too. The manager is each app's own since #75, so it is
+// varied through `app()` rather than here.
+function detection(apps: readonly DetectedApp[]): Detection {
   return {
     workspace: 'npm',
-    manager,
-    // guidance() reads this no more than it reads `agents` — H6's remark is ./scaffold.ts's.
-    linker: 'node-modules',
     packages: apps.length,
     apps,
     agents: [],
-    cli: 'local',
+    // guidance() reads this no more than it reads `agents`; H6's remark is ./scaffold.ts's.
+    cli: { dir: '', state: 'local', manager: 'npm', linker: 'node-modules' },
   }
 }
 
@@ -91,17 +91,36 @@ describe('guidance() and the install command', () => {
     ['pnpm', 'then, in apps/web: pnpm add -D dogear-vite'],
     ['yarn', 'then, in apps/web: yarn add -D dogear-vite'],
   ] as const)('uses the %s form', (manager, expected) => {
-    expect(guidance(detection([app()], manager))).toContain(expected)
+    expect(guidance(detection([app({ manager })]))).toContain(expected)
   })
 
   it('always installs as a DEV dependency', () => {
     // The manifest half of the production leak scripts/check-leak.ts exists to catch. A printed
     // command is the one place init can get this wrong at scale — every user copies it.
     for (const manager of ['npm', 'pnpm', 'yarn'] as const) {
-      expect(guidance(detection([app()], manager)).join('\n')).toMatch(
+      expect(guidance(detection([app({ manager })])).join('\n')).toMatch(
         / -D dogear-vite$/m,
       )
     }
+  })
+
+  it('gives each app the command its own package installs with (#75)', () => {
+    // The root lockfile used to answer for every app, and a repository with no root package.json
+    // has no root lockfile, so a pnpm app in web/ was told to use npm.
+    const lines = guidance(
+      detection([
+        app({ dir: 'admin', config: 'admin/vite.config.ts', manifestDir: 'admin' }),
+        app({
+          dir: 'web',
+          config: 'web/vite.config.ts',
+          manifestDir: 'web',
+          manager: 'pnpm',
+        }),
+      ]),
+    )
+
+    expect(lines).toContain('then, in admin: npm i -D dogear-vite')
+    expect(lines).toContain('then, in web: pnpm add -D dogear-vite')
   })
 
   it('points at the package that owns the app, not the app directory', () => {
@@ -125,10 +144,20 @@ describe('guidance() and the install command', () => {
     )
   })
 
-  it('falls back to the root when there is no manifest anywhere above the app', () => {
-    // An install there creates the package.json the repository was always going to need, and it
-    // is where the user is standing.
+  it('names the app’s own directory when there is no manifest anywhere above it (#75)', () => {
+    // This used to fall back to the root, on the grounds that the repository "was always going to
+    // need" a package.json there. #75's Go repository with its frontend in web/ never was: the
+    // install creates the manifest the *app* needs, beside it rather than above it.
     expect(guidance(detection([app({ manifestDir: undefined })]))).toContain(
+      'then, in apps/web: npm i -D dogear-vite',
+    )
+  })
+
+  it('still says “at the repo root” for an app whose config sits at the root', () => {
+    // No manifest anywhere, and the app is the root: its own package can only go there.
+    const rooted = app({ dir: '', config: 'vite.config.ts', manifestDir: undefined })
+
+    expect(guidance(detection([rooted]))).toContain(
       'then, at the repo root: npm i -D dogear-vite',
     )
   })

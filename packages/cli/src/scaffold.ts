@@ -1,6 +1,6 @@
 import { configFile, configRemoval } from './config.js'
-import type { Agent, Cli, Detection, DetectedApp } from './detect.js'
-import { CLI_ENTRY, detect } from './detect.js'
+import type { Agent, CliHome, Detection, DetectedApp } from './detect.js'
+import { cliEntry, detect } from './detect.js'
 import { gitignore, gitignoreRemoval } from './gitignore.js'
 import { INSTALL, guidance } from './guidance.js'
 import { createHookStep, hookRemoval } from './hook-config.js'
@@ -222,8 +222,22 @@ export interface Wiring {
   readonly agents: readonly Agent[]
   /** Whether to write Claude Code's prompt hook. */
   readonly hook: boolean
-  /** Whether `dogear-cli` resolves from inside the repo, for the registration's note. */
-  readonly cli: Cli
+  /**
+   * The repo-relative path every agent config names: `cliEntry` of the CLI's home (#75).
+   *
+   * Resolved here rather than by each writer so the MCP registration and the prompt hook cannot
+   * disagree about where the CLI is. They did once, in effect: both read one root constant, and
+   * that constant was wrong for them together.
+   */
+  readonly entry: string
+  /**
+   * Agents that would have been wired, held back because the CLI has nowhere to live (#75).
+   *
+   * Non-empty only when {@link Detection.cli} is `undefined`, and then {@link Wiring.agents} is
+   * empty. Kept rather than discarded because {@link remarks} has to say what it declined, and
+   * an explicit `--agent` in particular should not vanish without a word.
+   */
+  readonly withheld: readonly Agent[]
 }
 
 /**
@@ -238,16 +252,25 @@ export interface Wiring {
  *
  * `--agent=none` is the way to mean *nothing*, and it survives this: an explicit empty array is
  * honoured, only an absent one defaults.
+ *
+ * **No home for the CLI means nothing is wired, `--agent` included** (#75). Every config names
+ * the CLI's path, and with no package to install it into there is no path that resolves. Wiring
+ * anyway is how #75 committed a prompt hook that failed on every prompt; wiring only the MCP
+ * registration leaves a dead entry and a rules stanza pointing an agent at tools that are not
+ * there. The flag chooses *which* agents, not whether a path exists, so it cannot override this.
+ * What was held back goes into {@link Wiring.withheld} for the remark to name.
  */
 export function resolveWiring(detection: Detection, options: ScaffoldOptions): Wiring {
   const detected = detection.agents.map((entry) => entry.agent)
   const chosen =
     options.agents ?? (detected.length === 0 ? ['claude' as const] : detected)
+  const home = detection.cli
 
   return {
-    agents: chosen,
+    agents: home === undefined ? [] : chosen,
     hook: options.hook ?? true,
-    cli: detection.cli,
+    entry: cliEntry(home?.dir ?? ''),
+    withheld: home === undefined ? chosen : [],
   }
 }
 
@@ -355,7 +378,7 @@ export function scaffold(root: string, options: ScaffoldOptions = {}): Result {
 
   // Kept apart from the step notes all the way to the report, and not for ordering: only step
   // notes suppress `nothing changed`. See {@link report}.
-  const found = remarks(detection, wiring)
+  const found = remarks(detection, wiring, options)
   // E8 (#41)'s trailing block — what init is telling the user to do rather than doing. Beside
   // `remarks` for the same reason it is not a step: nothing plans it and nothing applies it.
   const next = guidance(detection)
@@ -578,7 +601,21 @@ function describe(detection: Detection): readonly string[] {
     ...(apps.length <= 1 ? single(apps[0]) : many(apps)),
     label('workspace', `${layout}, ${plural(apps.length, 'app')}`),
     label('agent', agents(detection)),
+    ...home(detection.cli),
   ]
+}
+
+/**
+ * `cli:       web/`: where the committed configs will reach the CLI, when it is not the root (#75).
+ *
+ * The change lines say `registered dogear in .mcp.json` and never say where it points, which was
+ * fine while it always pointed at the root. Since #75 it is a choice detection made, and E2's rule
+ * for `--dry-run` is that a guess shows its working before anything is written. The root is left
+ * unsaid because it is what every reader already assumes, and saying it would add a line to every
+ * repository to report the one thing that did not change.
+ */
+function home(cli: CliHome | undefined): readonly string[] {
+  return cli === undefined || cli.dir === '' ? [] : [label('cli', `${cli.dir}/`)]
 }
 
 /** Display names, so the report says `claude code` rather than the internal `claude`. */
@@ -646,10 +683,17 @@ function many(apps: readonly DetectedApp[]): readonly string[] {
  * to make and nothing to become idempotent about. Both are the shape `Plan.notes` was widened
  * for in E4 — state init can see, must not repair by guessing, and must not leave unsaid.
  */
-function remarks(detection: Detection, wiring: Wiring): readonly string[] {
-  if (detection.apps.length === 0) {
-    return [...cliNotInstalled(wiring, detection), ...noViteConfig()]
-  }
+function remarks(
+  detection: Detection,
+  wiring: Wiring,
+  options: ScaffoldOptions,
+): readonly string[] {
+  const cli = [
+    ...nowhereToInstall(wiring, options),
+    ...cliNotInstalled(wiring, detection),
+  ]
+
+  if (detection.apps.length === 0) return [...cli, ...noViteConfig()]
 
   // React, Preact and Solid all author components in `.jsx`/`.tsx`, which is what the
   // transform's default `include` matches, so all three are stamped. Vue and Svelte are not,
@@ -659,11 +703,7 @@ function remarks(detection: Detection, wiring: Wiring): readonly string[] {
     (app) => app.framework === 'vue' || app.framework === 'svelte',
   )
 
-  return [
-    ...cliNotInstalled(wiring, detection),
-    ...jsxOnly(floored),
-    ...runtimeDependency(detection.apps),
-  ]
+  return [...cli, ...jsxOnly(floored), ...runtimeDependency(detection.apps)]
 }
 
 function noViteConfig(): readonly string[] {
@@ -694,41 +734,89 @@ function noViteConfig(): readonly string[] {
  * had no warning of its own, and that is the worse failure of the two. An MCP server that will
  * not start is silent until a tool is called; a hook pointing at a missing file is not.
  *
- * **H6 (#58) added the PnP arm, and it is checked before `wiring.cli`.** That order is the fix
- * rather than a detail: `cliIn` answers `local` from the manifest declaration alone when the
+ * **H6 (#58) added the PnP arm, and it is checked before `home.state`.** That order is the fix
+ * rather than a detail: `state` answers `local` from the manifest declaration alone when the
  * file is absent, so a PnP repository that declares `dogear-cli` reaches the guard below as
  * `local` and this function returns nothing. Init then writes a committed path into a layout
  * that has no `node_modules` for it to resolve in, silently. Reordering is not an option
  * either — under PnP the install the second arm prescribes is the one the user has already
  * done, so it would name a fix that changes nothing.
+ *
+ * **Since #75 both arms name the directory**, because the path no longer always starts at the
+ * root. The old text said "not installed here" to a repository whose CLI was installed one
+ * directory down, and prescribed a root install that would have created a root `package.json` in
+ * a repository that had none. The root's wording is unchanged.
  */
 function cliNotInstalled(wiring: Wiring, detection: Detection): readonly string[] {
-  // Nothing names `CLI_ENTRY` when nothing is wired, so there is nothing to warn about.
-  if (wiring.agents.length === 0) return []
+  // Nothing names the CLI's path when nothing is wired, so there is nothing to warn about. That
+  // includes #75's case of nowhere to put it, which {@link nowhereToInstall} speaks for instead.
+  const home = detection.cli
+  if (home === undefined || wiring.agents.length === 0) return []
 
   const surfaces =
     wiring.hook && wiring.agents.includes('claude')
       ? 'the MCP registration and the prompt hook both point'
       : 'the MCP registration points'
 
-  // Deliberately regardless of `wiring.cli` — see the note above. Installed or not, the path
+  // Deliberately regardless of `home.state` — see the note above. Installed or not, the path
   // cannot resolve here, so `local` is not the reassurance it is under every other layout.
-  if (detection.linker === 'pnp') {
+  if (home.linker === 'pnp') {
     return [
-      `${surfaces} at ${CLI_ENTRY}, and this repository installs with Yarn's PnP linker, ` +
+      `${surfaces} at ${wiring.entry}, and this repository installs with Yarn's PnP linker, ` +
         'which creates no node_modules for that path to resolve in. dogear writes it anyway ' +
         'because it is committed and has to be right for everyone who clones. Set ' +
-        '`nodeLinker: node-modules` in .yarnrc.yml, or run the MCP server another way — see ' +
-        "dogear's README.",
+        `\`nodeLinker: node-modules\` in ${within(home, '.yarnrc.yml')}, or run the MCP ` +
+        "server another way — see dogear's README.",
     ]
   }
 
-  if (wiring.cli === 'local') return []
+  if (home.state === 'local') return []
+
+  const install = `\`${INSTALL[home.manager]} dogear-cli\``
+  const fix =
+    home.dir === ''
+      ? `which is not installed here. Run ${install}`
+      : `which is not installed there. Run ${install} in ${home.dir}`
 
   return [
-    `${surfaces} at ${CLI_ENTRY}, which is not installed here. Run ` +
-      `\`${INSTALL[detection.manager]} dogear-cli\` so the path resolves for everyone who ` +
-      'clones this repository.',
+    `${surfaces} at ${wiring.entry}, ${fix} so the path resolves for everyone who clones ` +
+      'this repository.',
+  ]
+}
+
+/** `name` at the CLI's home, as the report prints a path: `.yarnrc.yml` or `web/.yarnrc.yml`. */
+function within(home: CliHome, name: string): string {
+  return home.dir === '' ? name : `${home.dir}/${name}`
+}
+
+/**
+ * No package for the CLI to live in, so no agent was wired (#75).
+ *
+ * **A remark rather than a step note**, by the discriminator {@link cliNotInstalled} documents:
+ * no step declined anything it could have done. What is missing is in the repository, the one
+ * package every committed path depends on, and it stays missing until someone adds it. So this
+ * prints on every run, and a re-run still gets its `nothing changed`.
+ *
+ * **An explicit `--agent` is named.** The user asked for something specific and is owed the
+ * reason it did not happen; the flag chooses which agents to wire, and cannot make a path
+ * resolve. `--agent=none` asked for nothing, withholds nothing, and hears nothing.
+ */
+function nowhereToInstall(wiring: Wiring, options: ScaffoldOptions): readonly string[] {
+  if (wiring.withheld.length === 0) return []
+
+  // `withheld` is non-empty, so an explicit selection here names at least one agent.
+  const given = options.agents ?? []
+  const flags =
+    given.length === 0
+      ? ''
+      : ` ${given.map((agent) => `--agent=${agent}`).join(' ')} ` +
+        `${given.length === 1 ? 'was' : 'were'} not applied for the same reason.`
+
+  return [
+    'dogear found no package.json that declares dogear-cli, and there is none at the root to ' +
+      'install it into, so no agent was wired: every path init could commit would resolve ' +
+      'nowhere. Add dogear-cli to the devDependencies of the package that runs your app, ' +
+      `install it there, and re-run dogear init.${flags}`,
   ]
 }
 
