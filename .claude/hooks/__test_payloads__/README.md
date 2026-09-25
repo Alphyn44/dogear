@@ -19,6 +19,15 @@ Expected exit codes:
 | `stderr-pager.json` | `block-redundant-stderr-pager.sh` | exit 2 (blocked: redundant `2>&1 \| pager`) |
 | `gh-compound-bypass.json` | `block-destructive-bash.sh` | exit 2 (a permitted `gh issue create` must not wave through a `gh issue delete` in the same command) |
 | `gh-pr-compound-bypass.json` | `block-destructive-bash.sh` | exit 2 (same, for the PR-description carve-out vs `gh pr merge`) |
+| `gh-api-milestone-read.json` | `block-destructive-bash.sh` | exit 0 (the milestones carve-out: a read) |
+| `gh-api-milestone-patch.json` | `block-destructive-bash.sh` | exit 0 (the milestones carve-out: editing a description) |
+| `gh-api-milestone-delete.json` | `block-destructive-bash.sh` | exit 2 (deleting a milestone strips it from every issue in it) |
+| `gh-api-compound-bypass.json` | `block-destructive-bash.sh` | exit 2 (a permitted milestones call must not wave through a second `gh api`) |
+| `gh-api-other-endpoint.json` | `block-destructive-bash.sh` | exit 2 (nothing may follow the milestone number, so no `../` out of it) |
+
+An exit of **1** from `block-destructive-bash.sh` is a failure, not a block: the script died
+(usually `set -u` on an empty `BASH_REMATCH`) and the command would have run. Every
+blocking row above must read exactly 2.
 
 ## Why these exist
 

@@ -1,0 +1,1 @@
+{ "tool_input": { "command": "gh api repos/Alphyn44/dogear/milestones/9 -X DELETE" } }

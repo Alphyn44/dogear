@@ -7,7 +7,9 @@
 #
 # Block list is positive-listed; everything else passes through. Git AND gh are
 # read-only: the user owns every commit, push, sync, PR merge/create/comment/
-# edit. npm is read-only too — see the package-manager section for why.
+# edit. The gh carve-outs (issues, labels, PR descriptions, and this repo's
+# milestones through `gh api`) are each documented where they are defined.
+# npm is read-only too — see the package-manager section for why.
 #
 # Deliberately NOT blocked: cat, head, tail, ls, wc, sort, uniq, diff, stat,
 # file, jq, node, git status/diff/log/show/blame/ls-files, gh view/list/checks,
@@ -169,10 +171,58 @@ if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+auth[[:space:]]+
   block "gh auth mutation blocked (login/logout/refresh/token/setup-git). The user manages gh authentication manually."
 fi
 
-# gh api can POST/PATCH/PUT/DELETE any endpoint — block it entirely; reads go through
-# the typed subcommands (gh pr|run|issue view/list/checks/diff).
-if [[ "$CMD" =~ (^|[[:space:]\;\|\&\(/\\])gh(\.exe)?[[:space:]]+api([[:space:]]|$) ]]; then
-  block "gh api is blocked — it can mutate arbitrary endpoints. Use read-only subcommands (gh pr|run|issue view/list/checks/diff)."
+# gh api can POST/PATCH/PUT/DELETE any endpoint, so it is blocked with ONE
+# carve-out: this repository's milestones. gh has no typed `milestone`
+# subcommand, which leaves /milestone-create and /milestone-triage no other way
+# to read a description or write one. Everything else goes through the typed
+# subcommands (gh pr|run|issue view/list/checks/diff).
+#
+# The carve-out is narrow on purpose, and all three conditions must hold:
+#
+#   1. Exactly one `gh api` in the whole command. This is the compound problem
+#      the hard-denies above solve: a permitted call must not wave through a
+#      second one, including one hidden in $(...), backticks or `bash -c "..."`.
+#      That is why the boundary here also admits a backtick and both quotes,
+#      which the other gh rules' boundary does not.
+#   2. Its FIRST argument is repos/Alphyn44/dogear/milestones, optionally /<n>,
+#      with nothing after the number, so there is no `../` out of it.
+#   3. Every -X/--method value is GET, POST or PATCH. Deleting a milestone
+#      strips it from every issue in it, the reason `gh label delete` is denied.
+#
+# Argument order is the contract: endpoint first, flags after. The matching
+# allow rule in .claude/settings.json is a prefix match on that same order.
+gh_api_boundary="(^|[[:space:];|&(/\\\`\"'])"
+gh_api_re="${gh_api_boundary}gh(\.exe)?[[:space:]]+api([[:space:]]|$)"
+gh_api_count=0
+gh_api_rest="$CMD"
+while [[ "$gh_api_rest" =~ $gh_api_re ]]; do
+  gh_api_count=$((gh_api_count + 1))
+  gh_api_rest="${gh_api_rest#*"${BASH_REMATCH[0]}"}"
+done
+
+gh_api_milestone_safe=false
+gh_api_milestone_re="${gh_api_boundary}gh(\.exe)?[[:space:]]+api[[:space:]]+/?repos/Alphyn44/dogear/milestones(/[0-9]+)?([[:space:]]|$)"
+if [[ "$gh_api_count" -eq 1 ]] && [[ "$CMD" =~ $gh_api_milestone_re ]]; then
+  gh_api_milestone_safe=true
+  # Spaced (-X PATCH), joined (--method=PATCH) and attached (-XPATCH) forms.
+  # A false positive here can only block, never permit.
+  gh_api_method_re='(^|[[:space:]])(-X|--method)(=|[[:space:]]*)([^[:space:]]*)'
+  gh_api_rest="$CMD"
+  while [[ "$gh_api_rest" =~ $gh_api_method_re ]]; do
+    # Take both captures BEFORE the next =~, which overwrites BASH_REMATCH. A
+    # failed match empties it, and under `set -u` the script then dies with
+    # exit 1: not a block, so the command runs. It did, in testing.
+    gh_api_flag="${BASH_REMATCH[0]}"
+    gh_api_method=${BASH_REMATCH[4]//[\"\']/}
+    if ! [[ "$gh_api_method" =~ ^(GET|POST|PATCH)$ ]]; then
+      gh_api_milestone_safe=false
+    fi
+    gh_api_rest="${gh_api_rest#*"$gh_api_flag"}"
+  done
+fi
+
+if [[ "$gh_api_count" -gt 0 ]] && [[ "$gh_api_milestone_safe" == false ]]; then
+  block "gh api is blocked. It can mutate arbitrary endpoints. One carve-out: a single 'gh api repos/Alphyn44/dogear/milestones[/<n>]' call, endpoint first, with -X GET, POST or PATCH. Otherwise use the read-only subcommands (gh pr|run|issue view/list/checks/diff)."
 fi
 
 # ---------------------------------------------------------------------------

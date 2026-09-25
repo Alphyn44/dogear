@@ -711,10 +711,12 @@ Layered, structural first:
 1. **`apply: 'serve'`** — the plugin doesn't exist during build. Primary defense. Covers
    both the script injection *and* the attribute transform, so production DOM is
    untouched.
-2. **Gated dynamic import** for non-Vite consumers:
-   `if (import.meta.env.DEV) { import('dogear-core').then(m => m.init()) }`. Statically
-   eliminated by bundlers. Dynamic import matters — a static one keeps the module in the
-   graph.
+2. **Gated dynamic import** for a consumer that loads core itself rather than through the
+   plugin: `if (import.meta.env.DEV) { import('dogear-core').then(m => m.init()) }`.
+   Statically eliminated by the bundler. Dynamic import matters: a static one keeps the
+   module in the graph. The guard is the bundler's own dev flag, and `import.meta.env` is
+   Vite's; the gated-import fixture proves that form and no other. What the flag is under
+   Next.js, and whether Turbopack and webpack eliminate the branch, is J1's to settle.
 3. **Export conditions** in `package.json` — `"production"` and `"default"` both resolve
    to a noop module. Unknown conditions fail safe.
 4. **`devDependencies` + CI grep** for a sentinel string in `dist/`. Fails the build
@@ -730,7 +732,7 @@ anyway, but the overlay and its key handlers would still be live. Don't rely on 
 
 ## Features and user stories
 
-Six epics. Each story is written to paste into an issue tracker without rewriting.
+Ten epics. Each story is written to paste into an issue tracker without rewriting.
 
 ### Epic A — The pipe (M0)
 
@@ -1231,6 +1233,151 @@ harness. **H8 before H7, and H9 last.** H8 guards the publish path that #64 chan
 the same branch-protection edit H2's job rename already forces, so the two settings changes
 happen once; H7 and H9 are reports and gate nothing that a release depends on.
 
+### Epic I — Adoption (M8)
+
+*What happens when a repository dogear was not built against adopts it, on the one host dogear
+already supports.*
+
+The first outside attempt to adopt dogear came after it went public: a Next.js 16 frontend in a
+subdirectory of a Go repository. Next is Epic J's question. Four findings from that attempt are
+not about Next at all, and each would bite a Vite repository just as hard:
+
+- in a repository with no root `package.json`, the MCP registration and the prompt hook that
+  init commits point at a path that can never resolve, so every prompt errors;
+- `dogear-vite` refuses to install next to Vite 7, which the rest of that frontend's toolchain
+  was pinned to;
+- every call to dogear's MCP tools asks for permission, because nothing pre-approves them;
+- init wrote more than its reader expected, and the README does not say what triggers each
+  write.
+
+The first is tracked as a bug (#75) and the third as a decision (#76), neither with a story ID;
+the decision is in [Still open](#still-open) until it is made. The other two are stories.
+
+**I1 — `dogear-vite` on Vite 7**
+- `dogear-vite` installs next to Vite 7 and its React plugin with no peer-dependency conflict.
+- Under Vite 7, host JSX elements carry `data-dogear-src` with the original source's line and
+  column, exactly as under Vite 8.
+- A regression that breaks either Vite 7 or Vite 8 fails a pull request.
+
+The Vite 8 floor rests on a single import: the transform parses with the Oxc parser that Vite 8
+re-exports, and Vite 7 has none to give. This document never recorded that floor as a decision,
+which is why it has read as a requirement rather than a choice. The transform is otherwise a
+pure function over strings, so parsing without the host's parser is also what J2 needs in order
+to stamp under Next, and that is why this story comes first.
+
+**I2 — `dogear init` says what it will write**
+- The CLI README says what counts as a sign of each agent, including that a `.vscode/`
+  directory on its own wires VS Code, and what init wires when it finds no sign at all.
+- It says the rules stanza is written whenever any agent is wired, `--agent=claude` included,
+  and that init creates `AGENTS.md` when neither `AGENTS.md` nor `CLAUDE.md` exists.
+
+init already reports each agent together with the marker that triggered it (`vs code
+(.vscode/)`), above the change list, and `--dry-run` shows everything before anything is
+written. What is missing is the page a reader consults *before* running it: the README says the
+stanza goes in `AGENTS.md`, "or in `CLAUDE.md` if you have one", but not that the only way to
+decline it is to wire no agent at all, nor that a `.vscode/` directory most repositories carry
+for editor settings counts as a sign of an agent.
+
+### Epic J — Next.js (M9)
+
+*dogear on a second host: a Next.js 16 app on the App Router, under both of its dev bundlers.*
+
+Everything above assumes Vite. Core was kept free of Vite from the start so that a second host
+would be an addition rather than a rewrite (see [`dogear-core`](#dogear-core)), and this epic
+is where that gets tested. The first outside adoption attempt was a Next.js 16 frontend on
+Turbopack, and it found nothing to plug into: no Vite config, no dev-server middleware to serve
+the endpoint, no HTML transform to inject the script.
+
+Much of `dogear-vite` is already host-independent. The transform is a pure function over
+strings apart from its parser import, which I1 removes; the endpoint's request handling is plain
+Node; and `dogear-queue` is inlined into whatever bundles it, so a new package needs nothing
+published in order to use it. What is Vite-specific is how each piece is attached:
+`configureServer`, `transformIndexHtml`, and `apply: 'serve'`, which is the primary production
+defense and has no Next equivalent. That last one is why J1 is a decision rather than code.
+
+**Scope.** Next.js 16, the App Router, and both `next dev` bundlers: Turbopack, the default, and
+webpack. Next 15 and the Pages Router are in [Later, maybe](#later-maybe).
+
+**J1 — How dogear attaches to a Next.js app**
+- Where Next support lives, a package of its own or a `dogear serve` sidecar, is decided and
+  recorded in the Decisions log.
+- How the overlay reaches a `next dev` page is decided, together with which layers of
+  [Keeping it out of production](#keeping-it-out-of-production) hold under Next and what
+  replaces any that do not.
+- How the endpoint is served same-origin, resolving the git root rather than the Next app's
+  root, is decided.
+- Architecture and Keeping it out of production describe Next as well as Vite.
+
+A1 promises that no dogear entry appears in the user's source or import graph, and that promise
+rests on the plugin injecting the script. Next has no such hook, so the obvious route, a
+dev-gated import in the root layout, puts dogear in the user's source and turns layer 2 from a
+backup into the primary defense. Whether that is acceptable, and what makes it safe, is the
+decision. Two facts bear on it and are not yet known: whether Turbopack resolves the
+`development` export condition in dev, and whether Turbopack and webpack both eliminate a
+dev-gated dynamic import from a production build. If Turbopack does not honour the condition,
+core resolves to its noop build and nothing appears, silently.
+
+**J2 — Source stamping under Next**
+- Under `next dev`, with Turbopack and with webpack, host JSX elements in the app's own source
+  carry `data-dogear-src` with the original source's line and column.
+- Elements rendered by server components and by client components both carry it.
+- The files stamped are the ones the configuration includes, as under Vite.
+- Nothing in a `next build` carries it.
+
+**J3 — The endpoint under Next**
+- A batch submitted from a `next dev` page is written to `<git-root>/.dogear/queue.json`,
+  resolved from the git root rather than the Next app's root.
+- A Next dev server and a Vite dev server in the same repository write to one queue, and
+  concurrent submits lose nothing.
+- A malformed batch is refused and leaves the queue untouched, as A2 requires.
+- A production Next server has no dogear endpoint.
+
+**J4 — The overlay in `next dev`, and never in `next build`**
+- The overlay loads on a `next dev` page under both bundlers.
+- If dev would load core's production stub instead, dogear says so rather than silently not
+  appearing.
+- The production-leak gate scans a Next production build and fails on a leak, naming the file.
+- The runtime hostname check holds under Next as it does under Vite.
+
+The second criterion is layer 3 failing safe in the wrong direction. Under Vite the plugin
+reaches core's dev bundle by path and cannot land on the stub; a host that resolves
+`dogear-core` by name can, and the result looks exactly like dogear not being installed.
+
+**J5 — `dogear init` recognises a Next app**
+- Detection reports a Next app, including one in a subdirectory, instead of "no vite config
+  found".
+- Guidance prints what the app needs, for its own directory and package manager, and writes
+  none of it, as E8 does for Vite.
+- A repository with both a Vite app and a Next app gets guidance for each.
+
+**J6 — The Next round trip, tested**
+- A headless browser drives a real `next dev` server, under Turbopack and under webpack:
+  modifier-click, comment, submit.
+- The annotation arrives in `.dogear/queue.json` with a `via: "attribute"` site naming a real
+  file and line.
+- The same gesture with stamping switched off arrives with no attribute site, so a stamping
+  regression fails.
+- The packages under test are installed from packed tarballs, not workspace links.
+
+The third criterion is H3's lesson carried over: C3's floor still produces an annotation when
+stamping stops, so a suite that asserted only that something arrived would pass on a broken
+build.
+
+**J7 — Next support is published and documented**
+- A Next user can install dogear from the public registry and wire an app by following a
+  published README alone.
+- Anything new that publishes does so from CI with provenance, and the leak gate names it.
+- Verified on a real Next 16 project dogear was not built against, whose app lives in a
+  subdirectory of a repository with no root `package.json`.
+
+The last criterion is G3's, for the second host, and it is why M8 comes first: that layout is
+exactly the one M8's init bug (#75) is about.
+
+**Delivery ordering: J1, then J2, J3 and J4 in any order, then J5, J6 and J7.** J1 decides the
+shape every other story fills. J5 needs to know what a wired Next app looks like before it can
+print it, and J6 and J7 test and publish what the others built. I1 goes before J2, because it
+removes the parser dependency J2 would otherwise have to remove itself.
+
 ### Non-functional requirements
 
 - **Browsers:** Firefox, Chrome, Edge. Firefox is the point — it's what an extension
@@ -1256,7 +1403,10 @@ Increasing order of how much can go wrong.
 | **M3** | Delivery | D1–D6 | MCP first (it owns the formatter and the resolve path), then the hook on top, then clipboard. Replaces M0's crude hook. |
 | **M4** | Install and init | E1–E8 | Last because you hand-wire your own repo while building. This is what makes it usable in the *second* repo. |
 | **M5** | Release | G1–G6 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages were private and unpublished until this milestone, so `npm i -D dogear-vite` resolved to nothing and the install path M4 prints instructions for had never been run by anyone. |
-| **M6** | Testing | H1–H6 | After the release, because the release is what turned each gap here from theoretical into evidenced. Every milestone above tested what it built; this one tests the seams *between* what they built — the published tarball, the operating systems, the browser round trip — each of which currently rests on a person having checked once. |
+| **M6** | Testing | H1–H9 | After the release, because the release is what turned each gap here from theoretical into evidenced. Every milestone above tested what it built; this one tests the seams *between* what they built — the published tarball, the operating systems, the browser round trip — each of which currently rests on a person having checked once. |
+| **M7** | Going public | P1–P5 | Before the repository became public, because a history audit, branch protection and a disclosure policy are only worth anything before anyone can see the repository. Its stories were tracked as issues (#59 to #63) and never written into this document; what they settled is in the Decisions log and Repo and publishing. |
+| **M8** | Adoption | I1–I2, plus a bug (#75) and a decision (#76) | After going public, because the first outside adoption attempt is what found them. Each bites a repository dogear was not built against, on the host it already supports, and M9's real-project criterion needs the bug fixed first. |
+| **M9** | Next.js | J1–J7 | After M8, because its last criterion is a real Next project whose app sits in a subdirectory, which is M8's bug. J1 is a decision and goes first: every other story in it depends on how dogear attaches to Next. |
 | — | Safety | F1–F4 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
 
 Two deliberate orderings worth noting:
@@ -1492,6 +1642,10 @@ The plugin reaches the bundle by resolving `dogear-core/package.json` and joinin
 lands on `dist/noop.js`, the inert build. A dedicated `./dev` subpath was rejected: it would
 be a second live entry point any bundler could follow into a production graph, which is
 precisely what layer 3 exists to close. A manifest is not code.
+
+*(Corrected after M7. Since F4 the file joined is `dist/client.js`, the dev-client entry F4's
+entry above describes, and nothing is inline; `dist/index.js` is the library. The reasoning
+about resolving the manifest rather than the name is unchanged.)*
 
 **No git root → no injection at all, not a disabled overlay.**
 The endpoint was already skipped outside a repository, since the queue has nowhere to
@@ -2484,6 +2638,13 @@ None of these blocked M0, and none of them blocks the release.
   rename, and the later writer wins — a lost append, never a corrupted file. Closing it
   needs stale-lock recovery for a dev server that gets SIGKILLed, which is more machinery
   than the race deserves until someone actually loses an annotation. See the Decisions log.
+- **How dogear attaches to Next.js.** A package of its own or a `dogear serve` sidecar; how
+  the overlay reaches the page without the plugin's injection; which production layers
+  survive the move. J1 (#77) settles it, and every other story in Epic J waits on the answer.
+- **Whether `dogear init` pre-approves dogear's MCP tools (#76).** Every call from Claude Code asks
+  for permission today, because nothing adds dogear's tools to the permission allow list.
+  Pre-approving would remove the prompt, and it would also mean dogear editing a committed
+  security setting on behalf of everyone who clones the repository.
 
 ---
 
@@ -2607,7 +2768,7 @@ pass forever while testing nothing.
   port
 - **Runtime fiber walk** as an optional layer, if the attribute transform's gaps prove
   annoying in practice
-- Next.js adapter (small, if core stays framework-agnostic)
+- Next.js 15 and older, and the Pages Router. Epic J covers Next 16's App Router only
 - Generic sidecar mode: `dogear serve` + one script tag, covering Rails/Django/Go
   templates/anything. This is where `~/.dogear/projects.json` earns its keep, since a
   sidecar *does* have the URL-to-project problem
