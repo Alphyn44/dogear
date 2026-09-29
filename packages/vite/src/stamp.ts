@@ -2,7 +2,7 @@ import { relative } from 'node:path'
 
 import type { SourceMap } from 'magic-string'
 import MagicString from 'magic-string'
-import { normalizePath, parseSync } from 'vite'
+import { parseSync } from 'oxc-parser'
 
 /**
  * The JSX attribute transform — C1 (#15), and layer 1 of the brief's source-resolution
@@ -14,12 +14,16 @@ import { normalizePath, parseSync } from 'vite'
  * that won't rot", and the reason is that it is a pure function from source text to source
  * text: nothing here knows about React, and nothing here can be broken by a React release.
  *
- * **The parser is Vite's own.** Vite 8 is Rolldown-based and re-exports Oxc's `parseSync`,
- * which parses `.tsx` and `.jsx` (inferring the language from the filename) and *returns*
- * `{ program, errors }` rather than throwing. That removed the only real dependency this
- * ticket looked like it needed — an earlier plan reached for `@babel/parser`. `magic-string`
- * is still here, because a transform that returns code without a sourcemap makes Vite log
- * "Sourcemap is likely to be incorrect" against every file it touches.
+ * **The parser is Oxc's, depended on directly, and this file imports nothing from `vite`.**
+ * `parseSync` parses `.tsx` and `.jsx` (inferring the language from the filename) and
+ * *returns* `{ program, errors }` rather than throwing. C1 first took it from Vite 8, which
+ * re-exports the same parser from Rolldown, and that one import was the whole of the plugin's
+ * Vite 8 floor: Vite 7 has no parser that reads TSX to give. I1 (#73) moved it to
+ * `oxc-parser`, which is what let the peer range admit Vite 7, and it is also what makes this
+ * module host-independent for J2 to reuse under Next. `stamp.test.ts` holds the second half
+ * as a source rule. `magic-string` is here because a transform that returns code without a
+ * sourcemap makes Vite log "Sourcemap is likely to be incorrect" against every file it
+ * touches.
  *
  * **Only host elements are stamped** — lowercase `JSXIdentifier` names. `<Button/>` gets
  * nothing: React would pass the attribute through as an unknown prop, and if the component
@@ -177,8 +181,8 @@ function endOffset(node: unknown): number | null {
 /**
  * The subset of an Oxc `JSXOpeningElement` this module reads.
  *
- * Declared structurally rather than imported from `@oxc-project/types`, which is a
- * transitive dependency we would otherwise have to declare in order to name four fields.
+ * Declared structurally rather than imported from `@oxc-project/types`, which arrives through
+ * `oxc-parser` and which we would otherwise have to declare in order to name four fields.
  */
 interface JsxOpeningElement {
   readonly name: unknown
@@ -220,12 +224,16 @@ function stripQuery(id: string): string {
  * root — because `../../elsewhere/Button.tsx` is not a path the agent can act on.
  */
 function repoRelative(file: string, gitRoot: string): string | null {
-  const path = normalizePath(relative(gitRoot, file))
+  // Backslashes to forward slashes and nothing more. Vite's `normalizePath` also runs
+  // `posix.normalize`, which has no work to do on what `relative` returns: it never emits `.`
+  // segments or doubled separators. Written out rather than imported so this module keeps no
+  // dependency on the host; the module docblock says why.
+  const path = relative(gitRoot, file).replace(/\\/g, '/')
 
   if (path === '' || path.startsWith('../')) return null
   // A double quote would close the attribute early and produce invalid JSX. Vanishingly
   // rare on any real filesystem, but silently emitting broken syntax into someone's app is
-  // not a failure mode worth leaving open. Backslashes cannot appear — normalizePath is
+  // not a failure mode worth leaving open. Backslashes cannot appear: the replace above is
   // what removes them on Windows.
   if (path.includes('"')) return null
 

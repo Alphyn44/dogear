@@ -424,7 +424,7 @@ rather than merely promised.
 | `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
 | `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client. Needs a build first |
-| `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace, and runs the binary, `dogear init` and a real dev server. Needs a build first; deliberately not in `verify` |
+| `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace once per Vite major the plugin admits (I1), and runs the binary, `dogear init` and a real dev server whose served app must carry its stamps. Needs a build first; deliberately not in `verify` |
 | `npm run test:browser` | **H3's round trip.** Drives Chromium against a real dev server: modifier-click, comment, submit, then reads `.dogear/queue.json`. Needs a build and a browser binary; deliberately not in `verify` |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
@@ -615,12 +615,33 @@ question (did the sentinel leak into production?) — folding a behavioural suit
 make the name lie.
 
 **`test:packed` is out of `verify` for a reason that is not speed.** It reaches the registry
-for `vite`, `magic-string` and the MCP SDK, and `verify.yml` is what `release.yml` gates on —
+for `vite`, `magic-string`, `oxc-parser`, React and the MCP SDK, and `verify.yml` is what `release.yml` gates on —
 a release must not be able to fail because a registry was slow. It runs as its own `ci.yml`
 job across all three platforms instead. `test-packed/fixture.ts` holds the shared harness:
 `packAll` → `createScratchProject` (under `tmpdir`, never inside the repo, because
-`findGitRoot` walks *up*) → `startDevServer` → `runInstalledCli`. One install is shared by the
-whole file; it is the slowest thing in the repository by an order of magnitude.
+`findGitRoot` walks *up*) → `startDevServer` → `runInstalledCli`. It is the slowest thing in
+the repository by an order of magnitude, so each install is shared by the whole file.
+
+**Since I1 (#73) there is one install per Vite major, and the list is written down, not
+derived.** `VITE_LEGS` pairs each major with the `@vitejs/plugin-react` major that supports
+it, and `install.test.ts` checks it against `dogear-vite`'s peer range in both directions, so
+widening the range to a major with no leg fails rather than growing a leg nobody paired. Each
+leg's app lists `react()` *before* `dogear()`, which is the order appending to `npm create
+vite` gives and the one where only `enforce: 'pre'` keeps the stamps; the in-process
+`stamp.integration.test.ts` covers the other order. The stamping case reads the module the dev
+server *serves*, after the React plugin's compile, and it was proven non-vacuous by running it
+with `transform: false`. A leg without a React plugin (`ScratchOptions.vite` omitted) is what
+H6's managers suite still uses.
+
+**`packages/vite/src/stamp.ts` imports nothing from `vite`.** Its parser is `oxc-parser`, a
+dependency, because Vite 7 has none to re-export, and its path separator fix is a local
+replace. A value import from `vite` there would pass every workspace suite, which has Vite 8
+installed, and break only in a Vite 7 project or under J2's second host. `stamp.test.ts`
+holds it as a source rule. `oxc-parser` sits at a minor-locked `^0.152.0` because Oxc changes
+AST details between 0.x minors; see the brief's Decisions log. **Bump it only to a minor at
+least a day old**: Yarn 4 quarantines younger versions by default, the range has nothing
+older to fall back on, and `test:managers` fails its Yarn legs with `YN0016` until the gate
+passes. That failure is the guard, so do not loosen the gate in the fixture.
 
 **H3's browser suite could not use `examples/react-app`, and the reason generalises.** The
 endpoint writes to `queuePathFor(findGitRoot(server.config.root))`, the example's git root is

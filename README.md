@@ -222,7 +222,7 @@ confirmation that it did.
 
 ## Requirements
 
-Node `^20.19.0 || >=22.12.0`, and Vite 8 for the plugin.
+Node `^20.19.0 || >=22.12.0`, and Vite 7 or 8 for the plugin.
 
 Firefox, Chrome and Edge. Firefox is the point: every comparable click-to-annotate tool is
 a Chromium extension.

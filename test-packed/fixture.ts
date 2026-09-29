@@ -279,7 +279,7 @@ export function tarballFor(
  */
 export async function createScratchProject(
   packed: ReadonlyMap<string, Packed>,
-  { manager = 'npm', linker = 'node-modules' }: ScratchOptions = {},
+  { manager = 'npm', linker = 'node-modules', vite: leg }: ScratchOptions = {},
 ): Promise<string> {
   // Per-manager prefix so concurrent legs cannot be mistaken for each other in a stack trace,
   // and so a leaked directory says which install left it behind.
@@ -299,7 +299,12 @@ export async function createScratchProject(
   // the `/var` → `/private/var` resolution the same call gives for free, which is the same class
   // of bug one platform over.
   const root = realpathSync.native(
-    mkdtempSync(join(tmpdir(), `dogear-packed-${manager}-`)),
+    mkdtempSync(
+      join(
+        tmpdir(),
+        `dogear-packed-${manager}-${leg === undefined ? '' : `vite${String(leg.vite)}-`}`,
+      ),
+    ),
   )
 
   // A bare `.git` directory rather than a real repository: `findGitRoot` only looks for the
@@ -334,24 +339,51 @@ export async function createScratchProject(
     ].join('\n'),
   )
 
-  // No `defineConfig` and no app module. The fixture exists to prove that `dogear-vite`
-  // resolves from an install and finds core's bundle, and both of those happen before a
-  // single line of application code would run.
+  // No `defineConfig`. Without a leg there is no app module either: H6's suite exists to prove
+  // that `dogear-vite` resolves from an install and finds core's bundle, and both of those
+  // happen before a single line of application code would run.
+  //
+  // With one, the React plugin is listed FIRST, which is the order a user gets by appending to
+  // `npm create vite`'s `plugins: [react()]`. It is also the harder case: only `enforce: 'pre'`
+  // puts dogear's transform ahead of the React plugin's JSX compile there, and
+  // stamp.integration.test.ts already covers the other order in-process.
   writeFileSync(
     join(root, 'vite.config.js'),
     [
+      ...(leg === undefined ? [] : ["import react from '@vitejs/plugin-react'"]),
       "import { dogear } from 'dogear-vite'",
       '',
-      'export default { plugins: [dogear()] }',
+      leg === undefined
+        ? 'export default { plugins: [dogear()] }'
+        : 'export default { plugins: [react(), dogear()] }',
       '',
     ].join('\n'),
   )
+
+  if (leg !== undefined) {
+    mkdirSync(join(root, 'src'))
+    writeFileSync(join(root, 'src', 'App.tsx'), APP_SOURCE)
+  }
 
   // Read rather than written down, so a peer bump in the manifest reaches this fixture on its
   // own. A bare `npm install vite` takes *latest*, which walks off `^8.0.0` the day vite 9
   // ships and fails as an unmet peer nobody changed.
   const vite = manifestOf('vite').peerDependencies?.['vite']
   if (vite === undefined) throw new Error('dogear-vite declares no vite peerDependency')
+
+  // A leg names its major outright. npm refuses a direct dependency's unmet peer with
+  // ERESOLVE, so an install that goes through is itself I1's first criterion: `dogear-vite`
+  // sits beside this Vite and this React plugin with no conflict. `react` is here because
+  // Vite's import analysis resolves `react/jsx-dev-runtime` while transforming the app, and
+  // the transformed module is what the suite reads.
+  const hostPackages =
+    leg === undefined
+      ? [`vite@${vite}`]
+      : [
+          `vite@^${String(leg.vite)}`,
+          `@vitejs/plugin-react@^${String(leg.react)}`,
+          'react@^19',
+        ]
 
   // Yarn's linker is a project setting, so it has to be on disk before the install runs.
   //
@@ -378,7 +410,7 @@ export async function createScratchProject(
   // the same thing the M5 smoke test relied on without saying so.
   const tarballs = PUBLISHED.map((dir) => specifierFor(manager, packed, dir))
 
-  await runManager(manager, [...installVerb(manager), ...tarballs, `vite@${vite}`], root)
+  await runManager(manager, [...installVerb(manager), ...tarballs, ...hostPackages], root)
 
   return root
 }
@@ -436,11 +468,73 @@ function specifierFor(
   return `${npmName(dir)}@file:${tarball.replace(/\\/g, '/')}`
 }
 
+/**
+ * I1 (#73): every Vite major `dogear-vite` admits, each with the `@vitejs/plugin-react` major
+ * that supports it. plugin-react 6 requires Vite 8, and 5 is the last line that runs on 7, so
+ * the pairing is not a choice.
+ *
+ * Written down rather than derived from the peer range, and `install.test.ts` checks the two
+ * against each other in both directions. Deriving it would make a range widened to `^9` grow a
+ * leg with no React plugin to pair it with; checking means that same edit fails, naming this
+ * list.
+ */
+export const VITE_LEGS = [
+  { vite: 7, react: 5 },
+  { vite: 8, react: 6 },
+] as const
+export type ViteLeg = (typeof VITE_LEGS)[number]
+
+/**
+ * The majors a peer range admits: `^7.0.0 || ^8.0.0` gives `[7, 8]`.
+ *
+ * Only caret alternatives are understood, and anything else throws. A range spelled `>=7` is
+ * a legitimate edit this reader cannot answer, and skipping it would let the pairing check
+ * pass against a list it never read.
+ */
+export function admittedMajors(range: string): readonly number[] {
+  return range.split('||').map((alternative) => {
+    const caret = /^\^(\d+)\.\d+\.\d+$/.exec(alternative.trim())
+    if (caret?.[1] === undefined) {
+      throw new Error(
+        `cannot read "${alternative.trim()}" in the peer range "${range}": ` +
+          'admittedMajors understands ^N.N.N alternatives only',
+      )
+    }
+    return Number(caret[1])
+  })
+}
+
+/**
+ * The app a Vite leg serves, and where its host elements start.
+ *
+ * Positions are 1-based line and column at the `<`, which is what `data-dogear-src` records.
+ * `<main>` sits on line 3 at column 5 and `<p>` on line 4 at column 7; the source is a literal
+ * rather than generated so that anyone reading a failure can count them by eye.
+ */
+const APP_SOURCE = [
+  'export function App() {',
+  '  return (',
+  '    <main>',
+  '      <p>packed</p>',
+  '    </main>',
+  '  )',
+  '}',
+  '',
+].join('\n')
+
+export const APP_STAMPS = ['src/App.tsx:3:5', 'src/App.tsx:4:7'] as const
+
 /** Options for {@link createScratchProject}. Both default to what npm does — H6 (#58). */
 export interface ScratchOptions {
   readonly manager?: Manager
   /** Only `yarn` honours this; npm and pnpm have no PnP mode in play here. */
   readonly linker?: Linker
+  /**
+   * I1 (#73). With a leg, the project installs that Vite major and its React plugin, and gets
+   * an app for the transform to stamp. Without one it installs whatever the peer range
+   * resolves to and no app, which is all H6's suite needs.
+   */
+  readonly vite?: ViteLeg
 }
 
 /**

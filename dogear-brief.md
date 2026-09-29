@@ -1190,8 +1190,8 @@ registration correctly and it is the repository that is wrong, which is the disc
 
 The counterpart to `.github/dependabot.yml` deliberately not covering npm: the signal is
 wanted, the routine pull requests are not. **Severity alone is the wrong ranking here.** Only
-three things ever reach a user (`magic-string` and `dogear-core` through the plugin,
-`@modelcontextprotocol/sdk` through the CLI); everything else is tooling that `npm run
+four things ever reach a user (`magic-string`, `oxc-parser` since I1, and `dogear-core`
+through the plugin, `@modelcontextprotocol/sdk` through the CLI); everything else is tooling that `npm run
 verify` exercises and nobody installs. A raw `npm audit` number puts a dev-tree advisory in
 front of the maintainer with the same weight as one in a shipped dependency, which is how a
 report becomes something people learn to ignore. `npm audit --omit=dev` is the other half of
@@ -1400,7 +1400,10 @@ removes the parser dependency J2 would otherwise have to remove itself.
   can't give you. **Safari is intended and not yet verified** — B8 (#35) is the story, and
   until it closes the README claims the three above and not Safari. Corrected during G1,
   which would otherwise have shipped a user-facing browser list this one disagreed with.
-- **Node:** `^20.19.0 || >=22.12.0`, matching Vite's own floor (Vite is at 8.2.1).
+- **Node:** `^20.19.0 || >=22.12.0`, matching Vite's own floor, which is the same for Vite 7
+  and 8.
+- **Vite:** 7 or 8 (`^7.0.0 || ^8.0.0`), since I1 (#73). The workspace develops against 8.2.1,
+  and `test:packed` installs each major the peer range admits.
 - **Overhead:** the transform must not make dev startup or HMR noticeably slower.
   Measure before optimizing; the budget is "unnoticeable," not a number.
 - **Zero network egress.** Nothing leaves localhost, ever.
@@ -2591,6 +2594,43 @@ package in `web/`, and a pnpm workspace member that declares `dogear-cli`, which
 into that member's `node_modules` rather than the root's. Both keep the root, as before, and each
 is to be tracked as a bug of its own.
 
+**The transform parses with `oxc-parser`, a dependency of `dogear-vite`, not with Vite's
+re-export. Settled during I1 (#73).**
+C1 took `parseSync` from `vite`, which Vite 8 re-exports from Rolldown, and that single import
+was the whole reason the peer range read `^8.0.0`. Nobody decided the floor; it followed from
+the import. Vite 7 has no parser to give: Rollup's `parseAst` reads no TypeScript and esbuild
+only transforms. So the peer range is now `^7.0.0 || ^8.0.0`, and `stamp.ts` imports nothing
+from `vite` at all, `normalizePath` included. That second half is what makes the transform
+host-independent for J2, and `stamp.test.ts` holds it as a source rule.
+
+**Two alternatives were weighed and declined.** Choosing the parser by the running Vite's
+version still needs a parser dependency for the Vite 7 side, so it installs the same package
+and adds a second code path to test. `@babel/parser` is pure JavaScript with no native binary,
+which is its real advantage, but it throws rather than returning errors, needs its plugins
+chosen per extension (a `.ts` file must not enable `jsx`), produces a different AST, and is
+slower. `oxc-parser` is the parser Vite 8 was already handing us, so the AST, the UTF-16
+offsets and the error handling carried over unchanged, and the existing tests proved it.
+
+**What it costs.** A native binary per platform through `optionalDependencies`, which is how
+esbuild and Rolldown already ship, so no Vite user meets a new kind of install. A project on
+Vite 8 carries two copies of Oxc, because Rolldown bundles its own binding rather than
+depending on this package, so no range could have deduplicated them. And a fourth package
+reaches users, which H7's report counts.
+
+**The range is `^0.152.0`, which on 0.x locks the minor.** Oxc changes AST details between
+0.x minors, and the walker in `stamp.ts` reads the AST structurally, so a wider range would let
+a fresh install pick up a shape nobody tested. Each Oxc minor is therefore a deliberate bump,
+proven by `npm test` and by `test:packed`, which since I1 installs the tarballs beside each
+Vite major the peer range admits and checks the stamps the dev server actually serves.
+
+**Bump Oxc only to a minor at least a day old.** Yarn 4 refuses a version younger than its
+`npmMinimalAgeGate`, which defaults to one day, and a minor-locked range admits nothing older
+to fall back on. This was found, not predicted: `0.152.0` was five hours old when I1 pinned it,
+and `test:managers` failed both Yarn legs with `YN0016 … are quarantined` while npm and pnpm
+installed cleanly. The `managers` job is therefore the guard for this rule, and it is left
+exactly as it is: loosening the gate in the fixture would hide the one failure a Yarn user
+would actually meet.
+
 **Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
 G5.**
 The `dogear` organization was taken, which this document had planned for — but the fallback
@@ -2783,8 +2823,8 @@ risk is different in kind rather than degree: the workflows pin `actions/checkou
 the one supply-chain shape that could publish as us.
 
 What replaces npm version updates is **H7 (#65)**: a report on every pull request, ranked by
-severity **and by whether the package ships**. Only `magic-string`, `dogear-core` and
-`@modelcontextprotocol/sdk` ever reach a user, so a raw `npm audit` number weights a
+severity **and by whether the package ships**. Only `magic-string`, `oxc-parser`, `dogear-core`
+and `@modelcontextprotocol/sdk` ever reach a user, so a raw `npm audit` number weights a
 build-tooling advisory the same as a shipped one, which is how a report becomes something
 people learn to ignore.
 

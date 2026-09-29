@@ -144,7 +144,7 @@ Held the modifier and nothing happened? See
 
 ## Requirements
 
-Node `^20.19.0 || >=22.12.0`, Vite 8. Firefox, Chrome and Edge.
+Node `^20.19.0 || >=22.12.0`, Vite 7 or 8. Firefox, Chrome and Edge.
 
 ## License
 

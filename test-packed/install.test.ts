@@ -6,10 +6,13 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { SENTINEL } from '../packages/core/src/sentinel.js'
-import type { Packed, PublishedDir } from './fixture.js'
+import type { DevServer, Packed, PublishedDir, ViteLeg } from './fixture.js'
 import {
+  APP_STAMPS,
   PUBLISHED,
   REPO_ROOT,
+  VITE_LEGS,
+  admittedMajors,
   builtFiles,
   createScratchProject,
   discard,
@@ -34,22 +37,43 @@ import {
  * into a project outside the workspace, and runs the three things a user runs: the binary,
  * `dogear init`, and a dev server with the plugin loaded.
  *
+ * **Once per Vite major the plugin admits, since I1 (#73).** Each leg in `VITE_LEGS` is its
+ * own project with its own Vite and React plugin, and the plugin cases run against every one.
+ * The binary and `dogear init` do not touch Vite, so they run once, on the newest leg.
+ *
  * Runs under vitest.packed.config.ts, which needs `npm run build` first and is deliberately
  * not part of `npm run verify` — see that file.
  */
 
 let packed: ReadonlyMap<string, Packed>
 let tarballDir: string
-let scratch: string
+const scratches = new Map<ViteLeg['vite'], string>()
+
+/** The project a leg installed. Throws rather than handing `undefined` to a path join. */
+function scratchFor(leg: ViteLeg): string {
+  const found = scratches.get(leg.vite)
+  if (found === undefined)
+    throw new Error(`no scratch project for vite ${String(leg.vite)}`)
+  return found
+}
+
+/** Where the Vite-independent cases run: the newest leg, which is what a fresh app gets. */
+const NEWEST = VITE_LEGS[VITE_LEGS.length - 1] as ViteLeg
 
 beforeAll(async () => {
   tarballDir = mkdtempSync(join(tmpdir(), 'dogear-tarballs-'))
   packed = await packAll(tarballDir)
-  scratch = await createScratchProject(packed)
+
+  // One after another rather than concurrently. Two npm installs sharing a cache is supported,
+  // but a failure in either would then arrive interleaved with the other's output, and this
+  // suite's value on a red run is a log that says which install broke.
+  for (const leg of VITE_LEGS) {
+    scratches.set(leg.vite, await createScratchProject(packed, { vite: leg }))
+  }
 })
 
 afterAll(() => {
-  if (scratch !== undefined) discard(scratch)
+  for (const scratch of scratches.values()) discard(scratch)
   if (tarballDir !== undefined) discard(tarballDir)
 })
 
@@ -125,8 +149,10 @@ describe.each(PUBLISHED)('the dogear-%s tarball', (dir) => {
   })
 })
 
-describe('the installed tree', () => {
+describe.each(VITE_LEGS)('the installed tree, on vite $vite', (leg) => {
   it('resolves dogear-core to the tarball, not to the registry', () => {
+    const scratch = scratchFor(leg)
+
     // This enforces G2's decision rather than second-guessing it. The brief chose a caret
     // range over a pin *because* the two packages version independently, and recorded the
     // consequence: `^0.1.0` is `>=0.1.0 <0.2.0` under 0.x semver, so core ships patches on its
@@ -162,29 +188,41 @@ describe('the installed tree', () => {
     expect(resolved.version).toBe(manifestOf('core').version)
   })
 
-  it('puts `dogear` on PATH, not `dogear-cli`', () => {
-    // npm writes a symlink on POSIX and a .cmd shim on Windows. The name is what every
-    // README, every init instruction and the brief all say to type.
-    const bin = join(scratch, 'node_modules', '.bin')
-    const shim = process.platform === 'win32' ? 'dogear.cmd' : 'dogear'
+  it('holds the vite major the leg names', () => {
+    // I1 (#73). Without this, a leg could pass having quietly run the other major, and the
+    // stamping case below would then prove Vite 8 twice. Read from the installed manifest
+    // rather than from the install command, which only says what was asked for.
+    const installed = JSON.parse(
+      readFileSync(join(scratchFor(leg), 'node_modules', 'vite', 'package.json'), 'utf8'),
+    ) as { version: string }
 
-    expect(existsSync(join(bin, shim))).toBe(true)
+    expect(Number(installed.version.split('.')[0])).toBe(leg.vite)
   })
 })
 
 describe('the installed binary', () => {
+  it('puts `dogear` on PATH, not `dogear-cli`', () => {
+    // npm writes a symlink on POSIX and a .cmd shim on Windows. The name is what every
+    // README, every init instruction and the brief all say to type.
+    const bin = join(scratchFor(NEWEST), 'node_modules', '.bin')
+    const shim = process.platform === 'win32' ? 'dogear.cmd' : 'dogear'
+
+    expect(existsSync(join(bin, shim))).toBe(true)
+  })
+
   it('runs from the path everything `dogear init` writes points at', async () => {
     // node_modules/dogear-cli/dist/cli.js is not an arbitrary way to spawn it: it is the exact
     // string the MCP registration and Claude Code's prompt hook are given, repo-relative and
     // committed. If it does not resolve after an install, the failure surfaces as an MCP
     // server that exits 1 on spawn and a hook that fails on every prompt the user types.
-    const help = await runInstalledCli(scratch, ['--help'])
+    const help = await runInstalledCli(scratchFor(NEWEST), ['--help'])
 
     expect(help.exitCode).toBe(0)
     expect(help.stdout).toContain('init')
   })
 
   it('initializes the project, and writes a CLI path that resolves', async () => {
+    const scratch = scratchFor(NEWEST)
     const run = await runInstalledCli(scratch, ['init'])
 
     expect(run.exitCode).toBe(0)
@@ -205,50 +243,106 @@ describe('the installed binary', () => {
   })
 })
 
-describe('the installed plugin', () => {
+describe.each(VITE_LEGS)('the installed plugin, on vite $vite', (leg) => {
+  let server: DevServer | undefined
+
+  beforeAll(async () => {
+    server = await startDevServer(scratchFor(leg))
+  })
+
+  // Awaited, and before the file-level afterAll: that one removes the tree this server has
+  // modules open in.
+  afterAll(async () => {
+    await server?.stop()
+  })
+
+  function origin(): string {
+    if (server === undefined) throw new Error('the dev server did not start')
+    return server.origin
+  }
+
   it("serves dogear-core's real bundle, not the unbuilt stub", async () => {
     // The criterion a wrong `exports` map breaks, and the one nothing else can see. A plugin
     // that fails to resolve core still starts a server, still serves the page, and still
     // injects a script — it just hands the browser a console.warn. Asserting "an annotation
     // endpoint answered" would pass on that build.
-    const server = await startDevServer(scratch)
+    const html = await (await fetch(`${origin()}/`)).text()
 
-    try {
-      const html = await (await fetch(`${server.origin}/`)).text()
+    const tag = /<script[^>]*data-dogear[^>]*>/.exec(html)?.[0]
+    expect(tag, `no dogear script tag was injected into:\n${html}`).toBeDefined()
 
-      const tag = /<script[^>]*data-dogear[^>]*>/.exec(html)?.[0]
-      expect(tag, `no dogear script tag was injected into:\n${html}`).toBeDefined()
+    const src = tag === undefined ? undefined : /src="([^"]+)"/.exec(tag)?.[1]
+    expect(src, `the injected tag carries no src: ${String(tag)}`).toBeDefined()
 
-      const src = tag === undefined ? undefined : /src="([^"]+)"/.exec(tag)?.[1]
-      expect(src, `the injected tag carries no src: ${String(tag)}`).toBeDefined()
+    const bundle = await fetch(new URL(src ?? '', origin()))
+    expect(bundle.ok).toBe(true)
 
-      const bundle = await fetch(new URL(src ?? '', server.origin))
-      expect(bundle.ok).toBe(true)
+    const body = await bundle.text()
 
-      const body = await bundle.text()
+    // SENTINEL lives only in core's real dist/client.js — index.js deliberately cannot
+    // carry it, and noop.js is the inert build. Reaching it here means the installed plugin
+    // resolved the installed core through its exports map and read the right file out of
+    // the right dist/.
+    expect(body).toContain(SENTINEL)
+    // MISSING_BUNDLE_STUB in packages/vite/src/client-route.ts, which is what a failed
+    // resolution serves instead. Asserted separately from the line above so the failure
+    // message says which of the two happened.
+    expect(body).not.toContain('has not been built')
+  })
 
-      // SENTINEL lives only in core's real dist/client.js — index.js deliberately cannot
-      // carry it, and noop.js is the inert build. Reaching it here means the installed plugin
-      // resolved the installed core through its exports map and read the right file out of
-      // the right dist/.
-      expect(body).toContain(SENTINEL)
-      // MISSING_BUNDLE_STUB in packages/vite/src/client-route.ts, which is what a failed
-      // resolution serves instead. Asserted separately from the line above so the failure
-      // message says which of the two happened.
-      expect(body).not.toContain('has not been built')
-    } finally {
-      // Awaited: afterAll removes the tree this server has modules open in.
-      await server.stop()
+  it('stamps every host element with its source line and column', async () => {
+    // I1's (#73) second criterion, read from what the dev server actually serves: the module
+    // after dogear's transform AND the React plugin's JSX compile. Asserting on dogear's
+    // output alone would pass while the React plugin dropped the attribute, or while it
+    // compiled the JSX before dogear ever saw it, which is the ordering `enforce: 'pre'`
+    // exists to prevent and the reason the fixture lists `react()` first.
+    const response = await fetch(`${origin()}/src/App.tsx`)
+    expect(response.ok).toBe(true)
+
+    const body = await response.text()
+
+    // Compiled, so the attribute is a prop key now rather than JSX. The two React plugin
+    // majors compile through different tools, so the pattern admits either quote style
+    // around both the key and the value.
+    expect(
+      body,
+      'the served module still contains JSX: it was never compiled',
+    ).not.toMatch(/<main[\s>]/)
+    for (const stamp of APP_STAMPS) {
+      const escaped = stamp.replace(/[.]/g, '\\.')
+      expect(body, `no ${stamp} stamp in the served module:\n${body}`).toMatch(
+        new RegExp(`["']?data-dogear-src["']?\\s*:\\s*["']${escaped}["']`),
+      )
     }
   })
 })
 
 describe('the suite itself', () => {
-  it('runs against a project outside this workspace', () => {
+  it('runs against projects outside this workspace', () => {
     // `findGitRoot` walks up for `.git`. A scratch project inside the repository would resolve
     // to the repository, so `dogear init` would write into the real .dogear/ and the plugin
     // would serve this repo's queue — every case above would pass while proving nothing about
     // an install. Cheap to assert, and invisible if it ever stops being true.
-    expect(scratch.startsWith(REPO_ROOT)).toBe(false)
+    expect(scratches.size).toBe(VITE_LEGS.length)
+    for (const scratch of scratches.values()) {
+      expect(scratch.startsWith(REPO_ROOT)).toBe(false)
+    }
+  })
+
+  it('has a leg for every vite major the plugin admits, and none it does not', () => {
+    // I1 (#73). Both directions, like scaffold.test.ts pairing init's steps with their undos.
+    // A peer range widened to `^9` with no leg would claim a Vite nothing here installs, and
+    // one narrowed back to `^8` would leave the Vite 7 leg testing a pairing npm refuses.
+    const range = manifestOf('vite').peerDependencies?.['vite']
+    expect(range, 'dogear-vite declares no vite peerDependency').toBeDefined()
+
+    const admitted = [...admittedMajors(range ?? '')].sort((a, b) => a - b)
+    const legs = VITE_LEGS.map((leg) => leg.vite as number).sort((a, b) => a - b)
+
+    expect(
+      legs,
+      `dogear-vite's peer range "${String(range)}" and VITE_LEGS in ` +
+        'test-packed/fixture.ts name different Vite majors. Change them together.',
+    ).toEqual(admitted)
   })
 })

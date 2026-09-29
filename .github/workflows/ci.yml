@@ -164,8 +164,13 @@ jobs:
   # project outside the workspace instead.
   #
   # Not folded into verify.yml, for the same reason as the job above and one more: the scratch
-  # install reaches the registry for magic-string, the MCP SDK and vite, and verify.yml is what
-  # release.yml gates on. A release must not be able to fail because a registry was slow.
+  # installs reach the registry for magic-string, oxc-parser, the MCP SDK, react, and vite 7 and
+  # 8 with their React plugins, and verify.yml is what release.yml gates on. A release must not
+  # be able to fail because a registry was slow.
+  #
+  # One project per Vite major the plugin admits, since I1 (#73), and each checks that the
+  # served app carries its source stamps. Every platform runs both: the parser is a native
+  # binary, so a platform is exactly where it could break.
   #
   # Across the three platforms H2 (#54) established rather than Linux alone: the committed
   # `node_modules/dogear-cli/dist/cli.js` that init writes, and npm's .cmd shim for the
@@ -545,8 +550,8 @@ jobs:
 
   # H7 (#65). Two questions with one shape, and the interesting one is not severity.
   #
-  # Only three things in this tree reach a user: magic-string and dogear-core through the
-  # plugin, and @modelcontextprotocol/sdk through the CLI. Everything else (vite, vitest,
+  # Only four things in this tree reach a user: magic-string, oxc-parser and dogear-core through
+  # the plugin, and @modelcontextprotocol/sdk through the CLI. Everything else (vite, vitest,
   # esbuild, tsup, happy-dom, prettier, typescript) is a build tool that runs on a
   # contributor's machine and is never installed by anyone downstream. So `npm audit --omit=dev`
   # is "what ships" and plain `npm audit` is "what this machine runs", and the pair of numbers
@@ -735,7 +740,8 @@ jobs:
           out.push(row('build tooling included', all))
           out.push('')
           out.push(
-            'Only `magic-string`, `dogear-core` and `@modelcontextprotocol/sdk` reach a user. ' +
+            'Only `magic-string`, `oxc-parser`, `dogear-core` and `@modelcontextprotocol/sdk` ' +
+              'reach a user. ' +
               'This job fails on **high or critical in the first row only**; a dev-tree advisory ' +
               'is reported and does not block a merge.'
           )
