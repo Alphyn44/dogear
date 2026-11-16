@@ -718,6 +718,9 @@ a list that can go stale, and those two are what stop it.
 `packages/cli/src/docs.test.ts` pins the command list on both READMEs and — since G6 — renders
 the root README's `<dogear-queue>` example through `formatQueue` and asserts the file contains
 it verbatim, so the one piece of documentation that is also an interface cannot drift.
+Since I2 it also holds the CLI README's list of agent signs to `MARKERS` in `detect.ts`,
+matched only inside the "What init writes, and when" section, because `CLAUDE.md` and
+`.mcp.json` are named elsewhere on that page and a whole-page match passes with the table gone.
 `packages/vite/src/docs.test.ts` pins the `.dogear/config.json` key table against
 `RECOGNISED_KEYS`, and reads `DEFAULT_HOSTS` out of `packages/core/src/host.ts` **as text**:
 the plugin deliberately keeps no copy of that list (serialising one would pin it — see

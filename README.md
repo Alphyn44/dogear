@@ -52,7 +52,9 @@ no agent at all rather than commit a path that cannot resolve, and says where to
 
 It is non-interactive and safe to re-run: it diffs against what is already there and
 reports only what changed. `dogear init --dry-run` shows you every change without writing
-any of them, and `dogear init --undo` takes them back out.
+any of them, and `dogear init --undo` takes them back out. Every file it can write, what
+triggers each one and how to decline it are listed in
+[What init writes, and when](packages/cli/README.md#what-init-writes-and-when).
 
 ## The loop
 

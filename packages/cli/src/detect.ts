@@ -333,8 +333,10 @@ export function cliEntry(dir: string): string {
  * simply inert. That is the cost of having no better signal, and it is bounded — the file is
  * small, repo-local, ignored by everything that does not read it, and removed by `--undo`.
  * `--agent` is the escape hatch for anyone who wants it not to happen.
+ *
+ * Exported for ./docs.test.ts, which holds the CLI README's list of signs to this one (I2, #74).
  */
-const MARKERS: readonly (readonly [Agent, string, 'dir' | 'file'])[] = [
+export const MARKERS: readonly (readonly [Agent, string, 'dir' | 'file'])[] = [
   ['claude', '.claude', 'dir'],
   ['claude', '.mcp.json', 'file'],
   ['claude', 'CLAUDE.md', 'file'],
