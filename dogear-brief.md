@@ -1271,7 +1271,8 @@ not about Next at all, and each would bite a Vite repository just as hard:
 The first is tracked as a bug (#75) and the third as a decision (#76), neither with a story ID.
 The decision is made: init pre-approves the three tools for Claude Code and for no other agent,
 and the Decisions log says why. The other two are stories. A second decision, #85, came out of
-#75's scope boundary and is in [Still open](#still-open).
+#75's scope boundary, and it is made too: a root `package.json` keeps the root's path, and the
+install advice gains the `-w` that pnpm 9 needs at a workspace root.
 
 **I1 — `dogear-vite` on Vite 7**
 - `dogear-vite` installs next to Vite 7 and its React plugin with no peer-dependency conflict.
@@ -2595,9 +2596,45 @@ instead, which keeps that rule exact for both forms.
 **The scope stops at the repository with no root manifest.** Two neighbours probably fail the
 same way and are not fixed here: a root `package.json` kept only for tooling beside a separate
 package in `web/`, and a pnpm workspace member that declares `dogear-cli`, which pnpm installs
-into that member's `node_modules` rather than the root's. Both keep the root, as before, and are
-tracked together as a decision, #85, since following the declaration there has a cost that
-staying at the root does not.
+into that member's `node_modules` rather than the root's. Both keep the root, as before, and #85
+settled that they should; see the next entry.
+
+**When the root has a `package.json`, the committed path stays at the root, even when only a
+nested package declares `dogear-cli`. Settled during #85.**
+Two layouts reach this: a root manifest kept only for tooling beside an app package such as
+`web/`, and a workspace whose member, rather than the root, declares the CLI. In both the root
+path does not resolve until the CLI is installed there too, and init says so on every run with
+the install command that fixes it. Following the nested declaration instead was weighed and
+declined, for three reasons.
+
+- **A declaration is not always the app.** A library repository whose example package declares
+  `dogear-cli` for its own reasons would have every committed path pulled away from the root,
+  toward a package nobody runs dogear from. init cannot tell that package from a tooling root's
+  `web/`, so the rule would be wrong in one of them whichever way it went.
+- **It would break repositories that already work.** Every repository initialised before now
+  carries the root path, and #75's stale-registration check would start printing a note over all
+  of them on the next run, for a path that was never wrong for them.
+- **npm and Yarn's `node-modules` linker usually make it moot.** They hoist a member's
+  dependency to the root's `node_modules`, where the root path resolves. pnpm does not by
+  default: its docs say a member's dependencies reach the root only through
+  `publicHoistPattern`, which is empty unless set. So the cost of staying at the root falls
+  almost entirely on pnpm, and there it is one install.
+
+**That install has to work when it is followed, so pnpm gets `-w` at a workspace root.**
+Checked on 2026-11-16 against a throwaway workspace with a local `file:` dependency: pnpm
+9.15.9 refuses `pnpm add -D` at the root with `ERR_PNPM_ADDING_TO_ROOT`, and 10.34.9 and 11.24.0
+accept it; all three accept `pnpm add -D -w`. So the flag is never wrong where it is added, and
+init now adds it wherever the install would run in a directory holding `pnpm-workspace.yaml`:
+both the `dogear-cli` remark and the `dogear-vite` line, read per directory
+(`pnpmWorkspaceRoot` on `CliHome` and `DetectedApp`) rather than from `Detection.workspace`,
+because #75's layout can root a pnpm workspace in `web/`. It needs pnpm to be the manager too.
+A workspace file with no lockfile yet resolves to npm, which has no such flag.
+
+**Yarn 1 has the same refusal and is left alone.** Classic Yarn refuses `yarn add` at a
+workspace root without `-W`, and Berry rejects `-W` as an unknown option, so the flag cannot be
+added for Yarn without telling the two apart from the lockfile. That is machinery for a release
+the managers suite deliberately does not cover, and Yarn 1's error names `-W` itself, so the
+failure explains its own fix.
 
 **The transform parses with `oxc-parser`, a dependency of `dogear-vite`, not with Vite's
 re-export. Settled during I1 (#73).**
@@ -2809,12 +2846,6 @@ None of these blocked M0, and none of them blocks the release.
 - **How dogear attaches to Next.js.** A package of its own or a `dogear serve` sidecar; how
   the overlay reaches the page without the plugin's injection; which production layers
   survive the move. J1 (#77) settles it, and every other story in Epic J waits on the answer.
-- **Whether `dogear init` follows a nested package's `dogear-cli` when the root has a
-  `package.json` (#85).** #75 settled the repository with no root manifest and stopped there. A
-  root kept only for tooling beside an app in `web/`, or a workspace whose member rather than
-  the root declares the CLI, still gets the root's path and a note prescribing a root install.
-  Following the declaration would fix those, at the cost of pulling every committed path toward
-  a nested package that declares the CLI for reasons of its own.
 
 ---
 

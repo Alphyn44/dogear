@@ -629,6 +629,7 @@ describe('resolveWiring() reconciling flags with detection — E3 (#28)', () => 
     state: 'local',
     manager: 'npm',
     linker: 'node-modules',
+    pnpmWorkspaceRoot: false,
   }
 
   it('uses what detection found when no flag was given', () => {
@@ -838,6 +839,17 @@ describe('scaffold() wiring an agent — E3 (#28)', () => {
       writeFileSync(join(root, lockfile), '')
 
       expect(scaffold(root).output).toContain(command)
+    })
+
+    it('adds -w at a pnpm workspace root, where pnpm 9 refuses the add without it (#85)', () => {
+      // The single-package pnpm row above is the negative: no workspace file, no `-w`.
+      withoutCli()
+      writeFileSync(join(root, 'pnpm-lock.yaml'), '')
+      writeFileSync(join(root, 'pnpm-workspace.yaml'), "packages:\n  - 'apps/*'\n")
+
+      expect(scaffold(root).output).toContain(
+        'which is not installed here. Run `pnpm add -D -w dogear-cli` so the path resolves',
+      )
     })
 
     describe('under Yarn PnP — H6 (#58)', () => {

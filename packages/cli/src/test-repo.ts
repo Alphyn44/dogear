@@ -49,6 +49,7 @@ export const NO_DETECTION: Detection = Object.freeze({
     state: 'local',
     manager: 'npm',
     linker: 'node-modules',
+    pnpmWorkspaceRoot: false,
   }),
 })
 

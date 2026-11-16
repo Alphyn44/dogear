@@ -26,6 +26,7 @@ function app(overrides: Partial<DetectedApp> = {}): DetectedApp {
     viteVersion: '^8.2.1',
     manifestDir: 'apps/web',
     manager: 'npm',
+    pnpmWorkspaceRoot: false,
     plugin: 'absent',
     // The unwired baseline: neither declared nor in the config. G3 (#44) made these two
     // independent, so every case below says which of them it is varying.
@@ -45,7 +46,13 @@ function detection(apps: readonly DetectedApp[]): Detection {
     apps,
     agents: [],
     // guidance() reads this no more than it reads `agents`; H6's remark is ./scaffold.ts's.
-    cli: { dir: '', state: 'local', manager: 'npm', linker: 'node-modules' },
+    cli: {
+      dir: '',
+      state: 'local',
+      manager: 'npm',
+      linker: 'node-modules',
+      pnpmWorkspaceRoot: false,
+    },
   }
 }
 
@@ -122,6 +129,23 @@ describe('guidance() and the install command', () => {
     expect(lines).toContain('then, in admin: npm i -D dogear-vite')
     expect(lines).toContain('then, in web: pnpm add -D dogear-vite')
   })
+
+  it.each([
+    // pnpm 9 refuses an add at a workspace root without `-w` (ERR_PNPM_ADDING_TO_ROOT); 10 and
+    // 11 accept both forms. Checked against 9.15.9, 10.34.9 and 11.24.0 during #85.
+    ['pnpm', true, 'then, at the repo root: pnpm add -D -w dogear-vite'],
+    ['pnpm', false, 'then, at the repo root: pnpm add -D dogear-vite'],
+    // A pnpm workspace file with no lockfile yet resolves to npm, and npm has no `-w` to give.
+    ['npm', true, 'then, at the repo root: npm i -D dogear-vite'],
+    ['yarn', true, 'then, at the repo root: yarn add -D dogear-vite'],
+  ] as const)(
+    'with %s and pnpmWorkspaceRoot %s, says `%s` (#85)',
+    (manager, pnpmWorkspaceRoot, expected) => {
+      const rooted = app({ manifestDir: '', manager, pnpmWorkspaceRoot })
+
+      expect(guidance(detection([rooted]))).toContain(expected)
+    },
+  )
 
   it('points at the package that owns the app, not the app directory', () => {
     // An app scaffolded into a subdirectory of an existing package has no manifest of its own.

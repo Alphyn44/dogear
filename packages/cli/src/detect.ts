@@ -142,6 +142,8 @@ export interface CliHome {
    * consequence visible at the moment it is created.
    */
   readonly linker: Linker
+  /** Whether that directory is a pnpm workspace root. See {@link DetectedApp.pnpmWorkspaceRoot}. */
+  readonly pnpmWorkspaceRoot: boolean
 }
 
 /** One directory with a Vite config in it — an app, as far as init is concerned. */
@@ -174,6 +176,19 @@ export interface DetectedApp {
    * looked for from the app's own directory.
    */
   readonly manager: Manager
+  /**
+   * Whether the directory the install runs in holds a `pnpm-workspace.yaml` (#85).
+   *
+   * **pnpm 9 refuses `pnpm add` at a workspace root without `-w`**, with `ERR_PNPM_ADDING_TO_ROOT`;
+   * 10 and 11 accept it, and all three accept `-w`. So the install line carries `-w` there, and
+   * an init whose advice fails when followed is the thing this exists to prevent. Read from the
+   * install directory rather than taken from {@link Detection.workspace}, which only looks at the
+   * git root: #75's layout can have its pnpm workspace rooted in `web/`.
+   *
+   * Only pnpm needs a flag. Yarn 1 has the same refusal with `-W`, which Yarn Berry rejects as an
+   * unknown option, and its error names the fix; see the brief's Decisions log.
+   */
+  readonly pnpmWorkspaceRoot: boolean
   /**
    * Whether that manifest declares `dogear-vite`, and in which field — E8 (#41).
    *
@@ -428,6 +443,7 @@ function cliHomeOf(
     state: cliIn(root, dir),
     manager: managerOf(root, dir),
     linker: linkerOf(root, dir),
+    pnpmWorkspaceRoot: isPnpmWorkspaceRoot(root, dir),
   }
 }
 
@@ -526,16 +542,17 @@ function workspaceOf(root: string, manifest: Manifest | undefined): Workspace {
   // Checked before `workspaces`, because a pnpm repository's root manifest may carry both — a
   // leftover `workspaces` array is inert under pnpm, and reading it would report a package
   // count pnpm is not using.
-  if (
-    isFile(join(root, 'pnpm-workspace.yaml')) ||
-    isFile(join(root, 'pnpm-workspace.yml'))
-  ) {
-    return 'pnpm'
-  }
+  if (isPnpmWorkspaceRoot(root, '')) return 'pnpm'
 
   if (patternsIn(manifest).length === 0) return 'single'
 
   return isFile(join(root, 'yarn.lock')) ? 'yarn' : 'npm'
+}
+
+/** Does `dir` hold a pnpm workspace file? Both spellings, as pnpm reads both. */
+function isPnpmWorkspaceRoot(root: string, dir: string): boolean {
+  const at = absolute(root, dir)
+  return isFile(join(at, 'pnpm-workspace.yaml')) || isFile(join(at, 'pnpm-workspace.yml'))
 }
 
 /**
@@ -678,6 +695,7 @@ function appAt(root: string, dir: string): DetectedApp | undefined {
     viteVersion: versionOf(manifest, 'vite'),
     manifestDir: nearest?.dir,
     manager: managerOf(root, nearest?.dir ?? dir),
+    pnpmWorkspaceRoot: isPnpmWorkspaceRoot(root, nearest?.dir ?? dir),
     plugin: declarationOf(manifest, PLUGIN),
     configured: mentionsDogear(join(at, name)),
   }

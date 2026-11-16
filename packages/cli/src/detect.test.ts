@@ -62,6 +62,7 @@ describe('detect() on a single-package repository', () => {
         viteVersion: '^8.2.1',
         manifestDir: '',
         manager: 'npm',
+        pnpmWorkspaceRoot: false,
         plugin: 'absent',
         configured: false,
       },
@@ -84,6 +85,7 @@ describe('detect() on a single-package repository', () => {
         viteVersion: '^8.2.1',
         manifestDir: '',
         manager: 'npm',
+        pnpmWorkspaceRoot: false,
         plugin: 'absent',
         configured: false,
       },
@@ -439,6 +441,7 @@ describe('detect() on a workspace', () => {
         viteVersion: '^8.2.1',
         manifestDir: 'examples/web',
         manager: 'npm',
+        pnpmWorkspaceRoot: false,
         plugin: 'absent',
         configured: false,
       },
@@ -514,6 +517,21 @@ describe('detect() on a pnpm workspace', () => {
 
   it('still finds the apps, because the walk covers what the globs would have', () => {
     expect(detect(root).apps.map((app) => app.dir)).toEqual(['apps/web'])
+  })
+
+  it('marks the root as a pnpm workspace root and the member as not one (#85)', () => {
+    // The member installs with a plain `pnpm add -D`; only the root needs `-w`.
+    const detected = detect(root)
+
+    expect(detected.cli?.pnpmWorkspaceRoot).toBe(true)
+    expect(detected.apps[0]?.pnpmWorkspaceRoot).toBe(false)
+  })
+
+  it('accepts the .yml spelling of the workspace file', () => {
+    rmSync(join(root, 'pnpm-workspace.yaml'))
+    file('pnpm-workspace.yml', "packages:\n  - 'apps/*'\n")
+
+    expect(detect(root).cli?.pnpmWorkspaceRoot).toBe(true)
   })
 
   it('wins over a leftover workspaces array in the root manifest', () => {
@@ -695,12 +713,40 @@ describe('detect() and where the CLI lives (#75)', () => {
   const DECLARES = { devDependencies: { 'dogear-cli': '^0.1.0' } }
 
   it('keeps the root whenever the root has a package.json, as it always did', () => {
-    // The scope line. A root manifest keeps the root even with web/ declaring the CLI; that
-    // layout and the pnpm-workspace one are follow-ups, not this ticket.
+    // #85's ruling, for a root kept only for tooling: web/ declaring the CLI does not pull the
+    // committed path away from the root. See the brief's Decisions log.
     manifest('package.json', {})
     manifest('web/package.json', DECLARES)
 
     expect(detect(root).cli?.dir).toBe('')
+  })
+
+  it('keeps the root in a pnpm workspace whose member declares the CLI (#85)', () => {
+    // The other half of the ruling. pnpm installs the member's dependency into the member, so the
+    // root path does not resolve and the remark says so, with the `-w` pnpm 9 needs there.
+    manifest('package.json', {})
+    file('pnpm-workspace.yaml', "packages:\n  - 'web'\n")
+    file('pnpm-lock.yaml', '')
+    manifest('web/package.json', DECLARES)
+
+    expect(detect(root).cli).toMatchObject({
+      dir: '',
+      state: 'absent',
+      manager: 'pnpm',
+      pnpmWorkspaceRoot: true,
+    })
+  })
+
+  it('sees a pnpm workspace rooted below the git root, where #75 puts the CLI', () => {
+    // A Go repository whose web/ is itself a pnpm workspace. Detection.workspace reads only the
+    // git root and says `single` here, which is why the flag is read per directory.
+    manifest('web/package.json', DECLARES)
+    file('web/pnpm-workspace.yaml', "packages:\n  - 'apps/*'\n")
+
+    const detected = detect(root)
+
+    expect(detected.workspace).toBe('single')
+    expect(detected.cli).toMatchObject({ dir: 'web', pnpmWorkspaceRoot: true })
   })
 
   it('keeps the root for a root package.json that does not parse', () => {
@@ -719,6 +765,7 @@ describe('detect() and where the CLI lives (#75)', () => {
       state: 'local',
       manager: 'npm',
       linker: 'node-modules',
+      pnpmWorkspaceRoot: false,
     })
   })
 

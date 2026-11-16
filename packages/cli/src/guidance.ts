@@ -34,17 +34,27 @@ import type { DetectedApp, Detection, Manager } from './detect.js'
 /** How many apps get a snippet before the rest are counted. Mirrors ./scaffold.ts's APP_CAP. */
 const CAP = 5
 
-/**
- * `pnpm add -D`, and its two counterparts.
- *
- * Exported since H6 (#58) so ./scaffold.ts's `dogear-cli` remark can name the manager the
- * repository actually uses. It said `npm i -D` to every repository until then, including the
- * pnpm and yarn ones this same table already got right one line below.
- */
-export const INSTALL: Record<Manager, string> = {
+/** `pnpm add -D`, and its two counterparts. Reached through {@link installCommand}. */
+const INSTALL: Record<Manager, string> = {
   npm: 'npm i -D',
   pnpm: 'pnpm add -D',
   yarn: 'yarn add -D',
+}
+
+/**
+ * The dev-dependency install for a package, as the user should type it.
+ *
+ * Exported since H6 (#58) so ./scaffold.ts's `dogear-cli` remark names the manager the repository
+ * actually uses. It said `npm i -D` to every repository until then, including the pnpm and yarn
+ * ones this module already got right.
+ *
+ * **`-w` at a pnpm workspace root, since #85.** pnpm 9 refuses the add there without it, and 10
+ * and 11 accept either form, so the flag is never wrong where it is added. It needs pnpm to be
+ * the manager as well: a workspace file with no lockfile yet still resolves to npm, by
+ * `managerOf`'s rule in ./detect.ts, and npm has no such flag.
+ */
+export function installCommand(manager: Manager, pnpmWorkspaceRoot: boolean): string {
+  return manager === 'pnpm' && pnpmWorkspaceRoot ? `${INSTALL.pnpm} -w` : INSTALL[manager]
 }
 
 /**
@@ -105,7 +115,10 @@ function block(app: DetectedApp): readonly string[] {
     // `then,` only reads as a sequel to the snippet above it. Standing alone it is an
     // instruction in its own right, and says so.
     const lead = app.configured ? `install it ${where(app)}` : `then, ${where(app)}`
-    lines.push('', `${lead}: ${INSTALL[app.manager]} dogear-vite`)
+    lines.push(
+      '',
+      `${lead}: ${installCommand(app.manager, app.pnpmWorkspaceRoot)} dogear-vite`,
+    )
   }
 
   return lines

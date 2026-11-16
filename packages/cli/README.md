@@ -23,8 +23,9 @@ dogear init
 
 Then follow what `init` prints: the plugin install for each app it found, and the import and
 `plugins` entry your `vite.config` needs. Install `dogear-cli` at the git root too, with
-`npm i -D dogear-cli`, or in the package that runs your app if the repository has no root
-`package.json`. The plugin is the browser half; see
+`npm i -D dogear-cli` (`pnpm add -D -w dogear-cli` at a pnpm workspace root, since pnpm 9
+refuses the add there without `-w`), or in the package that runs your app if the repository
+has no root `package.json`. The plugin is the browser half; see
 [`dogear-vite`](https://www.npmjs.com/package/dogear-vite).
 
 This package is installed **twice on purpose**: globally, so `dogear` is on your PATH, and

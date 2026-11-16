@@ -3,7 +3,7 @@ import { configFile, configRemoval } from './config.js'
 import type { Agent, CliHome, Detection, DetectedApp } from './detect.js'
 import { cliEntry, detect } from './detect.js'
 import { gitignore, gitignoreRemoval } from './gitignore.js'
-import { INSTALL, guidance } from './guidance.js'
+import { guidance, installCommand } from './guidance.js'
 import { createMcpStep, mcpRemovals } from './mcp-config.js'
 import { queueDirectory, queueDirRemoval } from './queue-dir.js'
 import { createDeregisterStep, createRegisterStep } from './register.js'
@@ -774,7 +774,7 @@ function cliNotInstalled(wiring: Wiring, detection: Detection): readonly string[
 
   if (home.state === 'local') return []
 
-  const install = `\`${INSTALL[home.manager]} dogear-cli\``
+  const install = `\`${installCommand(home.manager, home.pnpmWorkspaceRoot)} dogear-cli\``
   const fix =
     home.dir === ''
       ? `which is not installed here. Run ${install}`

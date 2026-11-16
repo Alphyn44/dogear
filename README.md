@@ -30,6 +30,9 @@ root `package.json`, in the package that runs your app):
 npm i -D dogear-vite dogear-cli
 ```
 
+At the root of a pnpm workspace, add `-w` to the `dogear-cli` install: pnpm 9 refuses to add a
+dependency there without it. `dogear init` prints the command with the flag when it applies.
+
 ```js
 import { dogear } from 'dogear-vite'
 

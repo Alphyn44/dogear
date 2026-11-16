@@ -314,6 +314,13 @@ since it never runs detection and a root-only comparison would splice a file ini
 `test-built/init.subdir.test.ts` executes the committed entries through a junction, with a
 negative control proving the root path fails there.
 
+**#85 ruled that a root `package.json` keeps the root**, even when only a nested package or a
+workspace member declares `dogear-cli`; the brief's Decisions log has why. What it changed is the
+advice: every install command goes through `installCommand(manager, pnpmWorkspaceRoot)` in
+`guidance.ts`, which adds `-w` for pnpm in a directory holding `pnpm-workspace.yaml`, because
+pnpm 9 refuses the add there without it. `pnpmWorkspaceRoot` is read per install directory on
+`CliHome` and `DetectedApp`, never from `Detection.workspace`, which only sees the git root.
+
 **E8 added a second runner phase, and `dogear init` writes nothing for it.** `guidance.ts`
 prints the `vite.config` change and the install command for every app that is not fully wired;
 it edits neither the config nor the manifest. **Fully wired is two facts, not one** — G3 (#44)
