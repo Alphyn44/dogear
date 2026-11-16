@@ -188,6 +188,44 @@ describe('createMcpStep() when it cannot edit safely', () => {
 })
 
 /**
+ * #76 pre-approves dogear's tools for Claude Code in `.claude/settings.json` and deliberately not
+ * for Cursor, whose committed allowlist would replace everyone's own. So Cursor gets a note
+ * instead, and only on the run that registers it: a note suppresses `nothing changed`, and one on
+ * every run would cost a Cursor repository its verdict forever.
+ */
+describe("createMcpStep() and Cursor's tool approvals (#76)", () => {
+  it('notes how to allow the tools on the run that registers Cursor', () => {
+    const notes = plan(['cursor'])?.notes ?? []
+
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toContain('"dogear:*"')
+    expect(notes[0]).toContain('.cursor/permissions.json')
+  })
+
+  it('says nothing on a re-run, so the verdict survives', () => {
+    run(['cursor'], '.cursor/mcp.json')
+
+    expect(plan(['cursor'])).toBeUndefined()
+  })
+
+  it.each([[['claude'] as const], [['vscode'] as const]])(
+    'says nothing for %j',
+    (agents) => {
+      expect(plan(agents)?.notes ?? []).toEqual([])
+    },
+  )
+
+  it('says nothing when Cursor could not be registered', () => {
+    seed('.cursor/mcp.json', '{ nope')
+
+    const notes = plan(['cursor'])?.notes ?? []
+
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toContain('could not be parsed')
+  })
+})
+
+/**
  * An absent local `dogear-cli` used to be noted *here*, gated on a registration being
  * written — so it fired on the run that created `.mcp.json` and never again. G3 (#44) moved it
  * to ./scaffold.ts's `remarks()`: it describes the repository rather than what this step did,
@@ -258,8 +296,10 @@ describe('createMcpStep() over a registration naming another path (#75)', () => 
     const result = plan(['claude', 'cursor'], WEB)
 
     expect(result?.change?.summary).toBe('registered dogear in .cursor/mcp.json')
-    expect(result?.notes).toHaveLength(1)
+    expect(result?.notes).toHaveLength(2)
     expect(result?.notes?.[0]).toMatch(/^\.mcp\.json registers/)
+    // And the registration of .cursor/mcp.json carries Cursor's approval note (#76).
+    expect(result?.notes?.[1]).toMatch(/^Cursor asks/)
   })
 
   it('says so when the entry names no path it can read', () => {

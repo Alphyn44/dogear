@@ -10,7 +10,7 @@ import type { Plan, Step, Undo, Wiring } from './scaffold.js'
  *
  * **This is the baseline and it is never skipped.** The brief's Delivery section puts it
  * plainly: MCP is the product, and the prompt hook is an upgrade you get where your tooling
- * allows one. So this step runs for every agent, ./hook-config.ts runs for one of them, and
+ * allows one. So this step runs for every agent, ./claude-settings.ts runs for one of them, and
  * `--no-hook` leaves an install that is complete rather than degraded.
  *
  * **Three agents, one mechanism** — a project-local JSON file naming a command to spawn. That
@@ -63,6 +63,23 @@ function server(entry: string): {
 /** The key the entry lives under, and what makes re-running a no-op. */
 const NAME = 'dogear'
 
+/**
+ * Why Cursor still asks before each dogear tool call, and what to do about it (#76).
+ *
+ * Claude Code's tools are pre-approved in `.claude/settings.json` (./claude-settings.ts), and
+ * Cursor's deliberately are not. Cursor does read a committed `.cursor/permissions.json`, but an
+ * `mcpAllowlist` there *replaces* each person's in-app MCP allowlist rather than adding to it, so
+ * writing one would clobber every clone's approvals for servers that are not dogear's. See the
+ * brief's Decisions log.
+ *
+ * **Attached to the registering run only.** A note suppresses `nothing changed`, so one printed
+ * on every run would cost a Cursor repository its verdict on every re-run. Riding on the plan
+ * that registers `.cursor/mcp.json` means it prints once, on the run the user is reading closely.
+ */
+const CURSOR_APPROVAL =
+  'Cursor asks before each dogear tool call. Add "dogear:*" to its MCP allowlist to skip that; ' +
+  "dogear does not write .cursor/permissions.json, because an allowlist there replaces everyone's own."
+
 /** One file's worth of work, decided at plan time. */
 interface Job {
   readonly file: string
@@ -84,8 +101,13 @@ export function createMcpStep(wiring: Wiring): Step {
         const outcome = planOne(root, target, wiring.entry)
 
         if (outcome === undefined) continue
-        if (typeof outcome === 'string') notes.push(outcome)
-        else jobs.push(outcome)
+        if (typeof outcome === 'string') {
+          notes.push(outcome)
+          continue
+        }
+
+        jobs.push(outcome)
+        if (agent === 'cursor') notes.push(CURSOR_APPROVAL)
       }
 
       // An absent local `dogear-cli` is **not** noted here. It is a fact about the repository
@@ -336,7 +358,7 @@ function merge(
   // Present but not an object — `{"mcpServers": null}` and friends. Declining rather than
   // inserting beside it, because a second `"mcpServers"` key *parses*: `JSON.parse` keeps the
   // last duplicate, so the guard inside `insertAt` cannot catch it and the user's own value
-  // would be silently shadowed. ./hook-config.ts has the same trap and the same answer, and
+  // would be silently shadowed. ./claude-settings.ts has the same trap and the same answer, and
   // ./malformed.test.ts covers both.
   return isObject(parsed[target.container])
     ? insertAt(source, [target.container], snippet)
@@ -430,7 +452,7 @@ type Parsed = Record<string, unknown>
 /**
  * A parsed object, or `undefined` for anything this cannot edit — including a root array.
  *
- * `stripBom` for the reason ./hook-config.ts gives: a Windows editor's byte order mark makes
+ * `stripBom` for the reason ./claude-settings.ts gives: a Windows editor's byte order mark makes
  * `JSON.parse` throw on a file that is otherwise perfectly valid. It is removed for the parse
  * and kept in the text that gets written.
  */

@@ -57,7 +57,14 @@ against what is already there and reports only what changed. It:
    does not read is a stanza that does nothing. It is delimited by
    `<!-- dogear:start -->` and `<!-- dogear:end -->`, which is what makes re-running safe.
    Claude Code additionally gets a prompt hook merged into `.claude/settings.json`,
-   merged, never clobbered.
+   merged, never clobbered, and dogear's three MCP tools added to `permissions.allow`
+   there by name, so calling them does not ask each time. Claude Code applies a committed
+   allow rule only after you accept its workspace trust dialog, which lists what the rule
+   grants. `--no-hook` keeps the permissions; a repository that already mentions
+   `mcp__dogear` in `allow`, `ask` or `deny` is left as it is. Cursor and VS Code still ask
+   before each call: init does not write Cursor's `.cursor/permissions.json`, because an
+   allowlist there replaces everyone's own (it prints how to allow `dogear:*` instead), and
+   VS Code has no per-server setting a repository can commit.
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
 5. **Appends to `.gitignore`.** `.dogear/queue.json` and `.dogear/*.tmp`, not the whole
    directory, since the config is meant to be committed.
@@ -123,7 +130,8 @@ npm uninstall dogear-vite dogear-cli
 npm uninstall -g dogear-cli
 ```
 
-`--undo` removes, in this order: Claude Code's prompt hook from `.claude/settings.json`;
+`--undo` removes, in this order: Claude Code's prompt hook and dogear's tool permissions
+from `.claude/settings.json` (only the three rules init writes, and only from `allow`);
 the MCP entry from every one of `.mcp.json`, `.cursor/mcp.json` and `.vscode/mcp.json`; the
 `<!-- dogear:start -->` stanza from `AGENTS.md` and `CLAUDE.md`; dogear's block from
 `.gitignore`; `.dogear/config.json`; the `.dogear/` directory, if that left it empty; and

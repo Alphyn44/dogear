@@ -30,7 +30,7 @@ import type { Step, Undo } from './scaffold.js'
  *
  * E6 (#39) takes this back out, and gets the easiest teardown of the six: the entry is keyed
  * by {@link registryKey}, so removal is a single key delete with no markers to scan for and
- * no formatting to preserve — the opposite of ./rules.ts and ./hook-config.ts.
+ * no formatting to preserve — the opposite of ./rules.ts and ./claude-settings.ts.
  */
 export function createRegisterStep(env: RegistryEnv): Step {
   return {
@@ -82,7 +82,7 @@ export function createRegisterStep(env: RegistryEnv): Step {
  *
  * The entry is keyed by `registryKey`, so removal is a single key delete: no markers to scan
  * for, no formatting to preserve, nothing of the user's mixed in with it. Contrast ./rules.ts
- * and ./hook-config.ts, which are most of this ticket.
+ * and ./claude-settings.ts, which are most of this ticket.
  *
  * **Last of all, mirroring {@link createRegisterStep}'s position on the way in.** It is the
  * only entry that writes outside the repository, and forgetting a repository whose teardown

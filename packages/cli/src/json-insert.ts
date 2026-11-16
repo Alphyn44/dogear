@@ -197,7 +197,7 @@ function excise(source: string, span: Span, member: Member): string {
  *
  * The BOM is stripped for the *check* and kept in the returned text, which is the whole point:
  * a file that opened with one still opens with one afterwards. Callers parse the same way — see
- * ./mcp-config.ts and ./hook-config.ts — so a BOM never reaches `JSON.parse`, which throws on it.
+ * ./mcp-config.ts and ./claude-settings.ts — so a BOM never reaches `JSON.parse`, which throws on it.
  */
 export function parseable(source: string): boolean {
   try {

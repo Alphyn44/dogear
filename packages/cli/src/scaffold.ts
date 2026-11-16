@@ -1,9 +1,9 @@
+import { claudeSettingsRemoval, createClaudeSettingsStep } from './claude-settings.js'
 import { configFile, configRemoval } from './config.js'
 import type { Agent, CliHome, Detection, DetectedApp } from './detect.js'
 import { cliEntry, detect } from './detect.js'
 import { gitignore, gitignoreRemoval } from './gitignore.js'
 import { INSTALL, guidance } from './guidance.js'
-import { createHookStep, hookRemoval } from './hook-config.js'
 import { createMcpStep, mcpRemovals } from './mcp-config.js'
 import { queueDirectory, queueDirRemoval } from './queue-dir.js'
 import { createDeregisterStep, createRegisterStep } from './register.js'
@@ -301,7 +301,7 @@ export function stepsFor(wiring: Wiring): readonly Step[] {
     configFile,
     createMcpStep(wiring),
     createRulesStep(wiring),
-    createHookStep(wiring),
+    createClaudeSettingsStep(wiring),
     gitignore,
     // `process.env` reaches the step here rather than through {@link ScaffoldOptions}, because
     // the only thing it carries is `DOGEAR_HOME` and the only caller that wants a different one
@@ -322,7 +322,9 @@ export function stepsFor(wiring: Wiring): readonly Step[] {
  * thing here that breaks something, and it breaks it in a tool the user believes they have
  * removed. So it goes before anything that could fail — `apply` stops at the first failure, and
  * the ordering rule init already follows (leave the important half done) inverts under teardown
- * into *take the dangerous half out first*.
+ * into *take the dangerous half out first*. Since #76 the same entry takes dogear's MCP tool
+ * permissions out of that file too, because one step owns `.claude/settings.json` (see
+ * ./claude-settings.ts); removing them early costs nothing.
  *
  * The rest follows the same inversion. `.dogear/config.json` must go before `.dogear/`, because
  * the directory is only removed once it is empty. The registry is last for the reason it is
@@ -332,7 +334,7 @@ export function stepsFor(wiring: Wiring): readonly Step[] {
  * `process.env` reaches ./register.ts's factory here for the reason {@link stepsFor} gives.
  */
 const UNDO_STEPS: readonly Undo[] = [
-  hookRemoval,
+  claudeSettingsRemoval,
   // Several entries each, one per file they touch, so a repository where one config is deleted
   // whole and another is spliced gets a correctly-verbed line for each. See ./mcp-config.ts.
   ...mcpRemovals,
@@ -730,7 +732,7 @@ function noViteConfig(): readonly string[] {
  * registration, correctly. What is wrong is the repository, and it stays wrong until someone
  * installs the package. So it belongs here, where it prints every run and silences nothing.
  *
- * It speaks for the **prompt hook** as well: ./hook-config.ts writes the same `CLI_ENTRY` and
+ * It speaks for the **prompt hook** as well: ./claude-settings.ts writes the same `CLI_ENTRY` and
  * had no warning of its own, and that is the worse failure of the two. An MCP server that will
  * not start is silent until a tool is called; a hook pointing at a missing file is not.
  *

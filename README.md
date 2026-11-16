@@ -100,7 +100,9 @@ Three ways, in order of preference:
 
 - **MCP.** The primary path, and it carries the whole feature set. `dogear init`
   registers the server; your agent calls `dogear_pending` to read what is waiting,
-  `dogear_resolve` to mark items done, and `dogear_prune` to drop the resolved ones.
+  `dogear_resolve` to mark items done, and `dogear_prune` to drop the resolved ones. For
+  Claude Code, init also pre-approves those three tools in `.claude/settings.json`, so
+  they run without a permission prompt once you trust the workspace.
 - **A prompt hook.** Claude Code additionally gets `dogear hook` merged into
   `.claude/settings.json`, so pending comments arrive with your next message without your
   having to ask. `dogear init --no-hook` declines it and leaves a fully working install.

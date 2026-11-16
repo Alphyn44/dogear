@@ -687,7 +687,9 @@ than commit one that cannot. #75 found this; see the Decisions log.
    `.cursor/mcp.json` or `.vscode/mcp.json` — plus an `AGENTS.md` stanza, since MCP is
    pull and needs the nudge. Claude Code additionally gets the hook merged into
    `.claude/settings.json` (merged, never clobbered); `--no-hook` declines it and leaves
-   a fully working install. `--agent=<name>` overrides detection. Amended during E3,
+   a fully working install. The same file gets dogear's three MCP tools in
+   `permissions.allow`, `--no-hook` or not, so calling them does not prompt once the
+   workspace is trusted. Added by #76; see the Decisions log. `--agent=<name>` overrides detection. Amended during E3,
    which replaced "asks which agent you use" with detection plus flags — see the
    Decisions log.
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
@@ -706,7 +708,7 @@ every change it *would* make without writing any of them. That is how step 2's r
 change is reachable from a non-interactive command; see the Decisions log.
 
 `dogear init --undo` reverses steps 3–5 and 7 in *this* repo and reports what it removed,
-taking the prompt hook out first. Step 2 does not run — detection describes a repo being set
+taking the prompt hook (and, since #76, the tool permissions beside it) out first. Step 2 does not run — detection describes a repo being set
 up — and step 6 wrote nothing to reverse. `--dry-run` applies; `--agent` and `--no-hook` are
 refused. Built by E6 (#39); see the Decisions log.
 
@@ -1266,8 +1268,10 @@ not about Next at all, and each would bite a Vite repository just as hard:
 - init wrote more than its reader expected, and the README does not say what triggers each
   write.
 
-The first is tracked as a bug (#75) and the third as a decision (#76), neither with a story ID;
-the decision is in [Still open](#still-open) until it is made. The other two are stories.
+The first is tracked as a bug (#75) and the third as a decision (#76), neither with a story ID.
+The decision is made: init pre-approves the three tools for Claude Code and for no other agent,
+and the Decisions log says why. The other two are stories. A second decision, #85, came out of
+#75's scope boundary and is in [Still open](#still-open).
 
 **I1 — `dogear-vite` on Vite 7**
 - `dogear-vite` installs next to Vite 7 and its React plugin with no peer-dependency conflict.
@@ -1424,7 +1428,7 @@ Increasing order of how much can go wrong.
 | **M5** | Release | G1–G6 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages were private and unpublished until this milestone, so `npm i -D dogear-vite` resolved to nothing and the install path M4 prints instructions for had never been run by anyone. |
 | **M6** | Testing | H1–H9 | After the release, because the release is what turned each gap here from theoretical into evidenced. Every milestone above tested what it built; this one tests the seams *between* what they built — the published tarball, the operating systems, the browser round trip — each of which currently rests on a person having checked once. |
 | **M7** | Going public | P1–P5 | Before the repository became public, because a history audit, branch protection and a disclosure policy are only worth anything before anyone can see the repository. Its stories were tracked as issues (#59 to #63) and never written into this document; what they settled is in the Decisions log and Repo and publishing. |
-| **M8** | Adoption | I1–I2, plus a bug (#75) and a decision (#76) | After going public, because the first outside adoption attempt is what found them. Each bites a repository dogear was not built against, on the host it already supports, and M9's real-project criterion needs the bug fixed first. |
+| **M8** | Adoption | I1–I2, plus a bug (#75) and two decisions (#76, #85) | After going public, because the first outside adoption attempt is what found them. Each bites a repository dogear was not built against, on the host it already supports, and M9's real-project criterion needs the bug fixed first. |
 | **M9** | Next.js | J1–J7 | After M8, because its last criterion is a real Next project whose app sits in a subdirectory, which is M8's bug. J1 is a decision and goes first: every other story in it depends on how dogear attaches to Next. |
 | — | Safety | F1–F4 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
 
@@ -2591,8 +2595,9 @@ instead, which keeps that rule exact for both forms.
 **The scope stops at the repository with no root manifest.** Two neighbours probably fail the
 same way and are not fixed here: a root `package.json` kept only for tooling beside a separate
 package in `web/`, and a pnpm workspace member that declares `dogear-cli`, which pnpm installs
-into that member's `node_modules` rather than the root's. Both keep the root, as before, and each
-is to be tracked as a bug of its own.
+into that member's `node_modules` rather than the root's. Both keep the root, as before, and are
+tracked together as a decision, #85, since following the declaration there has a cost that
+staying at the root does not.
 
 **The transform parses with `oxc-parser`, a dependency of `dogear-vite`, not with Vite's
 re-export. Settled during I1 (#73).**
@@ -2630,6 +2635,59 @@ and `test:managers` failed both Yarn legs with `YN0016 … are quarantined` whil
 installed cleanly. The `managers` job is therefore the guard for this rule, and it is left
 exactly as it is: loosening the gate in the fixture would hide the one failure a Yarn user
 would actually meet.
+
+**`dogear init` pre-approves its MCP tools for Claude Code, and only there. Settled during
+#76.**
+Every call Claude Code made to `dogear_pending`, `dogear_resolve` or `dogear_prune` asked the
+user first, because nothing allow-listed them, so the loop dogear exists for (come back, type
+"go", have the agent hold every comment) started with a permission prompt. The objection was
+that pre-approving means dogear editing a committed security setting on behalf of everyone who
+clones. Claude Code's own documentation answers it: a `permissions.allow` rule in a committed
+`.claude/settings.json` applies only after each person accepts the workspace trust dialog for
+that folder, and the dialog lists what the rule grants
+(code.claude.com/docs/en/permissions, checked 2026-09-29). So the rule is a proposal each
+person sees and accepts, not an approval made for them.
+
+**Three named rules, not `mcp__dogear__*`.** `mcp__dogear__dogear_pending`,
+`mcp__dogear__dogear_resolve` and `mcp__dogear__dogear_prune`. The server wildcard would be one
+line and would cover a tool added later, and that second property is the reason against it: a
+new tool would be pre-approved under a grant accepted before the tool existed. All three write
+nothing outside `.dogear/queue.json`, and `dogear_pending` writes nothing at all. The list is a
+literal in `claude-settings.ts` rather than derived from `TOOLS`, and a test pairs the two, so
+adding a tool fails until someone decides whether it belongs.
+
+**Written whenever Claude Code is wired, `--no-hook` included, with no flag of its own.** The
+rules are not part of the hook: declining the hook declines prompt injection, and says nothing
+about whether a tool call should prompt. The consent is the trust dialog, `--dry-run` shows the
+change first, and undo removes it. A repository that already mentions dogear's server anywhere
+in `allow`, `ask` or `deny` is left alone, because a wildcard, a tool moved to `deny`, or one
+deleted from `allow` is a decision someone made, and topping the rules up on every re-run would
+override it. Undo removes only the three exact strings, and only from `allow`. A repository
+initialised before this change gains the rules on its next `dogear init`.
+
+**One step owns `.claude/settings.json`.** The hook step became `claude-settings`, writing both
+parts. Two steps against one file would each have had to simulate the other's edit, because
+every `plan()` runs before any `apply()`: otherwise init reports `created` twice, and undo
+misjudges `deleted` against `removed`. One owner gives one report line and three whole files to
+recognise on the way out (both parts, the rules alone under `--no-hook`, and the hook alone that
+every earlier init wrote).
+
+**The server-approval prompt is left to Claude Code.** Claude Code separately asks before
+enabling any server from a project's `.mcp.json`. `enableAllProjectMcpServers` and
+`enabledMcpjsonServers` committed to the project's settings are ignored in an untrusted folder,
+by design: "a cloned repository can't approve its own servers"
+(code.claude.com/docs/en/mcp, v2.1.196 and later). init does not try.
+
+**Cursor and VS Code get nothing written, for different reasons.** Cursor does read a committed
+`.cursor/permissions.json`, but an `mcpAllowlist` there *replaces* each person's in-app MCP
+allowlist rather than adding to it (cursor.com/docs/reference/permissions), so writing one would
+clobber every clone's approvals for servers that are not dogear's. That is the thing the
+objection above feared, made real, so init instead prints how to add `dogear:*` by hand, once,
+on the run that registers `.cursor/mcp.json`. VS Code has no per-server approval a repository
+can commit: `chat.tools.global.autoApprove` approves every tool from every server, and
+`sandboxEnabled` auto-approves only on macOS and Linux. Its own prompt offers to trust all of a
+server's tools in one click, so it gets no note either. Codex does not arise, because init never
+registers dogear with it.
 
 **Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
 G5.**
@@ -2751,10 +2809,12 @@ None of these blocked M0, and none of them blocks the release.
 - **How dogear attaches to Next.js.** A package of its own or a `dogear serve` sidecar; how
   the overlay reaches the page without the plugin's injection; which production layers
   survive the move. J1 (#77) settles it, and every other story in Epic J waits on the answer.
-- **Whether `dogear init` pre-approves dogear's MCP tools (#76).** Every call from Claude Code asks
-  for permission today, because nothing adds dogear's tools to the permission allow list.
-  Pre-approving would remove the prompt, and it would also mean dogear editing a committed
-  security setting on behalf of everyone who clones the repository.
+- **Whether `dogear init` follows a nested package's `dogear-cli` when the root has a
+  `package.json` (#85).** #75 settled the repository with no root manifest and stopped there. A
+  root kept only for tooling beside an app in `web/`, or a workspace whose member rather than
+  the root declares the CLI, still gets the root's path and a note prescribing a root install.
+  Following the declaration would fix those, at the cost of pulling every committed path toward
+  a nested package that declares the CLI for reasons of its own.
 
 ---
 

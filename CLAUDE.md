@@ -166,7 +166,7 @@ the adapter (validate the flags, resolve the git root, refuse if there isn't one
 implementation through a dynamic `import()` exactly as `mcp.ts` defers to `server.ts`);
 `scaffold.ts` holds the `Step` contract and the runner, and each step lives in a module of its
 own — `queue-dir.ts`, `config.ts`, `gitignore.ts`, and E3's `mcp-config.ts`, `rules.ts` and
-`hook-config.ts`. A new step is an entry in `stepsFor`; it does not edit the runner. A step's
+`claude-settings.ts` (named `hook-config.ts` until #76). A new step is an entry in `stepsFor`; it does not edit the runner. A step's
 `plan(root, detection)` **never writes and never throws** — it returns
 `{ change?, notes? }` or `undefined` — and that is what makes both idempotency and `--dry-run`
 possible without a second traversal. Every `plan()` runs before any `apply()`, which is why
@@ -195,7 +195,7 @@ converting it through a small verb table in `scaffold.ts` that `scaffold.test.ts
 step added with an unknown verb fails rather than shipping `would created`.
 
 **E3's three steps are built per run, and none of them re-serialises the user's JSON.**
-`mcp-config.ts`, `rules.ts` and `hook-config.ts` are *factories* taking a resolved `Wiring`
+`mcp-config.ts`, `rules.ts` and `claude-settings.ts` are *factories* taking a resolved `Wiring`
 (`resolveWiring` in `scaffold.ts` reconciles `--agent`/`--no-hook` against detection), which is
 why `STEPS` became `stepsFor(wiring)` — the same shape `gitignore.ts` already used for its
 injected `GitQueries`. They read `plan()`'s `detection` argument not at all: folding a flag into
@@ -229,11 +229,28 @@ for a new step, so `scaffold.test.ts` pairs the two lists by name in both direct
 one past-tense summary and undo has two verbs — `deleted` for a whole file, `removed` for a
 splice — and a repo with both kinds needs a line of each.
 
+**#76 made `.claude/settings.json` one step's file, holding two parts.** `claude-settings.ts`
+writes the prompt hook *and* `permissions.allow` rules for dogear's three MCP tools, as one
+`Step` and one `Undo` named `claude-settings`. Two steps would each have had to simulate the
+other's edit, since every `plan()` runs before any `apply()`, to report `created` against
+`merged` and `deleted` against `removed`. Three rules. **The rules are a literal `ALLOW`,
+never derived from `TOOLS`**, and `claude-settings.test.ts` pairs them, so a new tool fails a
+test instead of being pre-approved in every repo initialised after it ships. **Any rule naming
+`mcp__dogear` in `allow`, `ask` or `deny` means someone decided**, so the rules are not
+topped up; undo removes only the three exact strings, only from `allow`. And **the rules are
+not the hook**: `--no-hook` still writes them, a part that cannot be placed becomes a note
+without blocking the other, and undo recognises three fresh files (both parts, rules only, and
+the hook-only file every init before #76 wrote). Cursor gets a `Plan.note` from
+`mcp-config.ts` instead, attached to the run that registers it so re-runs keep their verdict;
+see the brief's Decisions log for why neither Cursor nor VS Code gets a file written.
+
 **`removeAt` is `insertAt`'s mirror and shares its scanner; `pruneEmpty` is the cascade after
 it.** One asymmetry: `insertAt`'s path names the *container*, `removeAt`'s names the *member*.
 A file is deleted **only when it is byte-identical to what init writes fresh** — anything else
-is spliced. Two limits, both found by running `formats.test.ts` rather than predicted: a file
-that was `{}` before init is indistinguishable from one init created, and `pruneEmpty` takes an
+is spliced. Two limits, both found by running `formats.test.ts` rather than predicted: a
+`.mcp.json` that was `{}` before init is indistinguishable from one init created (a
+`settings.json` no longer is, since #76 merges its two parts in the opposite order to the fresh
+file), and `pruneEmpty` takes an
 *empty* `"UserPromptSubmit": []` that predated init with dogear's own. Both cost nothing —
 they configured nothing — and the alternative is litter in the common case. **`.dogear/queue.json`
 is never touched**; `.dogear/` goes only once `configRemoval` has emptied it, which is why

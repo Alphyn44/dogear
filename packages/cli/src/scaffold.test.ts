@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { CONFIG_FILE, QUEUE_DIR, registryPath, shortenHome } from 'dogear-queue'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { ALLOW } from './claude-settings.js'
 import type { Agent, CliHome, Detection } from './detect.js'
 import { CLI_ENTRY, cliEntry } from './detect.js'
 import type { Wiring } from './scaffold.js'
@@ -725,8 +726,26 @@ describe('scaffold() wiring an agent — E3 (#28)', () => {
     expect(result.exitCode).toBe(0)
     expect(existsSync(join(root, '.mcp.json'))).toBe(true)
     expect(existsSync(join(root, 'AGENTS.md'))).toBe(true)
-    expect(existsSync(join(root, '.claude'))).toBe(false)
     expect(result.output).not.toContain('prompt hook')
+
+    // #76: the tool permissions are not part of the hook, so declining it keeps them.
+    const settings = JSON.parse(
+      readFileSync(join(root, '.claude', 'settings.json'), 'utf8'),
+    ) as Record<string, unknown>
+    expect(settings).toEqual({ permissions: { allow: [...ALLOW] } })
+  })
+
+  it('adds the tool permissions to a repository initialised before #76', () => {
+    scaffold(root)
+    const path = join(root, '.claude', 'settings.json')
+    const legacy = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    delete legacy.permissions
+    writeFileSync(path, `${JSON.stringify(legacy, null, 2)}\n`)
+
+    const line = "dogear's MCP tool permissions to .claude/settings.json"
+    expect(scaffold(root, { dryRun: true }).output).toContain(`  would add ${line}`)
+    expect(scaffold(root).output).toContain(`  added ${line}`)
+    expect(scaffold(root).output).toContain('nothing changed')
   })
 
   it('wires only what --agent named', () => {
@@ -1020,7 +1039,7 @@ describe('scaffold() in a repository whose only package.json is in web/ (#75)', 
       )
     })
 
-    it('notes both files, and leaves them exactly as they were', () => {
+    it('notes both files, and leaves both registrations exactly as they were', () => {
       const mcp = readFileSync(join(root, '.mcp.json'), 'utf8')
       const settings = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
 
@@ -1032,7 +1051,15 @@ describe('scaffold() in a repository whose only package.json is in web/ (#75)', 
       )
       expect(output).toContain('`dogear init --undo` and then `dogear init`')
       expect(readFileSync(join(root, '.mcp.json'), 'utf8')).toBe(mcp)
-      expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe(settings)
+
+      // The stale hook is noted, never rewritten. The tool permissions an init before #76 did
+      // not write are independent of the path, so they land beside it; the hook's bytes do not
+      // move, which is what "leaves it as it was" means for the part that is stale.
+      const after = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+      expect(after.startsWith(settings.slice(0, -1))).toBe(true)
+      expect(
+        (JSON.parse(after) as { permissions?: { allow?: unknown } }).permissions?.allow,
+      ).toEqual(ALLOW)
     })
 
     it('is repaired by the round trip the note names', () => {
