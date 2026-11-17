@@ -208,7 +208,7 @@ describe('installed with yarn (PnP linker)', () => {
   })
 
   it('does not tell the user to install what they have already installed', () => {
-    // The PnP arm is checked before `wiring.cli` in scaffold.ts's remark, and this is what that
+    // The PnP arm is checked before `home.state` in scaffold.ts's remark, and this is what that
     // ordering buys: `yarn add -D dogear-cli` is advice this repository has already followed.
     expect(report).not.toContain('add -D dogear-cli')
   })

@@ -3,7 +3,8 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { createHookStep } from './hook-config.js'
+import { ALLOW, createClaudeSettingsStep } from './claude-settings.js'
+import { CLI_ENTRY } from './detect.js'
 import { createMcpStep } from './mcp-config.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
@@ -36,10 +37,10 @@ afterEach(() => {
   removeRepo(root)
 })
 
-const WIRING: Wiring = { agents: ['claude'], hook: true, cli: 'local' }
+const WIRING: Wiring = { agents: ['claude'], hook: true, entry: CLI_ENTRY, withheld: [] }
 
 function hookPlan(): Plan | undefined {
-  return createHookStep(WIRING).plan(root, NO_DETECTION)
+  return createClaudeSettingsStep(WIRING).plan(root, NO_DETECTION)
 }
 
 function mcpPlan(): Plan | undefined {
@@ -82,13 +83,18 @@ describe('the prompt hook against a settings.json with wrong-typed keys', () => 
     },
   ]
 
-  it.each(cases)('declines and notes when $name', ({ contents }) => {
+  it.each(cases)('declines the hook and notes when $name', ({ contents }) => {
     seedSettings(contents)
 
     const result = hookPlan()
 
-    expect(result?.change).toBeUndefined()
+    // The permission rules are independent of the hook (#76), so they still land; only the
+    // hook's part is declined, and the note says which.
+    expect(result?.change?.summary).toBe(
+      "added dogear's MCP tool permissions to .claude/settings.json",
+    )
     expect(result?.notes?.[0]).toContain('.claude/settings.json')
+    expect(result?.notes?.[0]).toContain('no prompt hook')
     expect(settings()).toBe(contents)
   })
 
@@ -101,6 +107,52 @@ describe('the prompt hook against a settings.json with wrong-typed keys', () => 
 
     expect(occurrences(settings(), 'hooks')).toBeLessThanOrEqual(1)
     expect(occurrences(settings(), 'UserPromptSubmit')).toBeLessThanOrEqual(1)
+    expect(settings()).not.toContain('dogear-cli')
+  })
+})
+
+describe('the permission rules against a settings.json with wrong-typed keys (#76)', () => {
+  const cases: readonly { readonly name: string; readonly contents: string }[] = [
+    { name: 'permissions is a string', contents: '{\n  "permissions": "nope"\n}\n' },
+    { name: 'permissions is null', contents: '{\n  "permissions": null\n}\n' },
+    { name: 'permissions is an array', contents: '{\n  "permissions": []\n}\n' },
+    {
+      name: 'allow is a string',
+      contents: '{\n  "permissions": {\n    "allow": "nope"\n  }\n}\n',
+    },
+    {
+      name: 'allow is an object',
+      contents: '{\n  "permissions": {\n    "allow": {}\n  }\n}\n',
+    },
+    {
+      name: 'allow is null',
+      contents: '{\n  "permissions": {\n    "allow": null\n  }\n}\n',
+    },
+  ]
+
+  it.each(cases)(
+    'declines the rules, names them, and still merges the hook when $name',
+    ({ contents }) => {
+      seedSettings(contents)
+
+      const result = hookPlan()
+
+      expect(result?.change?.summary).toBe(
+        'merged the prompt hook into .claude/settings.json',
+      )
+      expect(result?.notes?.[0]).toContain('"permissions"')
+      for (const rule of ALLOW) expect(result?.notes?.[0]).toContain(rule)
+    },
+  )
+
+  it.each(cases)('never writes a duplicate key when $name', ({ contents }) => {
+    seedSettings(contents)
+
+    hookPlan()?.change?.apply()
+
+    expect(occurrences(settings(), 'permissions')).toBe(1)
+    expect(occurrences(settings(), 'allow')).toBeLessThanOrEqual(1)
+    expect(settings()).not.toContain('mcp__dogear')
   })
 })
 

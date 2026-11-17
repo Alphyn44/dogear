@@ -135,7 +135,9 @@ describe('undoing an init on a repository that has one', () => {
     const { output, exitCode } = unscaffold(root)
 
     expect(exitCode).toBe(0)
-    expect(output).toContain('removed the prompt hook from .claude/settings.json')
+    expect(output).toContain(
+      "removed the prompt hook and dogear's MCP tool permissions from .claude/settings.json",
+    )
     expect(output).toContain('removed dogear from .mcp.json')
     expect(output).toContain("removed dogear's stanza from AGENTS.md")
     expect(output).toContain("removed dogear's rules from .gitignore")
@@ -215,7 +217,9 @@ describe('undoing under --dry-run', () => {
     const { output } = unscaffold(root, { dryRun: true })
 
     expect(output).toContain('dry run — nothing was written')
-    expect(output).toContain('would remove the prompt hook from .claude/settings.json')
+    expect(output).toContain(
+      "would remove the prompt hook and dogear's MCP tool permissions from .claude/settings.json",
+    )
     expect(output).toContain(`would delete ${QUEUE_DIR}/config.json`)
     // The verb table is what stands between this and `would removed`, which is why every
     // teardown verb has an entry — see ./scaffold.test.ts.

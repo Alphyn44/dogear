@@ -23,11 +23,15 @@ dogear init
 
 `dogear init` finds your git root, detects your setup, registers dogear's MCP server with
 your agent, and prints the import and `plugins` entry your `vite.config` needs. Install the
-plugin where your app lives, and `dogear-cli` at the git root:
+plugin where your app lives, and `dogear-cli` at the git root (or, if the repository has no
+root `package.json`, in the package that runs your app):
 
 ```sh
 npm i -D dogear-vite dogear-cli
 ```
+
+At the root of a pnpm workspace, add `-w` to the `dogear-cli` install: pnpm 9 refuses to add a
+dependency there without it. `dogear init` prints the command with the flag when it applies.
 
 ```js
 import { dogear } from 'dogear-vite'
@@ -43,9 +47,17 @@ point at `node_modules/dogear-cli/dist/cli.js`, a repo-relative path, so that th
 for everyone who clones the repository rather than only on the machine that ran `init`.
 Without the local copy the MCP server cannot start.
 
+A repository with no root `package.json` (a Go service with its frontend in `web/`, say) has
+no root `node_modules` for that path to reach, so `init` points the entries through the
+package that declares `dogear-cli` instead, `web/node_modules/dogear-cli/dist/cli.js`, and
+names that directory on a `cli:` line in its report. If no package declares it, `init` wires
+no agent at all rather than commit a path that cannot resolve, and says where to add it.
+
 It is non-interactive and safe to re-run: it diffs against what is already there and
 reports only what changed. `dogear init --dry-run` shows you every change without writing
-any of them, and `dogear init --undo` takes them back out.
+any of them, and `dogear init --undo` takes them back out. Every file it can write, what
+triggers each one and how to decline it are listed in
+[What init writes, and when](packages/cli/README.md#what-init-writes-and-when).
 
 ## The loop
 
@@ -93,7 +105,9 @@ Three ways, in order of preference:
 
 - **MCP.** The primary path, and it carries the whole feature set. `dogear init`
   registers the server; your agent calls `dogear_pending` to read what is waiting,
-  `dogear_resolve` to mark items done, and `dogear_prune` to drop the resolved ones.
+  `dogear_resolve` to mark items done, and `dogear_prune` to drop the resolved ones. For
+  Claude Code, init also pre-approves those three tools in `.claude/settings.json`, so
+  they run without a permission prompt once you trust the workspace.
 - **A prompt hook.** Claude Code additionally gets `dogear hook` merged into
   `.claude/settings.json`, so pending comments arrive with your next message without your
   having to ask. `dogear init --no-hook` declines it and leaves a fully working install.
@@ -193,7 +207,9 @@ prints starts with `[dogear]`, so that is the first place to look.
 **The MCP server will not start.** Almost always the local install: the entries `dogear
 init` writes are committed and point at `node_modules/dogear-cli/dist/cli.js`, a
 repo-relative path, so `npm i -D dogear-cli` has to have happened **at the git root** of
-this repository, not in an app subdirectory. A global install alone puts `dogear` on your
+this repository, not in an app subdirectory. The exception is a repository with no root
+`package.json`, where the entries run through the package `init` named on its `cli:` line,
+and the install belongs there. A global install alone puts `dogear` on your
 PATH and leaves that path unresolvable. `dogear init` says so in a note when it wires an
 agent and nothing in the repository provides that file. npm, pnpm and Yarn's `node-modules`
 linker all place a direct dependency at the top level, so that path holds under each — CI
@@ -213,7 +229,7 @@ confirmation that it did.
 
 ## Requirements
 
-Node `^20.19.0 || >=22.12.0`, and Vite 8 for the plugin.
+Node `^20.19.0 || >=22.12.0`, and Vite 7 or 8 for the plugin.
 
 Firefox, Chrome and Edge. Firefox is the point: every comparable click-to-annotate tool is
 a Chromium extension.

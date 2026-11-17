@@ -23,7 +23,9 @@ dogear init
 
 Then follow what `init` prints: the plugin install for each app it found, and the import and
 `plugins` entry your `vite.config` needs. Install `dogear-cli` at the git root too, with
-`npm i -D dogear-cli`. The plugin is the browser half; see
+`npm i -D dogear-cli` (`pnpm add -D -w dogear-cli` at a pnpm workspace root, since pnpm 9
+refuses the add there without `-w`), or in the package that runs your app if the repository
+has no root `package.json`. The plugin is the browser half; see
 [`dogear-vite`](https://www.npmjs.com/package/dogear-vite).
 
 This package is installed **twice on purpose**: globally, so `dogear` is on your PATH, and
@@ -31,6 +33,12 @@ locally, because the MCP server and prompt-hook entries `init` writes are commit
 point at `node_modules/dogear-cli/dist/cli.js`. That path is repo-relative so it resolves
 for everyone who clones the repository. An absolute path out of one machine's npm prefix
 would be broken for everyone else. Without the local copy the MCP server cannot start.
+
+In a repository with no root `package.json` there is no root `node_modules` for that path to
+reach, so `init` writes it through the package that declares `dogear-cli` instead (for
+example `web/node_modules/dogear-cli/dist/cli.js`) and reports that directory on its `cli:`
+line. If nothing declares it, `init` wires no agent rather than commit a path that cannot
+resolve, and says where to add it.
 
 ## Commands
 
@@ -43,14 +51,18 @@ against what is already there and reports only what changed. It:
    depends on it.
 2. **Detects your setup.** Vite config, framework, workspace layout, how many apps, and
    which agent the repository shows signs of using.
-3. **Wires that agent.** Every agent it wires gets the MCP server registered (`.mcp.json`,
-   `.cursor/mcp.json` or `.vscode/mcp.json`), plus a short stanza in your agent rules
-   file, since MCP is a pull surface and needs the nudge. The stanza goes in `AGENTS.md`,
-   or in `CLAUDE.md` if you have one and no `AGENTS.md`: a stanza in a file your agent
-   does not read is a stanza that does nothing. It is delimited by
-   `<!-- dogear:start -->` and `<!-- dogear:end -->`, which is what makes re-running safe.
-   Claude Code additionally gets a prompt hook merged into `.claude/settings.json`,
-   merged, never clobbered.
+3. **Wires those agents.** Every agent it wires gets the MCP server registered in that
+   agent's config, plus a short stanza in your agent rules file, since MCP is a pull
+   surface and needs the nudge. The stanza is delimited by `<!-- dogear:start -->` and
+   `<!-- dogear:end -->`, which is what makes re-running safe. Claude Code additionally
+   gets a prompt hook and dogear's three MCP tools in `permissions.allow`, both merged into
+   `.claude/settings.json`, never clobbered, so calling the tools does not ask each time.
+   Claude Code applies a committed allow rule only after you accept its workspace trust
+   dialog, which lists what the rule grants. Cursor and VS Code still ask before each call:
+   init does not write Cursor's `.cursor/permissions.json`, because an allowlist there
+   replaces everyone's own (it prints how to allow `dogear:*` instead), and VS Code has no
+   per-server setting a repository can commit. Which agents it wires, and which files that
+   touches, are under [What init writes, and when](#what-init-writes-and-when).
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
 5. **Appends to `.gitignore`.** `.dogear/queue.json` and `.dogear/*.tmp`, not the whole
    directory, since the config is meant to be committed.
@@ -69,6 +81,49 @@ An argument it does not recognise is an error, not something ignored: a mistyped
 was quietly dropped would report `nothing changed` over a repository it never configured
 the way you asked. `--undo` takes neither `--agent` nor `--no-hook`, because those choose
 what to wire and undo removes all of it.
+
+#### What init writes, and when
+
+Paths are relative to the git root, except the last. Run `dogear init --dry-run` to see
+which of these a run would touch in your repository before it touches any.
+
+| File | Written when | To decline it |
+| --- | --- | --- |
+| `.dogear/config.json`, in a new `.dogear/` | It does not exist yet | Not optional: the plugin reads this repository's settings from it |
+| `.gitignore` | Git does not already ignore `.dogear/queue.json`. Two rules are appended under a `# dogear` header | Ignore `.dogear/queue.json` and `.dogear/*.tmp` yourself first, and init leaves the file alone |
+| `.mcp.json` | Claude Code is wired | Name the agents you do want with `--agent` |
+| `.claude/settings.json` | Claude Code is wired. It gets a `UserPromptSubmit` hook, and `permissions.allow` rules for `mcp__dogear__dogear_pending`, `mcp__dogear__dogear_resolve` and `mcp__dogear__dogear_prune` | `--no-hook` skips the hook and keeps the rules. A rule naming `mcp__dogear` in `allow`, `ask` or `deny` means someone already decided, and init adds none |
+| `.cursor/mcp.json` | Cursor is wired | Name the agents you do want with `--agent` |
+| `.vscode/mcp.json` | VS Code is wired | Name the agents you do want with `--agent` |
+| The rules stanza, in `AGENTS.md` or `CLAUDE.md` | Any agent is wired, `--agent=claude` included | Only `--agent=none`, which wires no agent at all |
+| `~/.dogear/projects.json` | This repository is not registered yet. It is init's one write outside the repository, and it is what `dogear status` reads | Not optional. `DOGEAR_HOME` moves it |
+
+The stanza's file depends on which files exist, not on which agent is wired, so `--agent`
+never changes it. It goes in `AGENTS.md` if there is one, otherwise in `CLAUDE.md` if there
+is one, and otherwise init creates `AGENTS.md`. A repository that keeps its agent
+instructions in `CLAUDE.md` gets the stanza there, because a stanza in a file your agent
+does not read is a stanza that does nothing.
+
+Which agents are wired comes from signs at the git root:
+
+| Agent | A sign of it |
+| --- | --- |
+| Claude Code | a `.claude/` directory, a `.mcp.json` file, or a `CLAUDE.md` file |
+| Cursor | a `.cursor/` directory |
+| VS Code | a `.vscode/` directory |
+
+- **A `.vscode/` directory is enough on its own**, even one holding nothing but editor
+  settings, so most repositories that have one get a `.vscode/mcp.json`. It does nothing
+  for anyone not using VS Code's agent; `--agent=claude`, or whichever agents you do use,
+  leaves it out.
+- **With no sign at all, init wires Claude Code.** `.mcp.json` at the root is the closest
+  thing to a portable default.
+- **`--agent` replaces what was detected**, it does not add to it.
+- A sign counts only as the kind listed: a *file* named `.vscode` is not one.
+
+init prints each agent it found beside the sign that triggered it, on its `agent:` line,
+before it lists a single change. None of the agent rows apply when `dogear-cli` has nowhere
+to live (see [Install](#install)): init then wires no agent and says why.
 
 ### `dogear hook`
 
@@ -116,7 +171,8 @@ npm uninstall dogear-vite dogear-cli
 npm uninstall -g dogear-cli
 ```
 
-`--undo` removes, in this order: Claude Code's prompt hook from `.claude/settings.json`;
+`--undo` removes, in this order: Claude Code's prompt hook and dogear's tool permissions
+from `.claude/settings.json` (only the three rules init writes, and only from `allow`);
 the MCP entry from every one of `.mcp.json`, `.cursor/mcp.json` and `.vscode/mcp.json`; the
 `<!-- dogear:start -->` stanza from `AGENTS.md` and `CLAUDE.md`; dogear's block from
 `.gitignore`; `.dogear/config.json`; the `.dogear/` directory, if that left it empty; and

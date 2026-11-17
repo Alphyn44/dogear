@@ -10,8 +10,9 @@ import { defineConfig } from 'vitest/config'
  * all passes all nine steps. The suite under ./test-packed installs the real tarballs
  * somewhere npm has to obey the manifest instead.
  *
- * **Deliberately not part of `npm run verify`.** The scratch install reaches the registry for
- * magic-string, the MCP SDK and vite, and verify.yml is called by release.yml — a release must
+ * **Deliberately not part of `npm run verify`.** The scratch installs reach the registry for
+ * magic-string, oxc-parser, the MCP SDK, and I1's (#73) two Vite majors with their React
+ * plugins and React itself, and verify.yml is called by release.yml — a release must
  * not be able to fail because a registry was slow. CI runs this as its own job for the same
  * reason #65 gives for keeping an audit out of those nine steps.
  *

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { formatQueue } from 'dogear-queue/format'
 import { describe, expect, it } from 'vitest'
 
+import { MARKERS } from './detect.js'
 import { COMMANDS, usage } from './run.js'
 
 /**
@@ -147,4 +148,38 @@ describe('the dogear-cli README', () => {
     expect(usage()).toContain('your agent runs this, not you')
     expect(readme).toContain('Your agent runs this, not you')
   })
+})
+
+/**
+ * I2 (#74): the page a reader consults *before* running init names every sign of an agent.
+ *
+ * An outside adopter got a `.vscode/mcp.json` because their repository had a `.vscode/` for
+ * editor settings, and nothing they could read beforehand said that would happen. The list
+ * is {@link MARKERS}, so a new sign fails here instead of wiring an agent nobody was told about.
+ *
+ * Scoped to the section rather than the whole page, because `CLAUDE.md` and `.mcp.json` are
+ * named elsewhere in the README for other reasons, and a whole-page match would keep passing
+ * with the table deleted.
+ */
+describe('the dogear-cli README on what init writes', () => {
+  const HEADING = '#### What init writes, and when'
+  const readme = read(CLI_README)
+  const start = readme.indexOf(HEADING)
+  const rest = readme.slice(start + HEADING.length)
+  const end = rest.search(/^#{1,4} /m)
+  const section = start === -1 ? '' : rest.slice(0, end === -1 ? undefined : end)
+
+  it('has the section, and a list to hold it to', () => {
+    expect(section.length).toBeGreaterThan(0)
+    expect(MARKERS.length).toBeGreaterThan(0)
+  })
+
+  // Spelled as init prints it on its `agent:` line, with a slash on a directory. That is the
+  // rule `agentsIn` applies in ./detect.ts.
+  it.each(MARKERS.map(([, marker, kind]) => (kind === 'dir' ? `${marker}/` : marker)))(
+    'names `%s` as a sign of an agent',
+    (marker) => {
+      expect(section).toContain(`\`${marker}\``)
+    },
+  )
 })

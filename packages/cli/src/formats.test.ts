@@ -3,7 +3,12 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { createHookStep, hookRemoval } from './hook-config.js'
+import {
+  ALLOW,
+  claudeSettingsRemoval,
+  createClaudeSettingsStep,
+} from './claude-settings.js'
+import { CLI_ENTRY } from './detect.js'
 import { createMcpStep, mcpRemovals } from './mcp-config.js'
 import type { Plan, Wiring } from './scaffold.js'
 import { createRepo, NO_DETECTION, removeRepo } from './test-repo.js'
@@ -32,10 +37,10 @@ afterEach(() => {
   removeRepo(root)
 })
 
-const WIRING: Wiring = { agents: ['claude'], hook: true, cli: 'local' }
+const WIRING: Wiring = { agents: ['claude'], hook: true, entry: CLI_ENTRY, withheld: [] }
 
 function hookPlan(): Plan | undefined {
-  return createHookStep(WIRING).plan(root, NO_DETECTION)
+  return createClaudeSettingsStep(WIRING).plan(root, NO_DETECTION)
 }
 
 function seedSettings(contents: string): void {
@@ -49,6 +54,7 @@ function settings(): string {
 
 interface Settings {
   readonly marker?: string
+  readonly permissions?: { readonly allow?: readonly string[] }
   readonly hooks?: { readonly UserPromptSubmit?: readonly unknown[] }
 }
 
@@ -57,7 +63,7 @@ function parsed(): Settings {
   return JSON.parse(settings().replace(/^﻿/, '')) as Settings
 }
 
-describe('the prompt hook across the formats a real settings.json comes in', () => {
+describe('the prompt hook and permission rules across the formats a real settings.json comes in', () => {
   const cases: readonly {
     readonly name: string
     readonly before: string
@@ -76,8 +82,9 @@ describe('the prompt hook across the formats a real settings.json comes in', () 
      *   meaning in the rare one.
      * - `deleted` — once wired, the file is byte-identical to what init writes into a
      *   repository that had none, so undo cannot tell it apart from one init created and
-     *   removes it whole. Only reachable from a file that was `{}` or an empty container to
-     *   begin with, which is to say from a file that configured nothing.
+     *   removes it whole. Only reachable from a file that configured nothing. Since #76 no row
+     *   here reaches it: a merge places the hook before the rules and a fresh file writes them
+     *   the other way round, so even `{}` comes back as `{}` rather than being deleted.
      */
     readonly outcome?: 'emptied' | 'deleted'
   }[] = [
@@ -133,7 +140,40 @@ describe('the prompt hook across the formats a real settings.json comes in', () 
       name: 'an entirely empty object',
       before: '{}\n',
       keep: '',
-      outcome: 'deleted',
+    },
+    // #76's shapes: someone else's allow rules, in the layouts a hand-written list comes in.
+    {
+      name: 'an allow list, one rule per line',
+      before: '{\n  "permissions": {\n    "allow": [\n      "Read"\n    ]\n  }\n}\n',
+      keep: '      "Read"',
+    },
+    {
+      name: 'an allow list written inline',
+      before: '{\n  "permissions": {\n    "allow": ["Read", "Glob"]\n  }\n}\n',
+      keep: '    "allow": ["Read", "Glob"',
+    },
+    {
+      name: 'deny rules and no allow list',
+      before: '{\n  "permissions": {\n    "deny": ["Bash(curl:*)"]\n  }\n}\n',
+      keep: '    "deny": ["Bash(curl:*)"]',
+    },
+    {
+      name: 'an allow list, CRLF',
+      before:
+        '{\r\n  "permissions": {\r\n    "allow": [\r\n      "Read"\r\n    ]\r\n  }\r\n}\r\n',
+      keep: '      "Read"',
+    },
+    {
+      name: 'an empty allow list already present',
+      before: '{\n  "marker": "keep me",\n  "permissions": {\n    "allow": []\n  }\n}\n',
+      keep: '  "marker": "keep me",',
+      outcome: 'emptied',
+    },
+    {
+      name: 'an empty permissions object',
+      before: '{\n  "marker": "keep me",\n  "permissions": {}\n}\n',
+      keep: '  "marker": "keep me",',
+      outcome: 'emptied',
     },
     {
       name: 'an empty UserPromptSubmit array already present',
@@ -159,6 +199,7 @@ describe('the prompt hook across the formats a real settings.json comes in', () 
 
     expect(() => parsed()).not.toThrow()
     expect(parsed().hooks?.UserPromptSubmit).toHaveLength(1)
+    expect(parsed().permissions?.allow).toEqual(expect.arrayContaining([...ALLOW]))
   })
 
   it.each(cases)('wires $name without disturbing what was there', ({ before, keep }) => {
@@ -191,7 +232,7 @@ describe('the prompt hook across the formats a real settings.json comes in', () 
     hookPlan()?.change?.apply()
     expect(settings()).not.toBe(before)
 
-    hookRemoval.plan(root)?.change?.apply()
+    claudeSettingsRemoval.plan(root)?.change?.apply()
 
     if (outcome === 'deleted') {
       expect(existsSync(join(root, '.claude', 'settings.json'))).toBe(false)
@@ -213,12 +254,13 @@ describe('the prompt hook across the formats a real settings.json comes in', () 
   it.each(cases)('leaves nothing of dogear in $name', ({ before, outcome }) => {
     seedSettings(before)
     hookPlan()?.change?.apply()
-    hookRemoval.plan(root)?.change?.apply()
+    claudeSettingsRemoval.plan(root)?.change?.apply()
 
     if (outcome === 'deleted') return
 
     expect(settings()).not.toContain('dogear')
     expect(settings()).not.toContain('UserPromptSubmit')
+    if (!before.includes('"permissions"')) expect(settings()).not.toContain('permissions')
   })
 })
 

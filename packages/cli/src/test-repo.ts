@@ -41,12 +41,16 @@ import type { Detection } from './detect.js'
  */
 export const NO_DETECTION: Detection = Object.freeze({
   workspace: 'single',
-  manager: 'npm',
-  linker: 'node-modules',
   packages: undefined,
   apps: Object.freeze([]),
   agents: Object.freeze([]),
-  cli: 'local',
+  cli: Object.freeze({
+    dir: '',
+    state: 'local',
+    manager: 'npm',
+    linker: 'node-modules',
+    pnpmWorkspaceRoot: false,
+  }),
 })
 
 /** Env keys {@link isolateGitConfig} overwrites, so the caller can put them back. */

@@ -669,6 +669,14 @@ name. G3 (#44) found this by running the install path: without the local copy th
 does not start and the prompt hook fails on every prompt, which is why `init` says so — see
 the Decisions log.
 
+**Where the local copy goes depends on whether the repository has a root `package.json`.** With
+one, it is the root, and the path is `node_modules/dogear-cli/dist/cli.js`. Without one (a Go
+repository with its frontend in `web/`, say) there is no root `node_modules` to install into, so
+init points through the package that declares `dogear-cli` instead:
+`web/node_modules/dogear-cli/dist/cli.js`. If no package declares it and no Vite app has a
+package of its own, no path init could commit would resolve, and it wires no agent at all rather
+than commit one that cannot. #75 found this; see the Decisions log.
+
 `dogear init` is non-interactive and idempotent. It:
 
 1. **Finds the git root.** Refuses to run outside a repo — the queue location depends
@@ -679,7 +687,9 @@ the Decisions log.
    `.cursor/mcp.json` or `.vscode/mcp.json` — plus an `AGENTS.md` stanza, since MCP is
    pull and needs the nudge. Claude Code additionally gets the hook merged into
    `.claude/settings.json` (merged, never clobbered); `--no-hook` declines it and leaves
-   a fully working install. `--agent=<name>` overrides detection. Amended during E3,
+   a fully working install. The same file gets dogear's three MCP tools in
+   `permissions.allow`, `--no-hook` or not, so calling them does not prompt once the
+   workspace is trusted. Added by #76; see the Decisions log. `--agent=<name>` overrides detection. Amended during E3,
    which replaced "asks which agent you use" with detection plus flags — see the
    Decisions log.
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
@@ -698,7 +708,7 @@ every change it *would* make without writing any of them. That is how step 2's r
 change is reachable from a non-interactive command; see the Decisions log.
 
 `dogear init --undo` reverses steps 3–5 and 7 in *this* repo and reports what it removed,
-taking the prompt hook out first. Step 2 does not run — detection describes a repo being set
+taking the prompt hook (and, since #76, the tool permissions beside it) out first. Step 2 does not run — detection describes a repo being set
 up — and step 6 wrote nothing to reverse. `--dry-run` applies; `--agent` and `--no-hook` are
 refused. Built by E6 (#39); see the Decisions log.
 
@@ -902,6 +912,9 @@ Decisions log)*
 **E3 — Agent wiring**
 - **Every agent gets the MCP server registered.** That is the baseline path and is never
   skipped. Claude Code, Cursor and VS Code, each through its own project-local config.
+  Amended during #75: the one exception is a repository with no package for `dogear-cli` to
+  install into, where init wires no agent and says why, because any path it committed would
+  resolve nowhere. See the Decisions log.
 - init writes an `AGENTS.md` / rules stanza telling the agent to check pending
   annotations, since MCP is pull and needs the nudge.
 - The prompt hook is offered only where the chosen agent supports one, and `--no-hook`
@@ -911,7 +924,9 @@ Decisions log)*
   and no line init did not write is reformatted.
 - The hook is written as `node <path> hook`, never `dogear hook`, so it works on Windows.
 - The path is repo-relative and portable whether or not `dogear-cli` is installed yet;
-  a missing local install is reported, not worked around.
+  a missing local install is reported, not worked around. Amended during #75: in a repository
+  with no root `package.json`, the path runs through the package that declares `dogear-cli`,
+  since there is no root `node_modules` for it to resolve in.
 
 **E4 — Gitignore and config**
 - `.dogear/queue.json` and `.dogear/*.tmp` are gitignored; `.dogear/config.json` is not.
@@ -965,6 +980,9 @@ that named E4 for this work now name E7; see the Decisions log.
   `vite.config` change to make. It writes neither.
 - The install command matches the repository's package manager, and names the package the
   dependency belongs to — which in a monorepo is not always the app's own directory.
+  Amended during #75: the manager is read from the lockfile nearest that package rather than
+  from the root's alone, and an app with no `package.json` above it is told to install in its
+  own directory, never at a root that has none.
 - An app that already declares the plugin **and calls it in its config** gets nothing. An app
   with only one of the two gets exactly the half it is missing. A repo with no Vite app gets
   nothing. Amended during G3 (#44) — see the Decisions log.
@@ -1174,8 +1192,8 @@ registration correctly and it is the repository that is wrong, which is the disc
 
 The counterpart to `.github/dependabot.yml` deliberately not covering npm: the signal is
 wanted, the routine pull requests are not. **Severity alone is the wrong ranking here.** Only
-three things ever reach a user (`magic-string` and `dogear-core` through the plugin,
-`@modelcontextprotocol/sdk` through the CLI); everything else is tooling that `npm run
+four things ever reach a user (`magic-string`, `oxc-parser` since I1, and `dogear-core`
+through the plugin, `@modelcontextprotocol/sdk` through the CLI); everything else is tooling that `npm run
 verify` exercises and nobody installs. A raw `npm audit` number puts a dev-tree advisory in
 front of the maintainer with the same weight as one in a shipped dependency, which is how a
 report becomes something people learn to ignore. `npm audit --omit=dev` is the other half of
@@ -1250,8 +1268,11 @@ not about Next at all, and each would bite a Vite repository just as hard:
 - init wrote more than its reader expected, and the README does not say what triggers each
   write.
 
-The first is tracked as a bug (#75) and the third as a decision (#76), neither with a story ID;
-the decision is in [Still open](#still-open) until it is made. The other two are stories.
+The first is tracked as a bug (#75) and the third as a decision (#76), neither with a story ID.
+The decision is made: init pre-approves the three tools for Claude Code and for no other agent,
+and the Decisions log says why. The other two are stories. A second decision, #85, came out of
+#75's scope boundary, and it is made too: a root `package.json` keeps the root's path, and the
+install advice gains the `-w` that pnpm 9 needs at a workspace root.
 
 **I1 — `dogear-vite` on Vite 7**
 - `dogear-vite` installs next to Vite 7 and its React plugin with no peer-dependency conflict.
@@ -1384,7 +1405,10 @@ removes the parser dependency J2 would otherwise have to remove itself.
   can't give you. **Safari is intended and not yet verified** — B8 (#35) is the story, and
   until it closes the README claims the three above and not Safari. Corrected during G1,
   which would otherwise have shipped a user-facing browser list this one disagreed with.
-- **Node:** `^20.19.0 || >=22.12.0`, matching Vite's own floor (Vite is at 8.2.1).
+- **Node:** `^20.19.0 || >=22.12.0`, matching Vite's own floor, which is the same for Vite 7
+  and 8.
+- **Vite:** 7 or 8 (`^7.0.0 || ^8.0.0`), since I1 (#73). The workspace develops against 8.2.1,
+  and `test:packed` installs each major the peer range admits.
 - **Overhead:** the transform must not make dev startup or HMR noticeably slower.
   Measure before optimizing; the budget is "unnoticeable," not a number.
 - **Zero network egress.** Nothing leaves localhost, ever.
@@ -1405,7 +1429,7 @@ Increasing order of how much can go wrong.
 | **M5** | Release | G1–G6 | After the features, because nothing here is worth doing twice. M4 makes dogear installable; this makes it *installed* — the packages were private and unpublished until this milestone, so `npm i -D dogear-vite` resolved to nothing and the install path M4 prints instructions for had never been run by anyone. |
 | **M6** | Testing | H1–H9 | After the release, because the release is what turned each gap here from theoretical into evidenced. Every milestone above tested what it built; this one tests the seams *between* what they built — the published tarball, the operating systems, the browser round trip — each of which currently rests on a person having checked once. |
 | **M7** | Going public | P1–P5 | Before the repository became public, because a history audit, branch protection and a disclosure policy are only worth anything before anyone can see the repository. Its stories were tracked as issues (#59 to #63) and never written into this document; what they settled is in the Decisions log and Repo and publishing. |
-| **M8** | Adoption | I1–I2, plus a bug (#75) and a decision (#76) | After going public, because the first outside adoption attempt is what found them. Each bites a repository dogear was not built against, on the host it already supports, and M9's real-project criterion needs the bug fixed first. |
+| **M8** | Adoption | I1–I2, plus a bug (#75) and two decisions (#76, #85) | After going public, because the first outside adoption attempt is what found them. Each bites a repository dogear was not built against, on the host it already supports, and M9's real-project criterion needs the bug fixed first. |
 | **M9** | Next.js | J1–J7 | After M8, because its last criterion is a real Next project whose app sits in a subdirectory, which is M8's bug. J1 is a decision and goes first: every other story in it depends on how dogear attaches to Next. |
 | — | Safety | F1–F4 | Cross-cutting; F1's `apply: 'serve'` layer lands in M0 with the plugin itself. |
 
@@ -2521,6 +2545,187 @@ the same shape E6 (#39) was filed to prevent, arrived at from the other directio
 comes from `Wiring.hook`, so `--no-hook` is not told about a hook it declined, and
 `--agent=none` gets nothing at all because nothing then points at `CLI_ENTRY`.
 
+**In a repository with no root `package.json`, the committed path runs through the package that
+declares `dogear-cli`. Settled during #75.**
+Everything init wires named `node_modules/dogear-cli/dist/cli.js` at the git root, and E3 wrote
+that down as "repo-relative and portable". It is both, and in a repository whose only
+`package.json` is in a subdirectory it is also a path nothing will ever install to. The first
+outside adopter had exactly that layout (a Go repository with its frontend in `web/`), so the
+prompt hook init committed failed on every prompt, for everyone who cloned. init's own advice
+made it worse: it called the CLI "not installed here" when it was installed one directory down,
+and prescribed a root `npm i -D dogear-cli`, which in that repository creates a root manifest
+nobody wanted.
+
+**The path goes through the directory that holds `dogear-cli`, found in this order.** A root
+manifest, or a CLI already installed at the root, keeps the root, so every repository that worked
+before is unchanged. Otherwise, the first directory in detection's bounded walk, sorted, whose
+manifest declares `dogear-cli` or whose `node_modules` already holds it. Otherwise, the first Vite
+app's own package, which is where the remark then says to install. Searching for the declaration
+rather than for a Vite app is deliberate: the reporter's frontend was Next.js, which detection
+does not see, and the question is where the CLI lives rather than where Vite does. The walk is
+sorted because `readdirSync` order is the filesystem's, and "first" has to mean the same thing on
+every machine that runs init.
+
+**Nowhere to install means no agent is wired, and that amends E3's "never skipped".** If no
+package declares the CLI and no app has a package of its own, every path init could write would
+resolve nowhere. Writing one anyway is the bug. Writing the MCP registration without the hook was
+weighed and declined: it leaves a dead entry behind, and a rules stanza telling the agent to call
+tools that are not there. So init wires nothing, an explicit `--agent` included, and says so. It
+is a remark rather than a step note, by G3's discriminator: nothing about what init did needs
+qualifying, the repository is what is missing a piece, and a re-run should still get a verdict.
+
+**A registration that already names a different path gets a note, never a rewrite.** Repositories
+set up before this fix carry the root path, and `registered()` finds dogear's key and plans
+nothing, so without a check a re-run would report `nothing changed` over the same broken hook.
+The note names both paths and the repair (`dogear init --undo`, then `dogear init`). Repointing in
+place was declined because the entry may have been pointed elsewhere on purpose, and editing a
+value someone else chose is the line E4 already declines to cross.
+
+**E8's fallback to the root is reversed.** `guidance.ts` told an app with no `package.json` above
+it to install at the root, because "an install there creates the manifest that repository was
+always going to need". #75 is the counterexample: that repository was never going to need one.
+Such an app is now told to install in its own directory, and the install command reads the
+lockfile nearest the package rather than the root's alone, so a pnpm app in `web/` is no longer
+told `npm`.
+
+**Undo reads the path back out of the file.** `--undo` deletes a config only when it is
+byte-identical to what init would write fresh, and it never runs detection, so it cannot know
+which directory init chose. It rebuilds the fresh file from the path dogear's own entry names
+instead, which keeps that rule exact for both forms.
+
+**The scope stops at the repository with no root manifest.** Two neighbours probably fail the
+same way and are not fixed here: a root `package.json` kept only for tooling beside a separate
+package in `web/`, and a pnpm workspace member that declares `dogear-cli`, which pnpm installs
+into that member's `node_modules` rather than the root's. Both keep the root, as before, and #85
+settled that they should; see the next entry.
+
+**When the root has a `package.json`, the committed path stays at the root, even when only a
+nested package declares `dogear-cli`. Settled during #85.**
+Two layouts reach this: a root manifest kept only for tooling beside an app package such as
+`web/`, and a workspace whose member, rather than the root, declares the CLI. In both the root
+path does not resolve until the CLI is installed there too, and init says so on every run with
+the install command that fixes it. Following the nested declaration instead was weighed and
+declined, for three reasons.
+
+- **A declaration is not always the app.** A library repository whose example package declares
+  `dogear-cli` for its own reasons would have every committed path pulled away from the root,
+  toward a package nobody runs dogear from. init cannot tell that package from a tooling root's
+  `web/`, so the rule would be wrong in one of them whichever way it went.
+- **It would break repositories that already work.** Every repository initialised before now
+  carries the root path, and #75's stale-registration check would start printing a note over all
+  of them on the next run, for a path that was never wrong for them.
+- **npm and Yarn's `node-modules` linker usually make it moot.** They hoist a member's
+  dependency to the root's `node_modules`, where the root path resolves. pnpm does not by
+  default: its docs say a member's dependencies reach the root only through
+  `publicHoistPattern`, which is empty unless set. So the cost of staying at the root falls
+  almost entirely on pnpm, and there it is one install.
+
+**That install has to work when it is followed, so pnpm gets `-w` at a workspace root.**
+Checked on 2026-11-16 against a throwaway workspace with a local `file:` dependency: pnpm
+9.15.9 refuses `pnpm add -D` at the root with `ERR_PNPM_ADDING_TO_ROOT`, and 10.34.9 and 11.24.0
+accept it; all three accept `pnpm add -D -w`. So the flag is never wrong where it is added, and
+init now adds it wherever the install would run in a directory holding `pnpm-workspace.yaml`:
+both the `dogear-cli` remark and the `dogear-vite` line, read per directory
+(`pnpmWorkspaceRoot` on `CliHome` and `DetectedApp`) rather than from `Detection.workspace`,
+because #75's layout can root a pnpm workspace in `web/`. It needs pnpm to be the manager too.
+A workspace file with no lockfile yet resolves to npm, which has no such flag.
+
+**Yarn 1 has the same refusal and is left alone.** Classic Yarn refuses `yarn add` at a
+workspace root without `-W`, and Berry rejects `-W` as an unknown option, so the flag cannot be
+added for Yarn without telling the two apart from the lockfile. That is machinery for a release
+the managers suite deliberately does not cover, and Yarn 1's error names `-W` itself, so the
+failure explains its own fix.
+
+**The transform parses with `oxc-parser`, a dependency of `dogear-vite`, not with Vite's
+re-export. Settled during I1 (#73).**
+C1 took `parseSync` from `vite`, which Vite 8 re-exports from Rolldown, and that single import
+was the whole reason the peer range read `^8.0.0`. Nobody decided the floor; it followed from
+the import. Vite 7 has no parser to give: Rollup's `parseAst` reads no TypeScript and esbuild
+only transforms. So the peer range is now `^7.0.0 || ^8.0.0`, and `stamp.ts` imports nothing
+from `vite` at all, `normalizePath` included. That second half is what makes the transform
+host-independent for J2, and `stamp.test.ts` holds it as a source rule.
+
+**Two alternatives were weighed and declined.** Choosing the parser by the running Vite's
+version still needs a parser dependency for the Vite 7 side, so it installs the same package
+and adds a second code path to test. `@babel/parser` is pure JavaScript with no native binary,
+which is its real advantage, but it throws rather than returning errors, needs its plugins
+chosen per extension (a `.ts` file must not enable `jsx`), produces a different AST, and is
+slower. `oxc-parser` is the parser Vite 8 was already handing us, so the AST, the UTF-16
+offsets and the error handling carried over unchanged, and the existing tests proved it.
+
+**What it costs.** A native binary per platform through `optionalDependencies`, which is how
+esbuild and Rolldown already ship, so no Vite user meets a new kind of install. A project on
+Vite 8 carries two copies of Oxc, because Rolldown bundles its own binding rather than
+depending on this package, so no range could have deduplicated them. And a fourth package
+reaches users, which H7's report counts.
+
+**The range is `^0.152.0`, which on 0.x locks the minor.** Oxc changes AST details between
+0.x minors, and the walker in `stamp.ts` reads the AST structurally, so a wider range would let
+a fresh install pick up a shape nobody tested. Each Oxc minor is therefore a deliberate bump,
+proven by `npm test` and by `test:packed`, which since I1 installs the tarballs beside each
+Vite major the peer range admits and checks the stamps the dev server actually serves.
+
+**Bump Oxc only to a minor at least a day old.** Yarn 4 refuses a version younger than its
+`npmMinimalAgeGate`, which defaults to one day, and a minor-locked range admits nothing older
+to fall back on. This was found, not predicted: `0.152.0` was five hours old when I1 pinned it,
+and `test:managers` failed both Yarn legs with `YN0016 … are quarantined` while npm and pnpm
+installed cleanly. The `managers` job is therefore the guard for this rule, and it is left
+exactly as it is: loosening the gate in the fixture would hide the one failure a Yarn user
+would actually meet.
+
+**`dogear init` pre-approves its MCP tools for Claude Code, and only there. Settled during
+#76.**
+Every call Claude Code made to `dogear_pending`, `dogear_resolve` or `dogear_prune` asked the
+user first, because nothing allow-listed them, so the loop dogear exists for (come back, type
+"go", have the agent hold every comment) started with a permission prompt. The objection was
+that pre-approving means dogear editing a committed security setting on behalf of everyone who
+clones. Claude Code's own documentation answers it: a `permissions.allow` rule in a committed
+`.claude/settings.json` applies only after each person accepts the workspace trust dialog for
+that folder, and the dialog lists what the rule grants
+(code.claude.com/docs/en/permissions, checked 2026-09-29). So the rule is a proposal each
+person sees and accepts, not an approval made for them.
+
+**Three named rules, not `mcp__dogear__*`.** `mcp__dogear__dogear_pending`,
+`mcp__dogear__dogear_resolve` and `mcp__dogear__dogear_prune`. The server wildcard would be one
+line and would cover a tool added later, and that second property is the reason against it: a
+new tool would be pre-approved under a grant accepted before the tool existed. All three write
+nothing outside `.dogear/queue.json`, and `dogear_pending` writes nothing at all. The list is a
+literal in `claude-settings.ts` rather than derived from `TOOLS`, and a test pairs the two, so
+adding a tool fails until someone decides whether it belongs.
+
+**Written whenever Claude Code is wired, `--no-hook` included, with no flag of its own.** The
+rules are not part of the hook: declining the hook declines prompt injection, and says nothing
+about whether a tool call should prompt. The consent is the trust dialog, `--dry-run` shows the
+change first, and undo removes it. A repository that already mentions dogear's server anywhere
+in `allow`, `ask` or `deny` is left alone, because a wildcard, a tool moved to `deny`, or one
+deleted from `allow` is a decision someone made, and topping the rules up on every re-run would
+override it. Undo removes only the three exact strings, and only from `allow`. A repository
+initialised before this change gains the rules on its next `dogear init`.
+
+**One step owns `.claude/settings.json`.** The hook step became `claude-settings`, writing both
+parts. Two steps against one file would each have had to simulate the other's edit, because
+every `plan()` runs before any `apply()`: otherwise init reports `created` twice, and undo
+misjudges `deleted` against `removed`. One owner gives one report line and three whole files to
+recognise on the way out (both parts, the rules alone under `--no-hook`, and the hook alone that
+every earlier init wrote).
+
+**The server-approval prompt is left to Claude Code.** Claude Code separately asks before
+enabling any server from a project's `.mcp.json`. `enableAllProjectMcpServers` and
+`enabledMcpjsonServers` committed to the project's settings are ignored in an untrusted folder,
+by design: "a cloned repository can't approve its own servers"
+(code.claude.com/docs/en/mcp, v2.1.196 and later). init does not try.
+
+**Cursor and VS Code get nothing written, for different reasons.** Cursor does read a committed
+`.cursor/permissions.json`, but an `mcpAllowlist` there *replaces* each person's in-app MCP
+allowlist rather than adding to it (cursor.com/docs/reference/permissions), so writing one would
+clobber every clone's approvals for servers that are not dogear's. That is the thing the
+objection above feared, made real, so init instead prints how to add `dogear:*` by hand, once,
+on the run that registers `.cursor/mcp.json`. VS Code has no per-server approval a repository
+can commit: `chat.tools.global.autoApprove` approves every tool from every server, and
+`sandboxEnabled` auto-approves only on macOS and Linux. Its own prompt offers to trust all of a
+server's tools in one click, so it gets no note either. Codex does not arise, because init never
+registers dogear with it.
+
 **Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
 G5.**
 The `dogear` organization was taken, which this document had planned for — but the fallback
@@ -2641,10 +2846,6 @@ None of these blocked M0, and none of them blocks the release.
 - **How dogear attaches to Next.js.** A package of its own or a `dogear serve` sidecar; how
   the overlay reaches the page without the plugin's injection; which production layers
   survive the move. J1 (#77) settles it, and every other story in Epic J waits on the answer.
-- **Whether `dogear init` pre-approves dogear's MCP tools (#76).** Every call from Claude Code asks
-  for permission today, because nothing adds dogear's tools to the permission allow list.
-  Pre-approving would remove the prompt, and it would also mean dogear editing a committed
-  security setting on behalf of everyone who clones the repository.
 
 ---
 
@@ -2713,8 +2914,8 @@ risk is different in kind rather than degree: the workflows pin `actions/checkou
 the one supply-chain shape that could publish as us.
 
 What replaces npm version updates is **H7 (#65)**: a report on every pull request, ranked by
-severity **and by whether the package ships**. Only `magic-string`, `dogear-core` and
-`@modelcontextprotocol/sdk` ever reach a user, so a raw `npm audit` number weights a
+severity **and by whether the package ships**. Only `magic-string`, `oxc-parser`, `dogear-core`
+and `@modelcontextprotocol/sdk` ever reach a user, so a raw `npm audit` number weights a
 build-tooling advisory the same as a shipped one, which is how a report becomes something
 people learn to ignore.
 

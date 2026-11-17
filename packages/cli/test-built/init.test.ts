@@ -82,6 +82,10 @@ let root: string
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'dogear-init-built-'))
   mkdirSync(join(root, '.git'))
+  // A package for the CLI to live in. Since #75 a repository with no package.json anywhere has
+  // nowhere for a committed path to resolve, and init wires no agent there. ./init.subdir.test.ts
+  // is the layout suite; these cases are about the binary.
+  writeFileSync(join(root, 'package.json'), '{}')
 })
 
 afterEach(() => {
@@ -233,6 +237,15 @@ describe('the built `dogear init`', () => {
       '${CLAUDE_PROJECT_DIR}/node_modules/dogear-cli/dist/cli.js',
     )
     expect(settings).not.toContain('"command": "dogear"')
+
+    // #76: dogear's three MCP tools pre-approved by name, never as a server wildcard.
+    expect(
+      (JSON.parse(settings) as { permissions?: { allow?: unknown } }).permissions?.allow,
+    ).toEqual([
+      'mcp__dogear__dogear_pending',
+      'mcp__dogear__dogear_resolve',
+      'mcp__dogear__dogear_prune',
+    ])
   })
 
   it('is idempotent across processes for the agent wiring too', async () => {
@@ -270,18 +283,24 @@ describe('the built `dogear init`', () => {
     const run = await runCli('init', root)
 
     expect(run.exitCode).toBe(0)
-    expect(run.stdout).toContain('merged the prompt hook into .claude/settings.json')
+    expect(run.stdout).toContain(
+      "merged the prompt hook and dogear's MCP tool permissions into .claude/settings.json",
+    )
 
     const after = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+    const parsed = JSON.parse(after) as {
+      permissions: { allow: readonly string[] }
+      hooks: { UserPromptSubmit: readonly unknown[] }
+    }
 
-    expect(after).toContain('  "permissions": { "allow": ["Read"] },')
+    // The user's rule stays first and on its line; dogear's join the array after it (#76).
+    expect(after).toContain('  "permissions": { "allow": ["Read",')
+    expect(parsed.permissions.allow[0]).toBe('Read')
+    expect(parsed.permissions.allow).toHaveLength(4)
     expect(after).toContain(
       '      { "hooks": [{ "type": "command", "command": "bash \\"mine.sh\\"" }] },',
     )
-    expect(
-      (JSON.parse(after) as { hooks: { UserPromptSubmit: readonly unknown[] } }).hooks
-        .UserPromptSubmit,
-    ).toHaveLength(2)
+    expect(parsed.hooks.UserPromptSubmit).toHaveLength(2)
   })
 
   it('leaves a working install when --no-hook declines the upgrade', async () => {
@@ -290,7 +309,13 @@ describe('the built `dogear init`', () => {
     expect(run.exitCode).toBe(0)
     expect(existsSync(join(root, '.mcp.json'))).toBe(true)
     expect(existsSync(join(root, 'AGENTS.md'))).toBe(true)
-    expect(existsSync(join(root, '.claude'))).toBe(false)
+
+    // The tool permissions are not part of the hook, so declining it keeps them (#76).
+    const settings = JSON.parse(
+      readFileSync(join(root, '.claude', 'settings.json'), 'utf8'),
+    ) as Record<string, unknown>
+    expect(settings).not.toHaveProperty('hooks')
+    expect(settings).toHaveProperty('permissions')
   })
 
   it('honours --agent through the shim, the same way --dry-run is honoured', async () => {

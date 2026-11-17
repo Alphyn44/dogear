@@ -166,7 +166,7 @@ the adapter (validate the flags, resolve the git root, refuse if there isn't one
 implementation through a dynamic `import()` exactly as `mcp.ts` defers to `server.ts`);
 `scaffold.ts` holds the `Step` contract and the runner, and each step lives in a module of its
 own — `queue-dir.ts`, `config.ts`, `gitignore.ts`, and E3's `mcp-config.ts`, `rules.ts` and
-`hook-config.ts`. A new step is an entry in `stepsFor`; it does not edit the runner. A step's
+`claude-settings.ts` (named `hook-config.ts` until #76). A new step is an entry in `stepsFor`; it does not edit the runner. A step's
 `plan(root, detection)` **never writes and never throws** — it returns
 `{ change?, notes? }` or `undefined` — and that is what makes both idempotency and `--dry-run`
 possible without a second traversal. Every `plan()` runs before any `apply()`, which is why
@@ -195,7 +195,7 @@ converting it through a small verb table in `scaffold.ts` that `scaffold.test.ts
 step added with an unknown verb fails rather than shipping `would created`.
 
 **E3's three steps are built per run, and none of them re-serialises the user's JSON.**
-`mcp-config.ts`, `rules.ts` and `hook-config.ts` are *factories* taking a resolved `Wiring`
+`mcp-config.ts`, `rules.ts` and `claude-settings.ts` are *factories* taking a resolved `Wiring`
 (`resolveWiring` in `scaffold.ts` reconciles `--agent`/`--no-hook` against detection), which is
 why `STEPS` became `stepsFor(wiring)` — the same shape `gitignore.ts` already used for its
 injected `GitQueries`. They read `plan()`'s `detection` argument not at all: folding a flag into
@@ -229,11 +229,28 @@ for a new step, so `scaffold.test.ts` pairs the two lists by name in both direct
 one past-tense summary and undo has two verbs — `deleted` for a whole file, `removed` for a
 splice — and a repo with both kinds needs a line of each.
 
+**#76 made `.claude/settings.json` one step's file, holding two parts.** `claude-settings.ts`
+writes the prompt hook *and* `permissions.allow` rules for dogear's three MCP tools, as one
+`Step` and one `Undo` named `claude-settings`. Two steps would each have had to simulate the
+other's edit, since every `plan()` runs before any `apply()`, to report `created` against
+`merged` and `deleted` against `removed`. Three rules. **The rules are a literal `ALLOW`,
+never derived from `TOOLS`**, and `claude-settings.test.ts` pairs them, so a new tool fails a
+test instead of being pre-approved in every repo initialised after it ships. **Any rule naming
+`mcp__dogear` in `allow`, `ask` or `deny` means someone decided**, so the rules are not
+topped up; undo removes only the three exact strings, only from `allow`. And **the rules are
+not the hook**: `--no-hook` still writes them, a part that cannot be placed becomes a note
+without blocking the other, and undo recognises three fresh files (both parts, rules only, and
+the hook-only file every init before #76 wrote). Cursor gets a `Plan.note` from
+`mcp-config.ts` instead, attached to the run that registers it so re-runs keep their verdict;
+see the brief's Decisions log for why neither Cursor nor VS Code gets a file written.
+
 **`removeAt` is `insertAt`'s mirror and shares its scanner; `pruneEmpty` is the cascade after
 it.** One asymmetry: `insertAt`'s path names the *container*, `removeAt`'s names the *member*.
 A file is deleted **only when it is byte-identical to what init writes fresh** — anything else
-is spliced. Two limits, both found by running `formats.test.ts` rather than predicted: a file
-that was `{}` before init is indistinguishable from one init created, and `pruneEmpty` takes an
+is spliced. Two limits, both found by running `formats.test.ts` rather than predicted: a
+`.mcp.json` that was `{}` before init is indistinguishable from one init created (a
+`settings.json` no longer is, since #76 merges its two parts in the opposite order to the fresh
+file), and `pruneEmpty` takes an
 *empty* `"UserPromptSubmit": []` that predated init with dogear's own. Both cost nothing —
 they configured nothing — and the alternative is litter in the common case. **`.dogear/queue.json`
 is never touched**; `.dogear/` goes only once `configRemoval` has emptied it, which is why
@@ -257,15 +274,15 @@ across the whole matrix — two-space, four-space, tabs, CRLF, minified, BOM, no
 value-on-the-next-line, empty object — asserting valid JSON, byte preservation and idempotency
 for each, plus that CRLF files gain no lone `\n`.
 
-**H6 added `Detection.linker`, and it is separate from `Detection.manager` for the reason
-`manager` is separate from `workspace`.** Yarn spells the layout `nodeLinker` and pnpm has the
+**H6 added the linker (now `CliHome.linker`, read where the CLI lives since #75), and it is
+separate from the manager for the reason `manager` is separate from `workspace`.** Yarn spells the layout `nodeLinker` and pnpm has the
 same setting with the same `pnp` option, so *which tool installs here* cannot answer *is there a
 `node_modules` for `CLI_ENTRY` to resolve through* — and only the second question bears on the
 committed path. It is read from the generated `.pnp.cjs`/`.pnp.js`, never from `.yarnrc.yml`:
 the setting may be inherited from a parent directory or left at Yarn's default and written
 nowhere, while the artefact is always there. Same shape as `managerOf` reading the lockfile
 rather than the intent behind it. **The PnP arm of `cliNotInstalled` is checked *before*
-`wiring.cli`, and that order is the whole fix** — `cliIn` answers `'local'` from the manifest
+`CliHome.state`, and that order is the whole fix** — `cliIn` answers `'local'` from the manifest
 declaration when the file is absent, which is right for a repo mid-clone and wrong for one that
 will never have the file, so a PnP repo reached the old guard as `local` and init wrote a path
 resolving nowhere in silence. Reordering is not an option either: under PnP the install the
@@ -281,6 +298,28 @@ a `.cmd` shim the exec form cannot run. The MCP configs use the repo-relative
 everyone else who clones; `Detection.cli` earns a note when it is not installed yet), and the hook
 uses `${CLAUDE_PROJECT_DIR}/…` because a hook's working directory is the session's, not the
 repo's. `test-built/init.test.ts` asserts both.
+
+**#75 made that path depend on where the CLI lives, and `Detection.cli` is now a `CliHome`.** A
+repository with a root `package.json` (or a CLI installed at the root) keeps the root form,
+byte for byte. One without, such as a Go repository with its frontend in `web/`, gets
+`web/node_modules/…` through `cliEntry(dir)`: the first package in the *sorted* walk that declares
+or holds `dogear-cli`, else the first Vite app's own package. `childrenOf` sorts because
+`readdirSync` order is the filesystem's and "first" must match on every clone. With nowhere at
+all, `Detection.cli` is `undefined`, `resolveWiring` wires **no agent, `--agent` included**, and
+`nowhereToInstall` says why as a remark. Three consequences to keep: `Wiring.entry` is resolved
+once so the MCP registration and the hook cannot disagree; a registration naming any other path
+earns a **stale note, never a rewrite**, because `registered()` alone reported `nothing changed`
+over #75's broken hook; and **undo rebuilds `fresh()` from the path the file itself names**,
+since it never runs detection and a root-only comparison would splice a file init wrote whole.
+`test-built/init.subdir.test.ts` executes the committed entries through a junction, with a
+negative control proving the root path fails there.
+
+**#85 ruled that a root `package.json` keeps the root**, even when only a nested package or a
+workspace member declares `dogear-cli`; the brief's Decisions log has why. What it changed is the
+advice: every install command goes through `installCommand(manager, pnpmWorkspaceRoot)` in
+`guidance.ts`, which adds `-w` for pnpm in a directory holding `pnpm-workspace.yaml`, because
+pnpm 9 refuses the add there without it. `pnpmWorkspaceRoot` is read per install directory on
+`CliHome` and `DetectedApp`, never from `Detection.workspace`, which only sees the git root.
 
 **E8 added a second runner phase, and `dogear init` writes nothing for it.** `guidance.ts`
 prints the `vite.config` change and the install command for every app that is not fully wired;
@@ -298,8 +337,10 @@ edit does nothing anyway because the config's `import` fails until someone insta
 step has no `Change`, which is what makes it a phase beside `remarks()` rather than a `Step`,
 and E6 inherits no teardown from it. Its block is appended **outside** the report's two-space
 indent — the snippet's own leading whitespace is content the user copies, and the body's indent
-would corrupt it. The install command follows `Detection.manager` (from the root lockfile) and
-names `DetectedApp.manifestDir`, which is not always the app's own directory.
+would corrupt it. The install command follows `DetectedApp.manager` (the lockfile nearest the
+app's package, since #75; it was the root's alone) and names `DetectedApp.manifestDir`, which is
+not always the app's own directory. With no manifest above the app it names the app's own
+directory, never a root that has none.
 
 **E7 gave `.dogear/config.json` its reader, and the layering is three lines of `??` guarding
 one rule.** `packages/vite/src/config-file.ts` returns *only the keys that survived
@@ -407,7 +448,7 @@ rather than merely promised.
 | `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
 | `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client. Needs a build first |
-| `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace, and runs the binary, `dogear init` and a real dev server. Needs a build first; deliberately not in `verify` |
+| `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace once per Vite major the plugin admits (I1), and runs the binary, `dogear init` and a real dev server whose served app must carry its stamps. Needs a build first; deliberately not in `verify` |
 | `npm run test:browser` | **H3's round trip.** Drives Chromium against a real dev server: modifier-click, comment, submit, then reads `.dogear/queue.json`. Needs a build and a browser binary; deliberately not in `verify` |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
@@ -598,12 +639,33 @@ question (did the sentinel leak into production?) — folding a behavioural suit
 make the name lie.
 
 **`test:packed` is out of `verify` for a reason that is not speed.** It reaches the registry
-for `vite`, `magic-string` and the MCP SDK, and `verify.yml` is what `release.yml` gates on —
+for `vite`, `magic-string`, `oxc-parser`, React and the MCP SDK, and `verify.yml` is what `release.yml` gates on —
 a release must not be able to fail because a registry was slow. It runs as its own `ci.yml`
 job across all three platforms instead. `test-packed/fixture.ts` holds the shared harness:
 `packAll` → `createScratchProject` (under `tmpdir`, never inside the repo, because
-`findGitRoot` walks *up*) → `startDevServer` → `runInstalledCli`. One install is shared by the
-whole file; it is the slowest thing in the repository by an order of magnitude.
+`findGitRoot` walks *up*) → `startDevServer` → `runInstalledCli`. It is the slowest thing in
+the repository by an order of magnitude, so each install is shared by the whole file.
+
+**Since I1 (#73) there is one install per Vite major, and the list is written down, not
+derived.** `VITE_LEGS` pairs each major with the `@vitejs/plugin-react` major that supports
+it, and `install.test.ts` checks it against `dogear-vite`'s peer range in both directions, so
+widening the range to a major with no leg fails rather than growing a leg nobody paired. Each
+leg's app lists `react()` *before* `dogear()`, which is the order appending to `npm create
+vite` gives and the one where only `enforce: 'pre'` keeps the stamps; the in-process
+`stamp.integration.test.ts` covers the other order. The stamping case reads the module the dev
+server *serves*, after the React plugin's compile, and it was proven non-vacuous by running it
+with `transform: false`. A leg without a React plugin (`ScratchOptions.vite` omitted) is what
+H6's managers suite still uses.
+
+**`packages/vite/src/stamp.ts` imports nothing from `vite`.** Its parser is `oxc-parser`, a
+dependency, because Vite 7 has none to re-export, and its path separator fix is a local
+replace. A value import from `vite` there would pass every workspace suite, which has Vite 8
+installed, and break only in a Vite 7 project or under J2's second host. `stamp.test.ts`
+holds it as a source rule. `oxc-parser` sits at a minor-locked `^0.152.0` because Oxc changes
+AST details between 0.x minors; see the brief's Decisions log. **Bump it only to a minor at
+least a day old**: Yarn 4 quarantines younger versions by default, the range has nothing
+older to fall back on, and `test:managers` fails its Yarn legs with `YN0016` until the gate
+passes. That failure is the guard, so do not loosen the gate in the fixture.
 
 **H3's browser suite could not use `examples/react-app`, and the reason generalises.** The
 endpoint writes to `queuePathFor(findGitRoot(server.config.root))`, the example's git root is
@@ -663,6 +725,9 @@ a list that can go stale, and those two are what stop it.
 `packages/cli/src/docs.test.ts` pins the command list on both READMEs and — since G6 — renders
 the root README's `<dogear-queue>` example through `formatQueue` and asserts the file contains
 it verbatim, so the one piece of documentation that is also an interface cannot drift.
+Since I2 it also holds the CLI README's list of agent signs to `MARKERS` in `detect.ts`,
+matched only inside the "What init writes, and when" section, because `CLAUDE.md` and
+`.mcp.json` are named elsewhere on that page and a whole-page match passes with the table gone.
 `packages/vite/src/docs.test.ts` pins the `.dogear/config.json` key table against
 `RECOGNISED_KEYS`, and reads `DEFAULT_HOSTS` out of `packages/core/src/host.ts` **as text**:
 the plugin deliberately keeps no copy of that list (serialising one would pin it — see

@@ -34,17 +34,27 @@ import type { DetectedApp, Detection, Manager } from './detect.js'
 /** How many apps get a snippet before the rest are counted. Mirrors ./scaffold.ts's APP_CAP. */
 const CAP = 5
 
-/**
- * `pnpm add -D`, and its two counterparts.
- *
- * Exported since H6 (#58) so ./scaffold.ts's `dogear-cli` remark can name the manager the
- * repository actually uses. It said `npm i -D` to every repository until then, including the
- * pnpm and yarn ones this same table already got right one line below.
- */
-export const INSTALL: Record<Manager, string> = {
+/** `pnpm add -D`, and its two counterparts. Reached through {@link installCommand}. */
+const INSTALL: Record<Manager, string> = {
   npm: 'npm i -D',
   pnpm: 'pnpm add -D',
   yarn: 'yarn add -D',
+}
+
+/**
+ * The dev-dependency install for a package, as the user should type it.
+ *
+ * Exported since H6 (#58) so ./scaffold.ts's `dogear-cli` remark names the manager the repository
+ * actually uses. It said `npm i -D` to every repository until then, including the pnpm and yarn
+ * ones this module already got right.
+ *
+ * **`-w` at a pnpm workspace root, since #85.** pnpm 9 refuses the add there without it, and 10
+ * and 11 accept either form, so the flag is never wrong where it is added. It needs pnpm to be
+ * the manager as well: a workspace file with no lockfile yet still resolves to npm, by
+ * `managerOf`'s rule in ./detect.ts, and npm has no such flag.
+ */
+export function installCommand(manager: Manager, pnpmWorkspaceRoot: boolean): string {
+  return manager === 'pnpm' && pnpmWorkspaceRoot ? `${INSTALL.pnpm} -w` : INSTALL[manager]
 }
 
 /**
@@ -61,7 +71,7 @@ export function guidance(detection: Detection): readonly string[] {
   )
   if (unwired.length === 0) return []
 
-  const shown = unwired.slice(0, CAP).flatMap((app) => block(app, detection.manager))
+  const shown = unwired.slice(0, CAP).flatMap(block)
   const hidden = unwired.length - Math.min(unwired.length, CAP)
 
   if (hidden === 0) return shown
@@ -80,8 +90,12 @@ export function guidance(detection: Detection): readonly string[] {
  * dogear-vite` satisfies the second and leaves the first exactly as it was, so an app that
  * has the package and not the plugin call needs the snippet and emphatically does not need
  * telling to install what it already has.
+ *
+ * The install command is the app's own manager since #75, read from the lockfile nearest its
+ * package. The repository's root lockfile answered for every app before, and a repository with
+ * no root `package.json` has no root lockfile, so a pnpm app in `web/` was told to use npm.
  */
-function block(app: DetectedApp, manager: Manager): readonly string[] {
+function block(app: DetectedApp): readonly string[] {
   const lines: string[] = []
 
   if (!app.configured) {
@@ -101,7 +115,10 @@ function block(app: DetectedApp, manager: Manager): readonly string[] {
     // `then,` only reads as a sequel to the snippet above it. Standing alone it is an
     // instruction in its own right, and says so.
     const lead = app.configured ? `install it ${where(app)}` : `then, ${where(app)}`
-    lines.push('', `${lead}: ${INSTALL[manager]} dogear-vite`)
+    lines.push(
+      '',
+      `${lead}: ${installCommand(app.manager, app.pnpmWorkspaceRoot)} dogear-vite`,
+    )
   }
 
   return lines
@@ -115,11 +132,15 @@ function block(app: DetectedApp, manager: Manager): readonly string[] {
  * stray manifest. `manifestDir` is the directory the framework was read from, so the install
  * lands in the same package init already reported on.
  *
- * `undefined` — a repository with no manifest anywhere above the app — falls back to the root.
- * It is where the user is standing, and an install there creates the manifest that repository
- * was always going to need.
+ * **With no manifest anywhere above the app, the install goes in the app's own directory** (#75).
+ * This used to fall back to the root, on the grounds that an install there "creates the manifest
+ * that repository was always going to need". #75 was the counterexample: a Go repository with its
+ * frontend in `web/` was never going to need a root `package.json`, and being told to create one
+ * is how a second, empty package ends up beside the real one. An install in the app's directory
+ * creates the manifest that *app* needs. An app whose config sits at the root has only the root
+ * to be told, and there the root is the app's own package.
  */
 function where(app: DetectedApp): string {
-  const dir = app.manifestDir
-  return dir === undefined || dir === '' ? 'at the repo root' : `in ${dir}`
+  const dir = app.manifestDir ?? app.dir
+  return dir === '' ? 'at the repo root' : `in ${dir}`
 }

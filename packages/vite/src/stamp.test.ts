@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
 import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE, stampSource } from './stamp.js'
@@ -395,6 +397,41 @@ describe('the sourcemap', () => {
     expect(result?.map.mappings).toBeTypeOf('string')
     expect(result?.map.mappings.length).toBeGreaterThan(0)
   })
+})
+
+describe('the host boundary', () => {
+  /**
+   * A source rule, in the shape ./listeners.test.ts in dogear-core and
+   * dogear-queue's ./format.test.ts established. I1 (#73) took the parser from `oxc-parser`
+   * instead of Vite 8's re-export, and replaced `normalizePath` with a local replace, so that
+   * this module runs under Vite 7 and under a host that is not Vite at all (J2). A value
+   * import from `vite` here would still typecheck and pass every case in this file, because
+   * the workspace has Vite 8 installed; the failure would surface only as an `ERESOLVE` or a
+   * missing export in someone else's project.
+   */
+  it('imports nothing from vite', () => {
+    const source = readFileSync(new URL('./stamp.ts', import.meta.url), 'utf8')
+
+    expect(source).not.toMatch(/from 'vite'/)
+    // The control: the parser import this rule exists to keep in place. Without it, a rename
+    // of the file under test would leave the rule above reading nothing and passing.
+    expect(source).toMatch(/from 'oxc-parser'/)
+  })
+
+  it.runIf(process.platform === 'win32')(
+    'writes forward slashes from a Windows path, where the replace is doing the work',
+    () => {
+      // Only meaningful on Windows: `path.relative` there returns backslashes, and this is
+      // the case `normalizePath` used to cover. verify.yml runs a Windows leg, so it runs.
+      const result = stampSource(
+        'const a = <div />\n',
+        'C:\\repo\\web\\src\\App.tsx',
+        'C:\\repo',
+      )
+
+      expect(result?.code).toContain(`${SOURCE_ATTRIBUTE}="web/src/App.tsx:1:11"`)
+    },
+  )
 })
 
 function count(text: string, needle: string): number {
