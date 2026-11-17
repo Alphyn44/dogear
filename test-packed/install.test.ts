@@ -309,7 +309,9 @@ describe.each(VITE_LEGS)('the installed plugin, on vite $vite', (leg) => {
       'the served module still contains JSX: it was never compiled',
     ).not.toMatch(/<main[\s>]/)
     for (const stamp of APP_STAMPS) {
-      const escaped = stamp.replace(/[.]/g, '\\.')
+      // Every metacharacter, not just the `.` today's stamps carry. `RegExp.escape` would say
+      // this in one call, and Node 20, still inside the engines floor, does not have it.
+      const escaped = stamp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       expect(body, `no ${stamp} stamp in the served module:\n${body}`).toMatch(
         new RegExp(`["']?data-dogear-src["']?\\s*:\\s*["']${escaped}["']`),
       )
