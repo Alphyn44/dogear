@@ -184,7 +184,8 @@ attributes to already-compiled `jsx()` calls.
 
 ### `dogear-next`
 
-*Decided by J1 (#77); not built yet.* The same three jobs for a Next.js 16 App Router app,
+*Decided by J1 (#77). J3 (#79) built the wrapper and its endpoint; stamping is J2's and
+injection J4's.* The same three jobs for a Next.js 16 App Router app,
 done from the one place Next lets a tool in without touching the app's source:
 
 ```js
@@ -208,9 +209,10 @@ The Decisions log has the reasoning and the spike that checked each part.
 
 ### `dogear-host`
 
-*Decided by J1 (#77); not built yet.* Private, source-only, never published: the transform, the
-endpoint, the config-file reader, the app name and the client-tag helpers, moved out of
-`dogear-vite` so both hosts inline one copy. Built and inlined the way `dogear-queue` is.
+*Decided by J1 (#77). J3 (#79) created it with everything but the transform, which J2 moves.*
+Private, source-only, never published: the transform, the endpoint, the config-file reader, the
+app name and the client-tag helpers, moved out of `dogear-vite` so both hosts inline one copy.
+Built and inlined the way `dogear-queue` is.
 
 ### `dogear-cli`
 
@@ -2421,7 +2423,9 @@ the annotation should record the one actually in the address bar. Scheme comes f
 `socket.encrypted`, not `x-forwarded-proto`: trusting a client-settable header to describe
 the server's own identity buys nothing here, since F3's guard only lets dogear run on
 loopback, `*.localhost` and `*.local` — the reverse-proxy hostnames that header exists for
-never have an overlay to submit from.
+never have an overlay to submit from. *(Amended by J3: under Next the request arrives through
+a proxy that rewrites `Host`, so `dogear-next` reads `x-forwarded-host` instead. Vite still
+reads `Host`. See the J3 entry below.)*
 
 A consequence worth stating: **`origin` and `app` are stripped from the client's input, not
 merely overwritten.** A conditional spread alone would let a client-sent value survive
@@ -2869,6 +2873,39 @@ under both Turbopack and webpack, and `next start` after:
 - `next dev` writes an **`AGENTS.md`** on its first run unless `agentRules: false`, and init's
   rules step creates `AGENTS.md` when neither it nor `CLAUDE.md` exists. Which runs first changes
   what init does. (J5)
+
+**Under Next the endpoint reads `origin` from `x-forwarded-host`, walks from `cwd`, and
+registers nothing yet. Settled during J3 (#79).**
+J1's loopback design put a proxy between the browser and `createEndpoint`, and three things
+that were free under Vite stopped being free.
+
+**`origin`.** Next 16's rewrite proxy sets `changeOrigin: true`, so the loopback server sees
+`Host: 127.0.0.1:<its own port>`, a port nobody browsed, and Next copies the page's host into
+`x-forwarded-host`. So `createEndpoint` gained a `forwarded` option that only `dogear-next`
+sets: the origin comes from that header's first entry, and is left absent rather than falling
+back to `Host` when the header is missing. C4 declined to trust forwarded headers, and the
+reasoning still holds for Vite, which the browser dials directly. Under Next the trust is no
+wider: the loopback port answers only this machine, which is also everyone who could have sent
+`Host`. Next sends no `x-forwarded-proto`, so `next dev --experimental-https` records `http`.
+That limit is accepted, because the host part still names the right server.
+
+**The start directory.** A config cannot learn its own directory: `next dev` forks its server
+without a `cwd` and passes the directory in the private `NEXT_PRIVATE_DEV_DIR`. So `withDogear`
+walks from `process.cwd()`, which is the app under `npm run dev` and its kin. For
+`next dev <dir>` run from elsewhere, the git root still comes out the same, and only `app` would
+name the wrong package; the `app` option is the documented fix. Reading the private variable
+and adding a `root` option were both declined, the first as an undocumented internal and the
+second as a public option for an uncommon invocation.
+
+**The registry.** E5 records each dev server's origin for `dogear status`, on Vite's
+`listening` event. The loopback port is the wrong origin to record, and a config has no
+listening event for Next's own port, so J3 registers nothing. The repo still appears in
+`dogear status` through `init`'s entry, with no server under it. Deferred to an issue of its
+own.
+
+J3's "concurrent submits lose nothing" carries C4's reading unchanged: read-modify-write is
+pinned with a Next endpoint and a Vite endpoint submitting together over one root, and the
+cross-process race stays the Still open queue lock.
 
 **Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
 G5.**

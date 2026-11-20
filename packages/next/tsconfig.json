@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Runs inside the `next dev` process: Node only, no DOM.
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  // test-built/ holds the suite that drives a real `next dev` against dist/. It is not a tsup
+  // entry and is not published, but it is typechecked, as packages/cli's is.
+  "include": ["src/**/*.ts", "test-built/**/*.ts", "tsup.config.ts"]
+}

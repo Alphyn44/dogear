@@ -89,10 +89,15 @@ Don't over-explain basics.
 | `dogear-vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
 | `dogear-cli` | `dogear` on PATH: `init` (with `--undo` since E6), `hook`, `mcp`, `prune`, `status` — all implemented since E5. |
 | `dogear-queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. Also E5's machine-level registry. **Private, source-only, never published** — see below. |
+| `dogear-host` | What the two hosts share: the endpoint, the config-file reader, the app name and the client-tag helpers. Moved out of `dogear-vite` by J3; the transform follows in J2. **Private and source-only**, like `dogear-queue`. |
+| `dogear-next` | The second host: `withDogear(nextConfig, options)`, a `next.config` wrapper that does nothing outside `next dev`. Since J3 it serves the endpoint behind a rewrite. **`private: true` until J7 publishes it.** |
 
-**`dogear-queue` has no build and is not published.** Its `exports` points straight at
-`src/index.ts`; `dogear-vite`, `dogear-cli` and `dogear-core` list it as a **devDependency**
-and their tsup configs set `noExternal` so it is inlined at build time. Two consequences worth
+**`dogear-queue` and `dogear-host` have no build and are not published.** Each one's `exports`
+points straight at `src/index.ts`. Every package that uses one (`dogear-vite`, `dogear-next`,
+`dogear-cli` and `dogear-core` for the queue; `dogear-vite` and `dogear-next` for the host) lists
+it as a **devDependency**, and their tsup configs set `noExternal` so it is inlined at build
+time. A **published type** must not name either one, because tsc copies the import into
+`dist/*.d.ts`; that is why `DogearOptions.modifier` spells its union out. Two consequences worth
 knowing: the published install story is still three packages with no new runtime
 dependency, and `npm run typecheck` keeps working with **no prior build** — which it must,
 because CI typechecks before it builds and `stop-verify.sh` typechecks every TypeScript
@@ -101,7 +106,7 @@ the trap `examples/react-app` already documents.
 
 ### Where the rest lives
 
-Package-, workflow- and harness-specific notes sit beside the code they describe, and load when Claude works with files there: `packages/queue/CLAUDE.md`, `packages/cli/CLAUDE.md`, `packages/vite/CLAUDE.md`, `packages/core/CLAUDE.md`, `.github/CLAUDE.md`, `test-packed/CLAUDE.md`, `test-browser/CLAUDE.md` and `scripts/CLAUDE.md`. Update the one nearest the code that changed. Three of their rules are repeated here because breaking them is silent:
+Package-, workflow- and harness-specific notes sit beside the code they describe, and load when Claude works with files there: `packages/queue/CLAUDE.md`, `packages/host/CLAUDE.md`, `packages/next/CLAUDE.md`, `packages/cli/CLAUDE.md`, `packages/vite/CLAUDE.md`, `packages/core/CLAUDE.md`, `.github/CLAUDE.md`, `test-packed/CLAUDE.md`, `test-browser/CLAUDE.md` and `scripts/CLAUDE.md`. Update the one nearest the code that changed. Three of their rules are repeated here because breaking them is silent:
 
 - **`packages/queue/src/format.ts` must never import a `node:` module.** The overlay loads it in the browser, and a violation passes every Node-side suite.
 - **Never rename or move `.github/workflows/release.yml`.** Its filename is part of npm's trusted-publisher credential, and the failure is an auth error that does not mention it.
@@ -143,18 +148,18 @@ The brief has the full reasoning; the code is authoritative on mechanism.
 ## Commands
 
 Node `^20.19.0 || >=22.12.0` (Vite's own floor). One `npm install` at the repo root
-resolves all five workspaces.
+resolves all seven workspaces.
 
 | Command | What it does |
 |---|---|
 | `npm run verify` | The full gate: `format:check → typecheck → test → build → test:built → typecheck:example → build:example → build:fixtures → check:leak` |
 | `npm run typecheck` | `tsc --noEmit` per package, plus `scripts/`. Deliberately excludes the example — see below |
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
-| `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client. Needs a build first |
+| `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client, and J3's endpoint behind a real `next dev` under both bundlers. Needs a build first |
 | `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace once per Vite major the plugin admits (I1), and runs the binary, `dogear init` and a real dev server whose served app must carry its stamps. Needs a build first; deliberately not in `verify` |
 | `npm run test:browser` | **H3's round trip.** Drives Chromium against a real dev server: modifier-click, comment, submit, then reads `.dogear/queue.json`. Needs a build and a browser binary; deliberately not in `verify` |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
-| `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, three packages |
+| `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, four packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
 | `npm run build:fixtures` | Production build of F1 layer 2's gated-import fixture; also scanned by `check:leak` |
 | `npm run dev:example` | Dev server for the example app. **Builds core and the plugin first** — see below |
@@ -190,7 +195,7 @@ hermeticity: `check-leak.test.ts` builds its own temp fixtures, while G1's
 `packaging.test.ts` and the two `docs.test.ts` suites read the repository's own committed
 files — READMEs, `LICENSE`, manifests — which needs no build and so belongs in the fast run. The other five need a build first:
 `scripts/gate/*.test.ts` reads real build output under `npm run check:leak`,
-`packages/*/test-built/*.test.ts` spawns `dist/cli.js` under `npm run test:built`, H1's
+`packages/*/test-built/*.test.ts` spawns `dist/cli.js` or a real `next dev` under `npm run test:built`, H1's
 `test-packed/*.test.ts` packs the real tarballs under `npm run test:packed`, H6's
 `test-packed/managers/*.test.ts` installs them with pnpm and Yarn under
 `npm run test:managers`, and H3's `test-browser/*.test.ts` drives a real browser under

@@ -13,6 +13,10 @@ dist/
 # Test / coverage
 coverage/
 
+# J3's real `next dev` suite copies its fixture app here rather than to tmpdir, because
+# Turbopack will not read outside its project root. See packages/next/test-built/next-dev.test.ts.
+.scratch/
+
 # dogear runtime state.
 # The queue is scratch — annotations are transient and machine-local. The
 # config IS meant to be committed, hence the negation.

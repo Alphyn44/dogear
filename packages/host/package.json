@@ -1,0 +1,28 @@
+{
+  "name": "dogear-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared, unpublished home for what dogear's two hosts have in common: the endpoint, the config-file reader, the app name and the client-tag helpers.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alphyn44/dogear.git",
+    "directory": "packages/host"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "dogear-queue": "*"
+  }
+}

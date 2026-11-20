@@ -2,8 +2,12 @@
 
 These notes load when Claude works with files under this directory. The repo-wide rules are in the root `CLAUDE.md`.
 
+**Since J3 the endpoint, the config-file reader, the app name and the client-tag helpers live in
+`packages/host/src/`** (`dogear-host`, inlined here by tsup), and the notes below still describe
+them. What stayed here is the plugin itself, the transform until J2, and the sentinel until J4.
+
 **E7 gave `.dogear/config.json` its reader, and the layering is three lines of `??` guarding
-one rule.** `packages/vite/src/config-file.ts` returns *only the keys that survived
+one rule.** `packages/host/src/config-file.ts` returns *only the keys that survived
 validation*, and `configureServer` layers them as `option ?? file ?? default`. `??` rather
 than `||` is load-bearing — it falls through on `undefined` alone, so a literal `enabled:
 false` or `transform: false` option still beats the file, and a key the file omits reaches the

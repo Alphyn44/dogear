@@ -2,12 +2,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import type { Modifier } from 'dogear-host'
+import { UNBUILT_CORE_WARNING } from 'dogear-host'
 import type { HtmlTagDescriptor, Plugin, ViteDevServer } from 'vite'
 import { normalizePath } from 'vite'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from 'vitest'
 
 import { readConfig } from '../../core/src/client-config.js'
-import { UNBUILT_CORE_WARNING } from './client.js'
+import type { DogearOptions } from './index.js'
 import { dogear } from './index.js'
 import { SENTINEL } from './sentinel.js'
 import { SOURCE_ATTRIBUTE } from './stamp.js'
@@ -186,6 +188,13 @@ describe('dogear()', () => {
     expect(() => configured({ modifier: 'hyper' as never })).toThrow(
       /alt, ctrl, meta, shift/,
     )
+  })
+
+  it('spells out the same modifiers dogear-host validates against', () => {
+    // J3 (#79). `DogearOptions.modifier` is a literal union rather than `dogear-host`'s
+    // `Modifier`, so the published `index.d.ts` names no private package. `npm run typecheck`
+    // covers this file, so a drift between the two fails there; the runtime half is a no-op.
+    expectTypeOf<NonNullable<DogearOptions['modifier']>>().toEqualTypeOf<Modifier>()
   })
 })
 

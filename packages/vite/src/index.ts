@@ -6,20 +6,22 @@ import {
   registerServer,
   registryPath,
 } from 'dogear-queue'
-import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
-import { createFilter } from 'vite'
-
-import { findAppName } from './app-name.js'
-import type { ClientConfig, Modifier } from './client.js'
+import type { ClientConfig, Modifier } from 'dogear-host'
 import {
   buildClientConfig,
   clientScriptSrc,
+  createEndpoint,
+  DEFAULT_ENDPOINT,
+  findAppName,
   MODIFIERS,
+  normaliseEndpoint,
+  readConfigFile,
   resolveCoreDist,
   UNBUILT_CORE_WARNING,
-} from './client.js'
-import { readConfigFile } from './config-file.js'
-import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
+} from 'dogear-host'
+import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
+import { createFilter } from 'vite'
+
 import { SENTINEL } from './sentinel.js'
 import { stampSource } from './stamp.js'
 
@@ -84,8 +86,12 @@ export interface DogearOptions {
    *
    * `'meta'` is the Windows key on Windows, where the OS claims it on keyup — it works, but
    * it is a poor choice there.
+   *
+   * **Spelled out rather than typed as `dogear-host`'s `Modifier`.** This interface is
+   * published, and tsc's declaration emit would copy that import into `dist/index.d.ts`,
+   * naming a private package no consumer can install. `index.test.ts` holds the two equal.
    */
-  readonly modifier?: Modifier
+  readonly modifier?: 'alt' | 'ctrl' | 'meta' | 'shift'
   /**
    * Stamp `data-dogear-src` onto host JSX elements in dev. Default `true` — C1 (#15).
    *

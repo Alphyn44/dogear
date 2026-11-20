@@ -286,6 +286,92 @@ describe('origin and app tagging', () => {
     // No `app` was configured, so the client's value must not survive as a fallback either.
     expect(item !== undefined && 'app' in item).toBe(false)
   })
+
+  it('ignores x-forwarded-host unless the host opted in', async () => {
+    // Vite's dev server is dialled directly, so the header is whatever a client chose to send
+    // and `Host` is the truth. Only `forwarded: true` changes which one is read.
+    await fetch(`${origin}${DEFAULT_ENDPOINT}/annotations`, {
+      method: 'POST',
+      headers: { 'x-forwarded-host': 'localhost:3000' },
+      body: ONE_COMMENT,
+    })
+
+    expect(readQueue(queuePathFor(root)).items[0]?.['origin']).toBe(origin)
+  })
+})
+
+/**
+ * J3 (#79). Under Next the request arrives through a rewrite proxy that sets `Host` to the
+ * loopback server and copies the page's host into `x-forwarded-host`, so `forwarded: true`
+ * reads that instead.
+ */
+describe('origin behind a forwarding proxy', () => {
+  let forwardedServer: Server
+  let forwardedBase: string
+
+  beforeEach(async () => {
+    const handler = createEndpoint({
+      gitRoot: root,
+      endpoint: DEFAULT_ENDPOINT,
+      clientDist,
+      forwarded: true,
+    })
+    forwardedServer = createServer((req, res) => {
+      handler(req, res, () => {
+        res.statusCode = 418
+        res.end()
+      })
+    })
+    await new Promise<void>((resolve) => forwardedServer.listen(0, '127.0.0.1', resolve))
+    forwardedBase = `http://127.0.0.1:${(forwardedServer.address() as AddressInfo).port}`
+  })
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => forwardedServer.close(() => resolve()))
+  })
+
+  it.each<{ why: string; headers: Record<string, string>; expected: string }>([
+    {
+      why: 'the forwarded host replaces the loopback Host',
+      headers: { 'x-forwarded-host': 'localhost:3000' },
+      expected: 'http://localhost:3000',
+    },
+    {
+      why: 'only the first entry of a chain is the host the browser dialled',
+      headers: { 'x-forwarded-host': 'localhost:3000, proxy.internal:80' },
+      expected: 'http://localhost:3000',
+    },
+    {
+      why: 'x-forwarded-proto: https is honoured',
+      headers: { 'x-forwarded-host': 'app.localhost:3000', 'x-forwarded-proto': 'https' },
+      expected: 'https://app.localhost:3000',
+    },
+    {
+      why: 'any other proto is http',
+      headers: { 'x-forwarded-host': 'localhost:3000', 'x-forwarded-proto': 'gopher' },
+      expected: 'http://localhost:3000',
+    },
+  ])('records $expected: $why', async ({ headers, expected }) => {
+    await fetch(`${forwardedBase}${DEFAULT_ENDPOINT}/annotations`, {
+      method: 'POST',
+      headers,
+      body: ONE_COMMENT,
+    })
+
+    expect(readQueue(queuePathFor(root)).items[0]?.['origin']).toBe(expected)
+  })
+
+  it('records no origin at all when the header is missing, rather than the loopback', async () => {
+    // Under this flag `Host` is known to name the loopback server: a port nobody browsed.
+    // Absent is the honest answer, as it is for an HTTP/1.0 request with no Host.
+    await fetch(`${forwardedBase}${DEFAULT_ENDPOINT}/annotations`, {
+      method: 'POST',
+      body: ONE_COMMENT,
+    })
+
+    const [item] = readQueue(queuePathFor(root)).items
+    expect(item !== undefined && 'origin' in item).toBe(false)
+  })
 })
 
 /**

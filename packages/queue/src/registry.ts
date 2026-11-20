@@ -150,8 +150,21 @@ export type RegistryRead =
 /** What {@link registerServer} is given; `startedAt` is stamped by the write. */
 export type ServerInput = Omit<ServerRecord, 'startedAt'>
 
+/**
+ * The default for every `env` parameter here: the one variable this module reads, picked off
+ * `process.env` at call time.
+ *
+ * Not `process.env` itself. `RegistryEnv` is all-optional, so TypeScript's weak-type check
+ * refuses any source that has properties but none in common, and Next's `global.d.ts` gives
+ * `ProcessEnv` a required `NODE_ENV`, so the plain default stopped compiling the moment J3 put
+ * this file beside Next's types.
+ */
+function defaultEnv(): RegistryEnv {
+  return { DOGEAR_HOME: process.env['DOGEAR_HOME'] }
+}
+
 /** `$DOGEAR_HOME`, or `~/.dogear`. */
-export function registryHome(env: RegistryEnv = process.env): string {
+export function registryHome(env: RegistryEnv = defaultEnv()): string {
   const override = env.DOGEAR_HOME?.trim()
   // Resolved, because a relative override would mean something different to the plugin (whose
   // cwd is wherever npm started it) than to the CLI (wherever the user is standing) — which is
@@ -161,7 +174,7 @@ export function registryHome(env: RegistryEnv = process.env): string {
   return join(homedir(), REGISTRY_DIR)
 }
 
-export function registryPath(env: RegistryEnv = process.env): string {
+export function registryPath(env: RegistryEnv = defaultEnv()): string {
   return join(registryHome(env), REGISTRY_FILE)
 }
 

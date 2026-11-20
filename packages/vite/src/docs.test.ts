@@ -1,9 +1,7 @@
 import { readFileSync } from 'node:fs'
 
+import { DEFAULT_ENDPOINT, RECOGNISED_KEYS } from 'dogear-host'
 import { describe, expect, it } from 'vitest'
-
-import { RECOGNISED_KEYS } from './config-file.js'
-import { DEFAULT_ENDPOINT } from './endpoint.js'
 
 /**
  * G6 (#51): the package page has to describe the config file, and cannot go stale silently.
