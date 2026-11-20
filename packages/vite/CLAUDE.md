@@ -3,8 +3,10 @@
 These notes load when Claude works with files under this directory. The repo-wide rules are in the root `CLAUDE.md`.
 
 **Since J3 the endpoint, the config-file reader, the app name and the client-tag helpers live in
-`packages/host/src/`** (`dogear-host`, inlined here by tsup), and the notes below still describe
-them. What stayed here is the plugin itself, the transform until J2, and the sentinel until J4.
+`packages/host/src/`** (`dogear-host`, inlined here by tsup), and since J2 so does the stamp
+transform. The notes below still describe them. What stayed here is the plugin itself and the
+sentinel until J4. The plugin still filters with **Vite's own** `createFilter`;
+`filter-parity.test.ts` here holds `dogear-host/filter`, Next's port, to it.
 
 **E7 gave `.dogear/config.json` its reader, and the layering is three lines of `??` guarding
 one rule.** `packages/host/src/config-file.ts` returns *only the keys that survived
@@ -57,11 +59,12 @@ in `beforeAll` — so a test needing a `.dogear/config.json` writes it through t
 scope, never a bare `writeFileSync`. A leaked config would be read by every test after it and
 they would keep passing, silently running against a configuration they never asked for.
 
-**`packages/vite/src/stamp.ts` imports nothing from `vite`.** Its parser is `oxc-parser`, a
-dependency, because Vite 7 has none to re-export, and its path separator fix is a local
-replace. A value import from `vite` there would pass every workspace suite, which has Vite 8
-installed, and break only in a Vite 7 project or under J2's second host. `stamp.test.ts`
-holds it as a source rule. `oxc-parser` sits at a minor-locked `^0.152.0` because Oxc changes
+**`packages/host/src/stamp.ts` imports nothing from `vite` or `next`.** Its parser is
+`oxc-parser`, a dependency, because Vite 7 has none to re-export, and its path separator fix is a
+local replace. A value import from `vite` there would pass every workspace suite, which has Vite 8
+installed, and break only in a Vite 7 project or under Next. `stamp.test.ts` holds it as a source
+rule. `oxc-parser` is a dependency of `dogear-next` too since J2, so **bump both manifests
+together**. It sits at a minor-locked `^0.152.0` because Oxc changes
 AST details between 0.x minors; see the brief's Decisions log. **Bump it only to a minor at
 least a day old**: Yarn 4 quarantines younger versions by default, the range has nothing
 older to fall back on, and `test:managers` fails its Yarn legs with `YN0016` until the gate

@@ -17,12 +17,24 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./stamp": {
+      "types": "./src/stamp.ts",
+      "default": "./src/stamp.ts"
+    },
+    "./filter": {
+      "types": "./src/filter.ts",
+      "default": "./src/filter.ts"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "dogear-queue": "*"
+    "@types/picomatch": "^4.0.3",
+    "dogear-queue": "*",
+    "magic-string": "^0.30.21",
+    "oxc-parser": "^0.152.0",
+    "picomatch": "^4.0.7"
   }
 }

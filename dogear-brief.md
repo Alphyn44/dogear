@@ -184,8 +184,8 @@ attributes to already-compiled `jsx()` calls.
 
 ### `dogear-next`
 
-*Decided by J1 (#77). J3 (#79) built the wrapper and its endpoint; stamping is J2's and
-injection J4's.* The same three jobs for a Next.js 16 App Router app,
+*Decided by J1 (#77). J3 (#79) built the wrapper and its endpoint, J2 (#78) its stamping;
+injection is J4's.* The same three jobs for a Next.js 16 App Router app,
 done from the one place Next lets a tool in without touching the app's source:
 
 ```js
@@ -209,10 +209,13 @@ The Decisions log has the reasoning and the spike that checked each part.
 
 ### `dogear-host`
 
-*Decided by J1 (#77). J3 (#79) created it with everything but the transform, which J2 moves.*
+*Decided by J1 (#77). J3 (#79) created it; J2 (#78) moved the transform in.*
 Private, source-only, never published: the transform, the endpoint, the config-file reader, the
 app name and the client-tag helpers, moved out of `dogear-vite` so both hosts inline one copy.
-Built and inlined the way `dogear-queue` is.
+Built and inlined the way `dogear-queue` is. Two modules live behind subpaths rather than the
+index: `dogear-host/stamp`, the transform, so that a host's config entry never loads Oxc's native
+binding, and `dogear-host/filter`, the port of Vite's file filter that `dogear-next` uses in
+Vite's absence.
 
 ### `dogear-cli`
 
@@ -2906,6 +2909,47 @@ own.
 J3's "concurrent submits lose nothing" carries C4's reading unchanged: read-modify-write is
 pinned with a Next endpoint and a Vite endpoint submitting together over one root, and the
 cross-process race stays the Still open queue lock.
+
+**Under Next the filter is a port of Vite's, the patterns are strings, and the loader never
+breaks a page. Settled during J2 (#78).**
+J1 ruled how stamping attaches: one loader, registered by `withDogear` under `turbopack.rules`
+and `webpack()`. The transform itself moved to `dogear-host` unchanged, since I1 had already made
+it host-independent. What did not carry over was deciding *which files* to stamp, because
+`dogear-vite` asks Vite's `createFilter`, and `dogear-next` cannot import Vite.
+
+**The filter is a port, held to Vite's by a test.** `dogear-host/filter` reimplements the
+function Vite inlines from `@rollup/pluginutils` (`picomatch` with `dot: true`, relative globs
+resolved against the git root, exclude before include), and `dogear-next` depends on
+`picomatch`. A parity suite in `dogear-vite` runs one table through both and requires identical
+answers, which is what makes "the files stamped are the ones the configuration includes, as
+under Vite" a checked claim. Three alternatives were declined. Moving `dogear-vite` onto the
+port too would change a published package's matching for a Next story. Depending on
+`@rollup/pluginutils` would add `estree-walker` for one function. Node's `path.matchesGlob` is
+experimental on the Node 20 floor and is a different glob engine.
+
+**`include` and `exclude` are glob strings under Next.** Turbopack runs loaders in a worker
+process (J1's spike), so the loader's options must be JSON and the filter is compiled inside the
+loader. `dogear-vite`'s `RegExp` support has no JSON form, and `.dogear/config.json` could only
+ever supply strings, so the asymmetry costs only an option a Next user writes in code.
+
+**Two deliberate limits.** The loader is registered only for `*.jsx` and `*.tsx`, which loses
+nothing, because Oxc parses JSX in no other extension. And dependencies are skipped regardless
+of `exclude`: Turbopack's rule carries `{ not: 'foreign' }` and webpack's excludes
+`node_modules`, so the worker is never asked about a dependency. An `exclude` that omits
+`node_modules` therefore stamps no dependencies under Next. Under Vite the same setting reaches
+only the few dependencies Vite does not pre-bundle.
+
+**The user's own rules are kept, and ours runs first.** Turbopack runs every matching rule in
+order, so dogear's rule goes ahead of a user rule at the same glob, and the stamp describes the
+file as written. webpack's rule is `enforce: 'pre'`, after whatever the user's `webpack()` did,
+which puts it ahead of `next-swc-loader` as `enforce: 'pre'` does under Vite.
+
+**A loader failure passes the source through and warns once.** A loader that throws becomes a
+compile error on every page, so one dogear bug would take down the app it exists to help with.
+A parse error stays silent, as under Vite, because `stampSource` returns `null` on one.
+
+**C5's component attribute rides along.** `stampSource` writes both attributes in one insertion,
+so J2 stamps `data-dogear-component` under Next exactly as under Vite.
 
 **Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
 G5.**

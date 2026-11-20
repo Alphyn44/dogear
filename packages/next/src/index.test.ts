@@ -4,7 +4,12 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createEndpoint, DEFAULT_ENDPOINT } from 'dogear-host'
+import {
+  createEndpoint,
+  DEFAULT_ENDPOINT,
+  DEFAULT_EXCLUDE,
+  DEFAULT_INCLUDE,
+} from 'dogear-host'
 import { queuePathFor, readQueue } from 'dogear-queue'
 import type { NextConfig } from 'next'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -331,6 +336,239 @@ describe('staying out of the way', () => {
     await expect(inDev({}, { endpoint: '//evil.com' })).rejects.toThrow(
       /protocol-relative/,
     )
+  })
+})
+
+/**
+ * J2 (#78): the loader, as `withDogear` registers it. What each bundler then hands the loader is
+ * ../test-built/next-dev.test.ts's job; what the loader does with it is ./loader.test.ts's.
+ */
+describe('source stamping', () => {
+  type LoaderItem = { loader: string; options: Record<string, unknown> }
+  type TurbopackRule = { loaders: LoaderItem[]; condition: unknown; as?: string }
+  type WebpackRule = { test: RegExp; exclude: RegExp; enforce: string; use: LoaderItem[] }
+
+  const WEBPACK_CONTEXT = { isServer: false }
+
+  function turbopackRules(config: NextConfig): Record<string, unknown> {
+    return (config.turbopack?.rules ?? {}) as Record<string, unknown>
+  }
+
+  /** Run the config's `webpack()` the way Next does, and return the rules it leaves. */
+  function webpackRules(config: NextConfig, base: object = { module: { rules: [] } }) {
+    if (typeof config.webpack !== 'function')
+      throw new Error('expected a webpack function')
+    const out = config.webpack(base, WEBPACK_CONTEXT as never) as {
+      module: { rules: unknown[] }
+    }
+    return out.module.rules
+  }
+
+  function ourWebpackRule(config: NextConfig): WebpackRule {
+    return webpackRules(config).at(-1) as WebpackRule
+  }
+
+  function writeConfigFile(contents: object): void {
+    mkdirSync(join(root, '.dogear'), { recursive: true })
+    writeFileSync(
+      join(root, '.dogear', 'config.json'),
+      JSON.stringify({ version: 1, ...contents }),
+    )
+  }
+
+  it('registers one loader under Turbopack for .jsx and .tsx, outside node_modules', async () => {
+    const rules = turbopackRules(await inDev())
+
+    expect(Object.keys(rules).sort()).toEqual(['*.jsx', '*.tsx'])
+    for (const rule of Object.values(rules) as TurbopackRule[]) {
+      expect(rule).toEqual({
+        loaders: [
+          {
+            loader: expect.stringMatching(/[\\/]loader\.js$/),
+            options: {
+              gitRoot: root,
+              include: DEFAULT_INCLUDE,
+              exclude: DEFAULT_EXCLUDE,
+            },
+          },
+        ],
+        condition: { not: 'foreign' },
+      })
+      // J1's spike: `as` renames the module, and this loader's output keeps its file type.
+      expect(rule).not.toHaveProperty('as')
+    }
+  })
+
+  it('registers the same loader under webpack, as a pre loader for .jsx and .tsx', async () => {
+    const config = await inDev()
+    const rule = ourWebpackRule(config)
+    const [turbopackLoader] = (turbopackRules(config)['*.tsx'] as TurbopackRule).loaders
+
+    expect(rule.enforce).toBe('pre')
+    expect(rule.use).toEqual([turbopackLoader])
+    expect(
+      ['App.tsx', 'App.jsx', 'App.ts', 'App.js'].map((f) => rule.test.test(f)),
+    ).toEqual([true, true, false, false])
+    expect(rule.exclude.test('/repo/node_modules/pkg/A.tsx')).toBe(true)
+    expect(rule.exclude.test('C:\\repo\\node_modules\\pkg\\A.tsx')).toBe(true)
+    expect(rule.exclude.test('/repo/src/A.tsx')).toBe(false)
+  })
+
+  it('passes options that survive JSON, which is all a Turbopack worker receives', async () => {
+    const { options } = (turbopackRules(await inDev())['*.tsx'] as TurbopackRule)
+      .loaders[0]!
+
+    expect(JSON.parse(JSON.stringify(options))).toEqual(options)
+  })
+
+  it.each([
+    {
+      layer: 'the defaults',
+      file: {},
+      options: {},
+      expected: { include: DEFAULT_INCLUDE, exclude: DEFAULT_EXCLUDE },
+    },
+    {
+      layer: 'the file over the defaults',
+      file: { include: 'src/**/*.tsx', exclude: ['**/gen/**'] },
+      options: {},
+      expected: { include: 'src/**/*.tsx', exclude: ['**/gen/**'] },
+    },
+    {
+      layer: 'the option over the file',
+      file: { include: 'src/**/*.tsx', exclude: ['**/gen/**'] },
+      options: { include: ['app/**/*.tsx'], exclude: [] },
+      expected: { include: ['app/**/*.tsx'], exclude: [] },
+    },
+  ])('layers include and exclude: $layer', async ({ file, options, expected }) => {
+    writeConfigFile(file)
+
+    const { loaders } = turbopackRules(await inDev({}, options))['*.jsx'] as TurbopackRule
+
+    expect(loaders[0]?.options).toMatchObject(expected)
+  })
+
+  it.each([
+    { why: 'the transform: false option', file: {}, options: { transform: false } },
+    { why: 'transform: false in the file', file: { transform: false }, options: {} },
+  ])(
+    'registers no loader for $why, and keeps the endpoint',
+    async ({ file, options }) => {
+      writeConfigFile(file)
+
+      const config = await inDev({ webpack: null }, options)
+
+      expect(config.turbopack).toBeUndefined()
+      expect(config.webpack).toBeNull()
+      expect(config.rewrites).toBeTypeOf('function')
+    },
+  )
+
+  it('lets transform: true in the option beat the file', async () => {
+    writeConfigFile({ transform: false })
+
+    expect(
+      Object.keys(turbopackRules(await inDev({}, { transform: true }))),
+    ).toHaveLength(2)
+  })
+
+  it('registers nothing outside the dev phase', async () => {
+    // The same-object assertion in "the phase gate" already covers this; restated here so
+    // the stamping criterion "nothing in a next build carries it" has a unit-level witness.
+    const built = await withDogear({})('phase-production-build', CONTEXT)
+
+    expect(built.turbopack).toBeUndefined()
+    expect(built.webpack).toBeUndefined()
+  })
+
+  describe('alongside the user’s Turbopack rules', () => {
+    const userLoader = { loader: 'user-loader', options: { a: 1 } }
+
+    it('keeps the rest of the turbopack block and every other glob', async () => {
+      const config = await inDev({
+        turbopack: {
+          root: '/somewhere',
+          resolveAlias: { a: 'b' },
+          rules: { '*.svg': { loaders: ['@svgr/webpack'], as: '*.js' } },
+        },
+      })
+
+      expect(config.turbopack).toMatchObject({
+        root: '/somewhere',
+        resolveAlias: { a: 'b' },
+        rules: { '*.svg': { loaders: ['@svgr/webpack'], as: '*.js' } },
+      })
+    })
+
+    it.each([
+      {
+        shape: 'one rule object',
+        theirs: { loaders: [userLoader], condition: 'browser' },
+        expected: [{ loaders: [userLoader], condition: 'browser' }],
+      },
+      {
+        shape: 'the shorthand list of loaders, wrapped as the one rule it is',
+        theirs: ['plain-loader', userLoader],
+        expected: [{ loaders: ['plain-loader', userLoader] }],
+      },
+      {
+        shape: 'a list of rules',
+        theirs: [
+          { loaders: [userLoader], condition: 'browser' },
+          { loaders: ['plain-loader'], condition: { not: 'browser' } },
+        ],
+        expected: [
+          { loaders: [userLoader], condition: 'browser' },
+          { loaders: ['plain-loader'], condition: { not: 'browser' } },
+        ],
+      },
+    ])('puts ours first, ahead of $shape', async ({ theirs, expected }) => {
+      const config = await inDev({
+        turbopack: { rules: { '*.tsx': theirs } },
+      } as NextConfig)
+      const rules = turbopackRules(config)
+
+      const [ours, ...rest] = rules['*.tsx'] as TurbopackRule[]
+      expect(ours?.loaders[0]?.loader).toMatch(/[\\/]loader\.js$/)
+      expect(rest).toEqual(expected)
+      // The glob the user did not touch gets ours alone.
+      expect(Array.isArray(rules['*.jsx'])).toBe(false)
+    })
+  })
+
+  describe('alongside the user’s webpack()', () => {
+    it('calls theirs first, with the config and context, and adds ours last', async () => {
+      const user = vi.fn(
+        (config: { module: { rules: unknown[] } }, _context: unknown) => {
+          config.module.rules.push('theirs')
+          return config
+        },
+      )
+
+      const config = await inDev({ webpack: user })
+      const rules = webpackRules(config)
+
+      expect(user).toHaveBeenCalledWith(expect.anything(), WEBPACK_CONTEXT)
+      expect(rules[0]).toBe('theirs')
+      expect(rules).toHaveLength(2)
+      expect((rules[1] as WebpackRule).enforce).toBe('pre')
+    })
+
+    it('uses the object theirs returns, even a new one', async () => {
+      const replaced = { module: { rules: ['replaced'] }, marker: true }
+
+      const config = await inDev({ webpack: () => replaced })
+      const out = config.webpack!({ module: { rules: [] } }, WEBPACK_CONTEXT as never)
+
+      expect(out).toBe(replaced)
+      expect(replaced.module.rules).toHaveLength(2)
+    })
+
+    it('creates module.rules when the config has none', async () => {
+      const rules = webpackRules(await inDev(), {})
+
+      expect(rules).toHaveLength(1)
+    })
   })
 })
 

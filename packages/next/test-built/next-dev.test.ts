@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs'
@@ -48,6 +49,22 @@ beforeAll(() => {
   }
 })
 
+describe('the built package', () => {
+  it('keeps the parser out of the config entry, and in the loader (J2)', () => {
+    // Every evaluation of next.config imports dist/index.js, and Turbopack evaluates it twice.
+    // Oxc's native binding belongs to the loader alone; an esbuild chunk or a barrel re-export
+    // is all it takes to drag it in, and nothing else would notice.
+    const dist = join(REPO_ROOT, 'packages', 'next', 'dist')
+
+    expect(readFileSync(join(dist, 'index.js'), 'utf8')).not.toMatch(
+      /from ["']oxc-parser["']/,
+    )
+    expect(readFileSync(join(dist, 'loader.js'), 'utf8')).toMatch(
+      /from ["']oxc-parser["']/,
+    )
+  })
+})
+
 /** A copy of the fixture app with its own git root and a generated `next.config.mjs`. */
 function createApp(): string {
   mkdirSync(SCRATCH, { recursive: true })
@@ -58,6 +75,13 @@ function createApp(): string {
   writeFileSync(
     join(root, 'package.json'),
     `${JSON.stringify({ name: 'dogear-next-fixture', private: true, type: 'module' }, null, 2)}\n`,
+  )
+  // J2 (#78): the file layer of the transform's configuration, so a real run proves it decides
+  // which files are stamped. The default exclude is restated because setting one replaces it.
+  mkdirSync(join(root, '.dogear'))
+  writeFileSync(
+    join(root, '.dogear', 'config.json'),
+    `${JSON.stringify({ version: 1, exclude: ['**/node_modules/**', '**/skipped.jsx'] })}\n`,
   )
   writeFileSync(
     join(root, 'next.config.mjs'),
@@ -153,6 +177,25 @@ function stopTree(child: ChildProcess): Promise<void> {
   })
 }
 
+/**
+ * Where `needle` starts in a fixture file, as `line:column`, both 1-based: what the stamp must
+ * say if it describes the file as written. Computed from the fixture rather than written into
+ * the test, so editing a comment above an element cannot make the expectation wrong.
+ */
+function positionIn(file: string, needle: string): string {
+  const lines = readFileSync(join(FIXTURE, 'app', file), 'utf8').split('\n')
+  const line = lines.findIndex((text) => text.includes(needle))
+  if (line === -1) throw new Error(`${needle} is not in ${file}`)
+  return `${line + 1}:${lines[line]!.indexOf(needle) + 1}`
+}
+
+/** Every file under `dir`, recursively. */
+function filesUnder(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+}
+
 function readItems(root: string): readonly Record<string, unknown>[] {
   const path = join(root, '.dogear', 'queue.json')
   if (!existsSync(path)) return []
@@ -220,6 +263,47 @@ describe.each([
     const ready = next.log().match(/\[dogear\] ready/g) ?? []
     expect(ready, next.log()).toHaveLength(1)
   })
+
+  describe('source stamping (J2)', () => {
+    let html: string
+
+    beforeAll(async () => {
+      const response = await fetch(`${next.origin}/`)
+      html = await response.text()
+    }, 60_000)
+
+    it.each([
+      { kind: 'a server component', file: 'page.jsx', tag: 'h1', component: 'Page' },
+      {
+        kind: 'a client component',
+        file: 'counter.jsx',
+        tag: 'button',
+        component: 'Counter',
+      },
+      {
+        kind: 'the root layout',
+        file: 'layout.jsx',
+        tag: 'body',
+        component: 'RootLayout',
+      },
+    ])('stamps $kind with its line and column as written', ({ file, tag, component }) => {
+      const at = positionIn(file, `<${tag}`)
+
+      expect(html, next.log()).toContain(`data-dogear-src="app/${file}:${at}"`)
+      expect(html).toContain(`data-dogear-component="${component}"`)
+    })
+
+    it('stamps nothing in a file the configuration excludes', () => {
+      const element = html.match(/<p id="skipped"[^>]*>/)?.[0]
+
+      expect(element, html).toBeDefined()
+      expect(element).not.toContain('data-dogear-src')
+    })
+
+    it('reported no loader failure', () => {
+      expect(next.log()).not.toContain('could not stamp')
+    })
+  })
 })
 
 describe('next build, then next start', () => {
@@ -260,10 +344,28 @@ describe('next build, then next start', () => {
     })
 
     expect(response.status).toBe(404)
-    expect(existsSync(join(root, '.dogear'))).toBe(false)
+    // The queue, not `.dogear/` itself: since J2 the fixture carries a `config.json` there.
+    expect(existsSync(join(root, '.dogear', 'queue.json'))).toBe(false)
   }, 60_000)
 
   it('said nothing about dogear while building or serving', () => {
     expect(server!.log()).not.toContain('[dogear]')
+  })
+
+  it('carries no source stamp anywhere in the build (J2)', () => {
+    // Every file, source maps included: the fixture's own source never spells the attribute,
+    // so a map embedding it verbatim cannot produce a false hit, and a real one is a leak.
+    const stamped = filesUnder(join(root, '.next')).filter((file) =>
+      readFileSync(file, 'latin1').includes('data-dogear-src'),
+    )
+
+    expect(stamped).toEqual([])
+  })
+
+  it('serves a page with no source stamp in it (J2)', async () => {
+    const html = await (await fetch(`${server!.origin}/`)).text()
+
+    expect(html).toContain('dogear next fixture')
+    expect(html).not.toContain('data-dogear-src')
   })
 })

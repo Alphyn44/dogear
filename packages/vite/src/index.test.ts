@@ -12,7 +12,7 @@ import { readConfig } from '../../core/src/client-config.js'
 import type { DogearOptions } from './index.js'
 import { dogear } from './index.js'
 import { SENTINEL } from './sentinel.js'
-import { SOURCE_ATTRIBUTE } from './stamp.js'
+import { SOURCE_ATTRIBUTE } from 'dogear-host/stamp'
 
 /**
  * B1 (#8) turned `transformIndexHtml` into a *conditional* hook: it injects only after

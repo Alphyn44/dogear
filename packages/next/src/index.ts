@@ -1,5 +1,9 @@
+import { fileURLToPath } from 'node:url'
+
 import {
   DEFAULT_ENDPOINT,
+  DEFAULT_EXCLUDE,
+  DEFAULT_INCLUDE,
   findAppName,
   normaliseEndpoint,
   readConfigFile,
@@ -8,6 +12,7 @@ import { CONFIG_FILE, findGitRoot, QUEUE_DIR } from 'dogear-queue'
 import type { NextConfig } from 'next'
 import type { PHASE_DEVELOPMENT_SERVER } from 'next/constants.js'
 
+import type { LoaderOptions } from './loader.js'
 import { processState, startEndpointServer } from './server.js'
 
 /**
@@ -24,7 +29,8 @@ export interface DogearOptions {
   /**
    * Turn dogear off for this project entirely. Default `true`.
    *
-   * `false` means no endpoint server and no rewrite, the same switch as `dogear-vite`'s.
+   * `false` means no endpoint server, no rewrite and no loader, the same switch as
+   * `dogear-vite`'s.
    * `.dogear/config.json` layers underneath, and this option is checked first, so a disabled
    * project cannot be stopped by a dogear misconfiguration it will never use.
    */
@@ -49,6 +55,33 @@ export interface DogearOptions {
    * per repo and this value is per app.
    */
   readonly app?: string
+  /**
+   * Stamp `data-dogear-src` onto host JSX elements in dev. Default `true`, for C1 (#15) and
+   * J2 (#78).
+   *
+   * `false` keeps the endpoint: annotations still arrive, located by the selector floor (C3)
+   * instead of an exact file and line. `enabled` is the switch for dogear as a whole. Layered
+   * over `.dogear/config.json`, as under Vite.
+   */
+  readonly transform?: boolean
+  /**
+   * Which files the transform touches. Default `['**\/*.jsx', '**\/*.tsx']`. Relative patterns
+   * resolve against the git root, as under Vite. Layered over `.dogear/config.json`.
+   *
+   * **Glob strings only**, where `dogear-vite` also takes a `RegExp`: Turbopack runs the loader
+   * in a worker process, and what reaches it must be JSON. Only `.jsx` and `.tsx` files reach
+   * the loader at all, which loses nothing, because Oxc parses no JSX in any other extension.
+   */
+  readonly include?: string | readonly string[]
+  /**
+   * Files the transform skips even when {@link DogearOptions.include} matches. Default
+   * `['**\/node_modules/**']`; setting this replaces that rather than extending it. Layered
+   * over `.dogear/config.json`.
+   *
+   * Dependencies are skipped regardless: the rules exclude `node_modules` before the loader
+   * runs, so an `exclude` that leaves it out does not start stamping them.
+   */
+  readonly exclude?: string | readonly string[]
 }
 
 /** What Next passes a config function as its second argument. */
@@ -64,8 +97,28 @@ export type NextConfigInput =
 type Rewrites = NonNullable<NextConfig['rewrites']>
 type Rewrite = { readonly source: string; readonly destination: string; basePath?: false }
 
+type Turbopack = NonNullable<NextConfig['turbopack']>
+type TurbopackRules = NonNullable<Turbopack['rules']>
+type RuleCollection = TurbopackRules[string]
+type RuleEntry = Extract<RuleCollection, readonly unknown[]>[number]
+type Webpack = NonNullable<NextConfig['webpack']>
+
 /**
- * dogear's `next.config` wrapper. J1 (#77) decided it; J3 (#79) builds its endpoint.
+ * The built loader, beside this file in `dist/`. An absolute path, which both bundlers accept
+ * as a loader name, so nothing depends on how the user's project resolves `dogear-next`.
+ */
+const LOADER = fileURLToPath(new URL('./loader.js', import.meta.url))
+
+/**
+ * The Turbopack globs the loader is registered under. Globs without a `/` match the file name,
+ * so these two cover every directory. They are exactly the extensions Oxc parses as JSX, and
+ * the loader's own filter narrows from there.
+ */
+const RULE_GLOBS = ['*.jsx', '*.tsx'] as const
+
+/**
+ * dogear's `next.config` wrapper. J1 (#77) decided it; J3 (#79) built its endpoint and J2 (#78)
+ * its source stamping.
  *
  * ```js
  * // next.config.mjs
@@ -160,7 +213,7 @@ async function attach(config: NextConfig, options: DogearOptions): Promise<NextC
     `[dogear] ready: ${endpoint} writes to ${QUEUE_DIR}/queue.json in ${gitRoot}.`,
   )
 
-  return {
+  const served: NextConfig = {
     ...config,
     rewrites: withEndpointRewrite(config.rewrites, {
       source: `${endpoint}/:path*`,
@@ -170,6 +223,110 @@ async function attach(config: NextConfig, options: DogearOptions): Promise<NextC
       // `/docs/__dogear/*`, and every submit would miss.
       basePath: false,
     }),
+  }
+
+  // J2 (#78). Under the same preconditions as the endpoint, as under Vite: no git root means no
+  // stamp, because a path relative to a repository dogear could not find is worse than none.
+  if ((options.transform ?? file.transform) === false) return served
+
+  const loader: LoaderOptions = {
+    gitRoot,
+    include: options.include ?? file.include ?? DEFAULT_INCLUDE,
+    exclude: options.exclude ?? file.exclude ?? DEFAULT_EXCLUDE,
+  }
+
+  return {
+    ...served,
+    turbopack: withStampRules(config.turbopack, loader),
+    webpack: withStampLoader(config.webpack, loader),
+  }
+}
+
+/**
+ * Register the loader under Turbopack, keeping every rule the user wrote.
+ *
+ * Each rule carries `condition: { not: 'foreign' }`, Turbopack's built-in for `node_modules`
+ * and Next's internals, so the worker is never asked about a dependency. It sets no `as`: J1's
+ * spike found `as` renames the module (`probe.tsx` became `probe.tsx.tsx`), and this loader's
+ * output keeps its file type.
+ *
+ * **Ours goes first when the user already has a rule at the same glob.** Turbopack runs every
+ * matching rule in order, and the stamp's line and column must describe the file as written,
+ * not what another loader made of it. A shorthand list of loaders is one rule, so it is wrapped
+ * as one rather than spread into separate rules.
+ */
+function withStampRules(
+  turbopack: NextConfig['turbopack'],
+  options: LoaderOptions,
+): Turbopack {
+  const ours: RuleEntry = {
+    loaders: [{ loader: LOADER, options: loaderOptions(options) }],
+    condition: { not: 'foreign' },
+  }
+  const rules: TurbopackRules = { ...turbopack?.rules }
+
+  for (const glob of RULE_GLOBS) {
+    const existing = rules[glob]
+    rules[glob] = existing === undefined ? ours : [ours, ...asRuleList(existing)]
+  }
+
+  return { ...turbopack, rules }
+}
+
+/**
+ * A user's collection as a list of rules. An object is one rule; a list made only of loaders
+ * is the shorthand for one rule; any other list is already a list of rules.
+ */
+function asRuleList(collection: RuleCollection): RuleEntry[] {
+  if (!Array.isArray(collection)) return [collection as RuleEntry]
+
+  const entries = collection as readonly RuleEntry[]
+  const isLoader = (entry: RuleEntry) => typeof entry === 'string' || 'loader' in entry
+  if (entries.every(isLoader)) {
+    return [{ loaders: entries as Extract<RuleEntry, { loader: string } | string>[] }]
+  }
+  return [...entries]
+}
+
+/**
+ * Register the loader under webpack, after whatever the user's own `webpack()` does.
+ *
+ * **`enforce: 'pre'`** is the same word as under Vite and does the same job: pre loaders run
+ * before Next's own `next-swc-loader`, so this one sees JSX rather than compiled `jsx()` calls.
+ * The rule sits at the top level of `module.rules`, so it applies to every compilation webpack
+ * runs for a page (`rsc`, `ssr` and the browser's). J1's spike found the loader runs once per
+ * layer, and the stamps agree across them because the transform is deterministic, which is
+ * what keeps hydration from reporting a mismatch.
+ */
+function withStampLoader(user: NextConfig['webpack'], options: LoaderOptions): Webpack {
+  return (config, context) => {
+    const resolved = typeof user === 'function' ? user(config, context) : config
+
+    resolved.module ??= {}
+    resolved.module.rules ??= []
+    resolved.module.rules.push({
+      test: /\.(?:jsx|tsx)$/,
+      exclude: /[\\/]node_modules[\\/]/,
+      enforce: 'pre',
+      use: [{ loader: LOADER, options: loaderOptions(options) }],
+    })
+
+    return resolved
+  }
+}
+
+/**
+ * Loader options in the shape Turbopack's types demand: a JSON object with mutable arrays.
+ * A fresh copy per registration, so no bundler can mutate what the other was given.
+ */
+function loaderOptions(options: LoaderOptions): { [key: string]: string | string[] } {
+  const list = (patterns: string | readonly string[]) =>
+    typeof patterns === 'string' ? patterns : [...patterns]
+
+  return {
+    gitRoot: options.gitRoot,
+    include: list(options.include),
+    exclude: list(options.exclude),
   }
 }
 

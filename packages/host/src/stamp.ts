@@ -19,11 +19,18 @@ import { parseSync } from 'oxc-parser'
  * *returns* `{ program, errors }` rather than throwing. C1 first took it from Vite 8, which
  * re-exports the same parser from Rolldown, and that one import was the whole of the plugin's
  * Vite 8 floor: Vite 7 has no parser that reads TSX to give. I1 (#73) moved it to
- * `oxc-parser`, which is what let the peer range admit Vite 7, and it is also what makes this
- * module host-independent for J2 to reuse under Next. `stamp.test.ts` holds the second half
- * as a source rule. `magic-string` is here because a transform that returns code without a
- * sourcemap makes Vite log "Sourcemap is likely to be incorrect" against every file it
- * touches.
+ * `oxc-parser`, which is what let the peer range admit Vite 7, and it is also what made this
+ * module host-independent: J2 (#78) moved it out of `dogear-vite` into this package, and both
+ * hosts now inline this one copy. `stamp.test.ts` holds that as a source rule. `magic-string`
+ * is here because a transform that returns code without a sourcemap makes Vite log
+ * "Sourcemap is likely to be incorrect" against every file it touches.
+ *
+ * Both parser and map library stay **external** in each host's build: they are runtime
+ * dependencies of `dogear-vite` and `dogear-next` alike, and `oxc-parser` ships a native
+ * binary per platform that no bundler could inline. That is also why this module is the
+ * subpath `dogear-host/stamp` rather than an index export: esbuild keeps an external import it
+ * cannot prove side-effect free, so any entry that reached this file through the index would
+ * load the native binding, `dogear-next`'s config wrapper included.
  *
  * **Only host elements are stamped** — lowercase `JSXIdentifier` names. `<Button/>` gets
  * nothing: React would pass the attribute through as an unknown prop, and if the component
@@ -90,7 +97,8 @@ export interface StampResult {
  * and Vite reports the real syntax error a moment later with a proper code frame. A dogear
  * warning on every keystroke inside a broken file would be pure noise.
  *
- * @param id  The Vite module id. May carry a query (`/src/App.tsx?t=1739…`); it is stripped.
+ * @param id  The module id: Vite's, or a loader's `resourcePath` under Next. May carry a query
+ *   (`/src/App.tsx?t=1739…`); it is stripped.
  * @param gitRoot  Paths in the attribute are relative to this — see the Decisions log.
  */
 export function stampSource(

@@ -12,6 +12,8 @@ import {
   clientScriptSrc,
   createEndpoint,
   DEFAULT_ENDPOINT,
+  DEFAULT_EXCLUDE,
+  DEFAULT_INCLUDE,
   findAppName,
   MODIFIERS,
   normaliseEndpoint,
@@ -19,29 +21,11 @@ import {
   resolveCoreDist,
   UNBUILT_CORE_WARNING,
 } from 'dogear-host'
+import { stampSource } from 'dogear-host/stamp'
 import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
 import { createFilter } from 'vite'
 
 import { SENTINEL } from './sentinel.js'
-import { stampSource } from './stamp.js'
-
-/**
- * Which files the JSX transform touches by default — C1 (#15), and the same pair the
- * brief's `.dogear/config.json` names.
- *
- * JSX-only by design. A `.js` holding JSX is not parsed as JSX by Oxc, and forcing it would
- * mean dogear deciding a file's language against the project's own toolchain. The brief
- * lists `.js` files among the places the attribute legitimately does not reach; they get
- * the selector floor (C3) instead.
- */
-const DEFAULT_INCLUDE = ['**/*.jsx', '**/*.tsx']
-
-/**
- * Never transform dependencies. Stamping them would point the agent at code inside
- * `node_modules` that it has no business editing, and a linked workspace dependency is
- * already covered by its own dev server.
- */
-const DEFAULT_EXCLUDE = ['**/node_modules/**']
 
 export interface DogearOptions {
   /**
@@ -372,6 +356,8 @@ export function dogear(options: DogearOptions = {}): Plugin {
       if ((options.transform ?? file.transform) !== false) {
         stamping = {
           gitRoot,
+          // Vite's `createFilter`, not `dogear-host/filter`: this host has the real one, and
+          // ./filter-parity.test.ts holds the port to it rather than the other way round.
           matches: createFilter(
             options.include ?? file.include ?? DEFAULT_INCLUDE,
             options.exclude ?? file.exclude ?? DEFAULT_EXCLUDE,

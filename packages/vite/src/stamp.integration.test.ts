@@ -9,7 +9,7 @@ import { createServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { dogear } from './index.js'
-import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE } from './stamp.js'
+import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE } from 'dogear-host/stamp'
 
 /**
  * C1's (#15) ordering claim, which nothing else can prove.

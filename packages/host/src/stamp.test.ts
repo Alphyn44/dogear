@@ -404,15 +404,16 @@ describe('the host boundary', () => {
    * A source rule, in the shape ./listeners.test.ts in dogear-core and
    * dogear-queue's ./format.test.ts established. I1 (#73) took the parser from `oxc-parser`
    * instead of Vite 8's re-export, and replaced `normalizePath` with a local replace, so that
-   * this module runs under Vite 7 and under a host that is not Vite at all (J2). A value
-   * import from `vite` here would still typecheck and pass every case in this file, because
-   * the workspace has Vite 8 installed; the failure would surface only as an `ERESOLVE` or a
-   * missing export in someone else's project.
+   * this module runs under Vite 7 and under a host that is not Vite at all. J2 (#78) moved it
+   * here, where both hosts inline it. A value import from `vite` or `next` here would still
+   * typecheck and pass every case in this file, because the workspace has both installed; the
+   * failure would surface only as an `ERESOLVE` or a missing export in someone else's project.
    */
-  it('imports nothing from vite', () => {
+  it('imports nothing from either host', () => {
     const source = readFileSync(new URL('./stamp.ts', import.meta.url), 'utf8')
 
     expect(source).not.toMatch(/from 'vite'/)
+    expect(source).not.toMatch(/from 'next[/']/)
     // The control: the parser import this rule exists to keep in place. Without it, a rename
     // of the file under test would leave the rule above reading nothing and passing.
     expect(source).toMatch(/from 'oxc-parser'/)

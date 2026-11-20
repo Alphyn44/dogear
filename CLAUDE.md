@@ -89,8 +89,8 @@ Don't over-explain basics.
 | `dogear-vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
 | `dogear-cli` | `dogear` on PATH: `init` (with `--undo` since E6), `hook`, `mcp`, `prune`, `status` — all implemented since E5. |
 | `dogear-queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. Also E5's machine-level registry. **Private, source-only, never published** — see below. |
-| `dogear-host` | What the two hosts share: the endpoint, the config-file reader, the app name and the client-tag helpers. Moved out of `dogear-vite` by J3; the transform follows in J2. **Private and source-only**, like `dogear-queue`. |
-| `dogear-next` | The second host: `withDogear(nextConfig, options)`, a `next.config` wrapper that does nothing outside `next dev`. Since J3 it serves the endpoint behind a rewrite. **`private: true` until J7 publishes it.** |
+| `dogear-host` | What the two hosts share: the endpoint, the config-file reader, the app name, the client-tag helpers (moved out of `dogear-vite` by J3) and the JSX transform (by J2). The file filter is the subpath `dogear-host/filter`. **Private and source-only**, like `dogear-queue`. |
+| `dogear-next` | The second host: `withDogear(nextConfig, options)`, a `next.config` wrapper that does nothing outside `next dev`. Since J3 it serves the endpoint behind a rewrite; since J2 it stamps through a loader registered under both bundlers. **`private: true` until J7 publishes it.** |
 
 **`dogear-queue` and `dogear-host` have no build and are not published.** Each one's `exports`
 points straight at `src/index.ts`. Every package that uses one (`dogear-vite`, `dogear-next`,
