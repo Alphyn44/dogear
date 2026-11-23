@@ -230,7 +230,7 @@ describe("createMcpStep() and Cursor's tool approvals (#76)", () => {
  * written — so it fired on the run that created `.mcp.json` and never again. G3 (#44) moved it
  * to ./scaffold.ts's `remarks()`: it describes the repository rather than what this step did,
  * which is what lets it print on every run without suppressing `nothing changed`. The cases
- * live in ./scaffold.test.ts now; this one pins that the step itself stays out of it.
+ * live in ./scaffold.wiring.test.ts now; this one pins that the step itself stays out of it.
  *
  * Since #75 the step cannot see install state at all (`Wiring` carries the path, not whether
  * anything is installed at it), so what is left to pin is that a fresh registration notes nothing.

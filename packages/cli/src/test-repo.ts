@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { cpSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+import { afterAll } from 'vitest'
 
 import type { Detection } from './detect.js'
 
@@ -26,6 +28,13 @@ import type { Detection } from './detect.js'
  * the reverse. `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` are pointed at a path that does
  * not exist, which git reads as an empty config, and `GIT_CONFIG_NOSYSTEM` covers the same
  * ground for a git older than 2.32.
+ *
+ * **Repositories are copied from a template, not initialised one by one** (#87). Starting a
+ * git process costs around 40ms on Windows, and `npm test` used to run `git init` 420 times,
+ * which made it four times slower there than on Linux. Each test file now runs `git init` once
+ * and copies the resulting `.git` for every repository after that, in a few milliseconds. The
+ * copy is still a repository git itself created, so every question asked of it is answered by
+ * a real git, which is the premise above.
  */
 
 /**
@@ -56,6 +65,9 @@ export const NO_DETECTION: Detection = Object.freeze({
 /** Env keys {@link isolateGitConfig} overwrites, so the caller can put them back. */
 const KEYS = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'] as const
 
+/** Any path that cannot exist. git treats an unreadable config file as an empty one. */
+const NOWHERE = join(tmpdir(), 'dogear-no-such-gitconfig')
+
 /**
  * Point git at no configuration at all, returning the function that restores the
  * environment. Call in `beforeEach`, call the result in `afterEach`.
@@ -63,10 +75,8 @@ const KEYS = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'] a
 export function isolateGitConfig(): () => void {
   const saved = KEYS.map((key) => [key, process.env[key]] as const)
 
-  // Any path that cannot exist. git treats an unreadable config file as an empty one.
-  const nowhere = join(tmpdir(), 'dogear-no-such-gitconfig')
-  process.env.GIT_CONFIG_GLOBAL = nowhere
-  process.env.GIT_CONFIG_SYSTEM = nowhere
+  process.env.GIT_CONFIG_GLOBAL = NOWHERE
+  process.env.GIT_CONFIG_SYSTEM = NOWHERE
   process.env.GIT_CONFIG_NOSYSTEM = '1'
 
   return () => {
@@ -105,10 +115,53 @@ export function isolateRegistry(): { home: string; restore: () => void } {
   }
 }
 
+/**
+ * The repository every {@link createRepo} in this test file copies, made on first use.
+ *
+ * Per file rather than per run because vitest evaluates this module afresh for each test file,
+ * and the `afterAll` below is registered on whichever file is importing it. That is the same
+ * arrangement `vitest.setup.ts` uses for its own temp directory, and it costs one `git init`
+ * per file that asks for a repository at all.
+ */
+let template: string | undefined
+
+afterAll(() => {
+  if (template !== undefined) removeRepo(template)
+  template = undefined
+})
+
 /** A fresh temp directory with a real `.git` in it. The caller removes it. */
 export function createRepo(prefix: string): string {
+  template ??= createTemplate()
+
   const root = mkdtempSync(join(tmpdir(), prefix))
-  run(root, ['init', '-q'])
+  cpSync(join(template, '.git'), join(root, '.git'), { recursive: true })
+  return root
+}
+
+/**
+ * Initialise the template with git seeing no configuration, whatever the calling test has set.
+ *
+ * Without that, the first `createRepo` in a file would decide what every later one gets. A
+ * developer's `init.templateDir` can carry an `info/exclude` that ignores `.dogear`, and a
+ * template made outside {@link isolateGitConfig} would hand that rule to the suites that
+ * isolate precisely so it cannot reach them.
+ */
+function createTemplate(): string {
+  const root = mkdtempSync(join(tmpdir(), 'dogear-template-'))
+
+  execFileSync('git', ['init', '-q'], {
+    cwd: root,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: NOWHERE,
+      GIT_CONFIG_SYSTEM: NOWHERE,
+      GIT_CONFIG_NOSYSTEM: '1',
+    },
+  })
+
   return root
 }
 

@@ -220,6 +220,18 @@ repositories through `test-repo.ts`, which also blanks `GIT_CONFIG_GLOBAL`/`GIT_
 — without that, a developer whose own `~/.gitignore` mentions `.dogear` gets different results
 from the same test.
 
+**A git process costs around 40ms on Windows, and `npm test` pays for every one** (#87). It
+ran four times slower there than on Linux while each test ran its own `git init`.
+`createRepo` now copies a template `.git` made once per test file, so call it rather than
+running `git init` yourself. vitest runs the cases in one file one after another and cannot
+finish before its slowest file, which is why the `scaffold()` suites are three files sharing
+`test-scaffold.ts`. Every `scaffold()` asks git two questions (`ignored()` asks about the queue
+and the config in one process). `scaffold.report.test.ts` and `scaffold.wiring.test.ts` stub
+`git.js` with "not ignored, not tracked", which is what real git says about a repository with
+no rules and nothing staged; a case that needs any other answer belongs in `scaffold.test.ts`,
+which still asks real git, and so do `git.test.ts`, `gitignore.test.ts`, `undo.test.ts` and
+`init.test.ts`.
+
 **`@modelcontextprotocol/sdk` is `dogear-cli`'s only dependency**, and it is reached
 through a **dynamic** import in `src/mcp.ts` so it never enters the module graph of
 `dogear hook` — which runs on every prompt the user types, under a 10s ceiling with a 2s

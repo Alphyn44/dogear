@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { isIgnored, isTracked } from './git.js'
+import { ignored, isIgnored, isTracked } from './git.js'
 import { createRepo, isolateGitConfig, removeRepo, trackFile } from './test-repo.js'
 
 /**
@@ -60,6 +60,40 @@ describe('isIgnored()', () => {
 
     try {
       expect(isIgnored(notARepo, 'anything.txt')).toBeUndefined()
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('ignored()', () => {
+  it('names exactly the paths a rule covers, from one question about several', () => {
+    // #87. The `.gitignore` step asks about the queue and the config together, so the answer
+    // has to say which is which. `-z` is what keeps the names byte-identical to what was asked,
+    // and git refuses it without `--stdin`: every case below read `undefined` until it had both.
+    writeFileSync(join(root, '.gitignore'), '.dogear/*\n!.dogear/config.json\n')
+
+    expect(
+      ignored(root, ['.dogear/queue.json', '.dogear/config.json', 'kept.txt']),
+    ).toEqual(new Set(['.dogear/queue.json']))
+  })
+
+  it('is an empty set when nothing is covered, which git reports as exit 1', () => {
+    expect(ignored(root, ['.dogear/queue.json', '.dogear/config.json'])).toEqual(
+      new Set(),
+    )
+  })
+
+  it('is an empty set for no paths', () => {
+    // An empty question has an empty answer, never "git could not answer".
+    expect(ignored(root, [])).toEqual(new Set())
+  })
+
+  it('is undefined outside a repository, never an empty set', () => {
+    const notARepo = mkdtempSync(join(tmpdir(), 'dogear-not-a-repo-'))
+
+    try {
+      expect(ignored(notARepo, ['anything.txt', 'other.txt'])).toBeUndefined()
     } finally {
       rmSync(notARepo, { recursive: true, force: true })
     }

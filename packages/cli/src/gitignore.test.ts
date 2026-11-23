@@ -200,7 +200,7 @@ describe('the notes the gitignore step reports', () => {
 
 describe('the gitignore step when git cannot answer', () => {
   /** No git on PATH, a `.cmd` shim, a worktree pointing at a gitdir that is gone. */
-  const blind: GitQueries = { isIgnored: () => undefined, isTracked: () => undefined }
+  const blind: GitQueries = { ignored: () => undefined, isTracked: () => undefined }
   const step = createGitignoreStep(blind)
 
   it('writes the rules rather than assuming they are there', () => {

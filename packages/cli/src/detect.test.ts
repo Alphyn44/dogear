@@ -11,8 +11,8 @@ import { detect } from './detect.js'
  *
  * **No git repository here, unlike ./scaffold.test.ts.** Detection asks git nothing — it reads
  * manifests and lists directories — so a `mkdtemp` is the whole fixture, and a suite that
- * shelled out to `git init` would be paying for a premise it does not use. ./scaffold.test.ts
- * covers detection's *report*; this file covers what it found.
+ * shelled out to `git init` would be paying for a premise it does not use.
+ * ./scaffold.report.test.ts covers detection's *report*; this file covers what it found.
  *
  * **Every case is a repository shape, not a function call.** The failure this suite exists to
  * catch is a detector confidently describing a layout it misread — which is silent, and which

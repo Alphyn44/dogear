@@ -56,7 +56,10 @@ export function createGitignoreStep(queries: GitQueries): Step {
       // and the file, and on negation precedence. This is "check for the state you need,
       // not for the path being occupied" — the state needed is *ignored*, not *these two
       // lines are present*. See ./git.ts.
-      const ignored = queries.isIgnored(root, QUEUE_RULE)
+      // One question for both paths, since #87: each is a git process. `undefined` means git
+      // could not answer about either.
+      const answer = queries.ignored(root, [QUEUE_RULE, CONFIG_PATH])
+      const ignored = answer?.has(QUEUE_RULE)
 
       // `undefined` — no git on PATH, a broken worktree pointer — is treated as
       // not-ignored, deliberately. The two outcomes are not symmetrical: a redundant rule
@@ -74,7 +77,7 @@ export function createGitignoreStep(queries: GitQueries): Step {
         // `.dogear/*` rule and do nothing at all against `.dogear/` — git cannot re-include
         // a file underneath an excluded directory — so it would repair the easy case and
         // lie about the hard one. Saying so leaves the choice with whoever wrote the rule.
-        ...(queries.isIgnored(root, CONFIG_PATH) === true
+        ...(answer?.has(CONFIG_PATH) === true
           ? [
               `${CONFIG_PATH} is ignored by an existing rule, so it will not be ` +
                 "committed. dogear's config is meant to be shared with the repo.",
