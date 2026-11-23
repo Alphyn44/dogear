@@ -134,6 +134,31 @@ describe('createRulesStep() re-running', () => {
     expect(plan()).toBeUndefined()
   })
 
+  it('does not add a second stanza to an AGENTS.md created after it went into CLAUDE.md', () => {
+    // J5 (#81). `next dev`, run by an agent, creates an AGENTS.md holding Next's own managed
+    // block. AGENTS.md is the first candidate, so a check of the target alone would append a
+    // second stanza there on the next init.
+    seed('CLAUDE.md', '# House rules\n')
+    run()
+    const nextBlock =
+      '<!-- BEGIN:nextjs-agent-rules -->\n\n## This is NOT the Next.js you know\n\n' +
+      '<!-- END:nextjs-agent-rules -->\n'
+    seed('AGENTS.md', nextBlock)
+
+    expect(plan()).toBeUndefined()
+    expect(read('AGENTS.md')).toBe(nextBlock)
+  })
+
+  it('does not write when the stanza reached the other candidate between plan and apply', () => {
+    seed('CLAUDE.md', '# House rules\n')
+    const planned = plan()
+    seed('AGENTS.md', '<!-- dogear:start -->\nsomeone else did it\n<!-- dogear:end -->\n')
+
+    planned?.change?.apply()
+
+    expect(read('CLAUDE.md')).toBe('# House rules\n')
+  })
+
   it('does not write twice when the stanza arrived between plan and apply', () => {
     const planned = plan()
     seed('AGENTS.md', '<!-- dogear:start -->\nsomeone else did it\n<!-- dogear:end -->\n')

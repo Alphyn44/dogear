@@ -196,6 +196,19 @@ app's package, since #75; it was the root's alone) and names `DetectedApp.manife
 not always the app's own directory. With no manifest above the app it names the app's own
 directory, never a root that has none.
 
+**J5 made an app a Vite app or a Next app, through one field, `DetectedApp.host`.** A Next app
+is a directory holding `next.config.{js,mjs,ts,mts}`, Next 16's own list, so `.cjs` is not one.
+`plugin` asks about the host's own package and `hostVersion` replaces `viteVersion`; everything
+else, #75's CLI-home fallback included, applies to both hosts unchanged. **`dogear-next` is a
+runtime dependency, the inverse of `dogear-vite`**: `next start` loads `next.config`, so the
+import must resolve in production. `installCommand` takes a `field` for that, guidance prints
+`npm i dogear-next` with no `-D`, the runtime-dependency remark is Vite-only, and a Next app gets
+the opposite remark when `dogear-next` sits in devDependencies. `appRouter` is `undefined` for
+Vite and earns a remark when `false`, because a Pages Router app renders no JSX `<html>` for the
+tag. The rules step now treats the stanza as written if **any** candidate holds it: `next dev`,
+run by an agent, creates an `AGENTS.md` of its own, and checking only the target would append a
+second stanza to it in a repository that kept dogear's in `CLAUDE.md`.
+
 **The `.gitignore` step asks git, and it is the CLI's only subprocess.** Whether
 `.dogear/queue.json` is ignored depends on `.git/info/exclude`, `core.excludesFile`, every
 `.gitignore` up the tree, and negation precedence — so `git.ts` shells out to `check-ignore`

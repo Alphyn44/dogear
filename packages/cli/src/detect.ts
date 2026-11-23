@@ -36,6 +36,17 @@ import { join, sep } from 'node:path'
 export type Framework = 'preact' | 'solid' | 'svelte' | 'vue' | 'react'
 
 /**
+ * Which dev server an app runs under, and so which dogear package wires it — J5 (#81).
+ *
+ * One field on {@link DetectedApp} rather than a second list beside it, because everything else
+ * init knows about an app (its manifest, its manager, whether its config mentions dogear, where
+ * an install goes) is the same question under either host. A second list would have had every
+ * consumer merge the two, and #75's fallback for the CLI's home would have kept looking at Vite
+ * apps alone, which is the layout the adopter who found #75 did not have.
+ */
+export type Host = 'vite' | 'next'
+
+/**
  * How the repository organises its packages.
  *
  * `npm` and `yarn` both mean a `workspaces` array in the root manifest — they are told apart
@@ -146,16 +157,24 @@ export interface CliHome {
   readonly pnpmWorkspaceRoot: boolean
 }
 
-/** One directory with a Vite config in it — an app, as far as init is concerned. */
+/**
+ * One directory with a Vite or Next.js config in it — an app, as far as init is concerned.
+ *
+ * A directory holding both configs is two apps, one per host, because each config is wired
+ * separately and each gets its own guidance block.
+ */
 export interface DetectedApp {
   /** Repository-relative and forward-slashed. `''` is the repository root itself. */
   readonly dir: string
-  /** Repository-relative path of the Vite config that made this a candidate. */
+  /** Which config made this a candidate. See {@link Host}. */
+  readonly host: Host
+  /** Repository-relative path of the config that made this a candidate. */
   readonly config: string
   readonly framework: Framework | undefined
   /** The declared range, verbatim — `^19.2.0`. `undefined` when nothing declares it. */
   readonly frameworkVersion: string | undefined
-  readonly viteVersion: string | undefined
+  /** The declared range of the host itself, `vite` or `next`, verbatim. */
+  readonly hostVersion: string | undefined
   /**
    * Repository-relative directory of the manifest this app's dependencies belong to — the
    * nearest `package.json` at or above {@link DetectedApp.dir}. `''` is the root, `undefined`
@@ -190,11 +209,15 @@ export interface DetectedApp {
    */
   readonly pnpmWorkspaceRoot: boolean
   /**
-   * Whether that manifest declares `dogear-vite`, and in which field — E8 (#41).
+   * Whether that manifest declares the host's dogear package, and in which field — E8 (#41).
+   * `dogear-vite` for a Vite app, `dogear-next` for a Next app (J5, #81).
    *
-   * `runtime` is not merely unusual, it is the manifest half of the production leak
-   * `scripts/check-leak.ts` exists to catch: a dev-only plugin in `dependencies` installs in
-   * production even when every bundle is clean. init reports it and does not move it.
+   * **The right field is opposite for the two hosts.** Under Vite, `runtime` is the manifest
+   * half of the production leak `scripts/check-leak.ts` exists to catch: a dev-only plugin in
+   * `dependencies` installs in production even when every bundle is clean. Under Next it is
+   * `dev` that is wrong, because `next start` loads `next.config` too, and a config importing
+   * `dogear-next` fails to load wherever devDependencies were not installed. init reports
+   * either and moves neither.
    */
   readonly plugin: Declaration
   /**
@@ -214,6 +237,15 @@ export interface DetectedApp {
    * config is `false`, which is the direction that prints.
    */
   readonly configured: boolean
+  /**
+   * Whether a Next app has an App Router directory, `app/` or `src/app/` — J5 (#81).
+   * `undefined` for a Vite app, where the question does not arise.
+   *
+   * dogear supports the App Router only. Its overlay arrives as a tag written into a JSX
+   * `<html>`, and a Pages Router app renders `<Html>` from `next/document` instead, so it gets
+   * no overlay at all and nothing says why. `false` earns ./scaffold.ts a remark.
+   */
+  readonly appRouter: boolean | undefined
 }
 
 export interface Detection {
@@ -250,21 +282,34 @@ export interface Detection {
    * machine the moment it lands.
    *
    * **`undefined` means there is nowhere to point**: no root `package.json`, no package that
-   * declares `dogear-cli`, and no Vite app with a package of its own. Every path init could commit
+   * declares `dogear-cli`, and no app, Vite or Next, with a package of its own. Every path init could commit
    * would resolve nowhere, so ./scaffold.ts wires no agent and says why.
    */
   readonly cli: CliHome | undefined
 }
 
-/** Every filename Vite itself will load a config from. */
-const CONFIG_NAMES = [
-  'vite.config.js',
-  'vite.config.mjs',
-  'vite.config.cjs',
-  'vite.config.ts',
-  'vite.config.mts',
-  'vite.config.cts',
-] as const
+/**
+ * Every filename each host will load a config from, in the order hosts are reported.
+ *
+ * Next's list is its own `CONFIG_FILES` in `next/dist/shared/lib/constants.js`, and is shorter
+ * than Vite's: Next 16 does not load a `next.config.cjs`, so a directory holding only that is
+ * not a Next app as far as `next dev` is concerned either. `.mts` it loads only where Node can
+ * strip types, which every Node this project supports can.
+ */
+const CONFIG_NAMES: readonly (readonly [Host, readonly string[]])[] = [
+  [
+    'vite',
+    [
+      'vite.config.js',
+      'vite.config.mjs',
+      'vite.config.cjs',
+      'vite.config.ts',
+      'vite.config.mts',
+      'vite.config.cts',
+    ],
+  ],
+  ['next', ['next.config.js', 'next.config.mjs', 'next.config.ts', 'next.config.mts']],
+]
 
 /**
  * The package that identifies each framework, in resolution order.
@@ -301,8 +346,11 @@ const SKIP = new Set(['node_modules', 'dist', 'build', 'out', 'coverage'])
  */
 const MAX_DEPTH = 3
 
-/** The package `dogear init` tells people to install. */
-const PLUGIN = 'dogear-vite'
+/** The package `dogear init` tells people to install, per host. */
+const PACKAGES: Record<Host, string> = {
+  vite: 'dogear-vite',
+  next: 'dogear-next',
+}
 
 /** The package whose `dist/cli.js` every config init writes points at. */
 const CLI = 'dogear-cli'
@@ -376,9 +424,7 @@ export function detect(root: string): Detection {
   // real — neither is served by only looking at the workspace members.
   const candidates = packageDirs === undefined ? walk(root) : ['', ...packageDirs]
 
-  const apps = candidates
-    .map((dir) => appAt(root, dir))
-    .filter((app): app is DetectedApp => app !== undefined)
+  const apps = candidates.flatMap((dir) => appsAt(root, dir))
 
   return {
     workspace,
@@ -420,14 +466,16 @@ function agentsIn(root: string): readonly DetectedAgent[] {
  *    path it always did. Existence rather than a parse: a root manifest with a syntax error is
  *    still the package the user means to install into, and fixing it is theirs.
  * 2. **The first package in the walk that declares `dogear-cli` or has it installed.** The
- *    declaration rather than a Vite app, because the question is where the CLI lives: the
- *    adopter who found #75 had a Next.js frontend, which this file does not detect at all, and
- *    it declared `dogear-cli` in `web/package.json` all the same. Installed counts as well as
+ *    declaration rather than an app, because the question is where the CLI lives: the adopter
+ *    who found #75 had a Next.js frontend, which this file did not detect until J5, and it
+ *    declared `dogear-cli` in `web/package.json` all the same. Installed counts as well as
  *    declared for the reason {@link CliHome.state} gives.
- * 3. **The first Vite app's own package**, when nothing declares the CLI yet. That is where
- *    ./scaffold.ts's remark then says to install it, so the path and the advice agree.
+ * 3. **The first app's own package**, Vite or Next, when nothing declares the CLI yet. That is
+ *    where ./scaffold.ts's remark then says to install it, so the path and the advice agree.
+ *    Next apps count since J5 (#81); before it, that adopter's layout had no home at all and
+ *    init wired no agent.
  *
- * `candidates` is the walk {@link detect} already made for Vite configs. It is sorted (see
+ * `candidates` is the walk {@link detect} already made for app configs. It is sorted (see
  * {@link childrenOf}), which is what makes "first" the same answer on every filesystem.
  */
 function cliHomeOf(
@@ -671,11 +719,14 @@ function childrenOf(dir: string): readonly string[] {
     .sort()
 }
 
-/** The app in `dir`, or `undefined` if there is no Vite config there. */
-function appAt(root: string, dir: string): DetectedApp | undefined {
+/** The apps in `dir`: one per host whose config is there, so usually none and at most two. */
+function appsAt(root: string, dir: string): readonly DetectedApp[] {
   const at = absolute(root, dir)
-  const name = CONFIG_NAMES.find((candidate) => isFile(join(at, candidate)))
-  if (name === undefined) return undefined
+  const found = CONFIG_NAMES.flatMap(([host, names]) => {
+    const name = names.find((candidate) => isFile(join(at, candidate)))
+    return name === undefined ? [] : [{ host, name }]
+  })
+  if (found.length === 0) return []
 
   // The nearest manifest, not the root's: in a workspace the app's own `package.json` is what
   // declares its framework, and two apps in one repository routinely declare different ones.
@@ -686,24 +737,37 @@ function appAt(root: string, dir: string): DetectedApp | undefined {
     ([, pkg]) => versionOf(manifest, pkg) !== undefined,
   )
 
-  return {
+  return found.map(({ host, name }) => ({
     dir,
+    host,
     config: dir === '' ? name : `${dir}/${name}`,
     framework: framework?.[0],
     frameworkVersion:
       framework === undefined ? undefined : versionOf(manifest, framework[1]),
-    viteVersion: versionOf(manifest, 'vite'),
+    hostVersion: versionOf(manifest, host),
     manifestDir: nearest?.dir,
     manager: managerOf(root, nearest?.dir ?? dir),
     pnpmWorkspaceRoot: isPnpmWorkspaceRoot(root, nearest?.dir ?? dir),
-    plugin: declarationOf(manifest, PLUGIN),
+    plugin: declarationOf(manifest, PACKAGES[host]),
     configured: mentionsDogear(join(at, name)),
-  }
+    appRouter: host === 'next' ? hasAppRouter(at) : undefined,
+  }))
 }
 
 /**
- * Does this Vite config reference dogear? See {@link DetectedApp.configured} for why a
- * substring is the right instrument here and a parse is not.
+ * Does this Next app have an App Router directory? See {@link DetectedApp.appRouter}.
+ *
+ * Next looks for `app/` beside the config, or under `src/` when the project uses one. A
+ * directory, not a file: a stray `app` file is not a router.
+ */
+function hasAppRouter(at: string): boolean {
+  return isDirectory(join(at, 'app')) || isDirectory(join(at, 'src', 'app'))
+}
+
+/**
+ * Does this config reference dogear? See {@link DetectedApp.configured} for why a substring is
+ * the right instrument here and a parse is not. The same test serves `vite.config` and
+ * `next.config`: a wired one imports `dogear-vite` or `dogear-next`.
  *
  * Word-bounded so `dogeared` and `undogear` do not count, and case-insensitive because the
  * import specifier, the plugin call and a comment may each spell it differently. Never throws

@@ -644,14 +644,20 @@ function agents(detection: Detection): string {
     .join(', ')
 }
 
-/** No app, or exactly one: the config and the framework each get a line of their own. */
+/**
+ * No app, or exactly one: the config and the framework each get a line of their own.
+ *
+ * **Labelled by host since J5 (#81)**, `vite:` or `next:`, so the line a Vite user has always
+ * seen is unchanged. With no app it is `app:`, because `vite: none found` would now be half the
+ * truth.
+ */
 function single(app: DetectedApp | undefined): readonly string[] {
-  if (app === undefined) return [label('vite', 'none found')]
+  if (app === undefined) return [label('app', 'none found')]
 
   return [
     label(
-      'vite',
-      `${app.config}${app.viteVersion === undefined ? '' : ` (vite ${app.viteVersion})`}`,
+      app.host,
+      `${app.config}${app.hostVersion === undefined ? '' : ` (${app.host} ${app.hostVersion})`}`,
     ),
     label('framework', versioned(app) ?? 'none detected'),
   ]
@@ -695,7 +701,7 @@ function remarks(
     ...cliNotInstalled(wiring, detection),
   ]
 
-  if (detection.apps.length === 0) return [...cli, ...noViteConfig()]
+  if (detection.apps.length === 0) return [...cli, ...noAppConfig()]
 
   // React, Preact and Solid all author components in `.jsx`/`.tsx`, which is what the
   // transform's default `include` matches, so all three are stamped. Vue and Svelte are not,
@@ -705,13 +711,20 @@ function remarks(
     (app) => app.framework === 'vue' || app.framework === 'svelte',
   )
 
-  return [...cli, ...jsxOnly(floored), ...runtimeDependency(detection.apps)]
+  return [
+    ...cli,
+    ...jsxOnly(floored),
+    ...runtimeDependency(detection.apps),
+    ...devDependency(detection.apps),
+    ...noAppRouter(detection.apps),
+  ]
 }
 
-function noViteConfig(): readonly string[] {
+/** Neither host's config anywhere the walk looked. Named for both since J5 (#81). */
+function noAppConfig(): readonly string[] {
   return [
-    'no vite config found. dogear is a Vite dev-server plugin — the overlay will not ' +
-      'load without one.',
+    'no vite.config or next.config found. dogear attaches to a Vite or Next.js dev server ' +
+      'through its config, so the overlay will not load without one.',
   ]
 }
 
@@ -847,17 +860,60 @@ function jsxOnly(floored: readonly DetectedApp[]): readonly string[] {
  * already declines to cross with `!.dogear/config.json`.
  */
 function runtimeDependency(apps: readonly DetectedApp[]): readonly string[] {
-  const wrong = apps.filter((app) => app.plugin === 'runtime')
+  const wrong = apps.filter((app) => app.host === 'vite' && app.plugin === 'runtime')
   if (wrong.length === 0) return []
 
-  const named = [...new Set(wrong.map((app) => manifestOf(app)))]
+  return [
+    `dogear-vite is a runtime dependency in ${manifestsOf(wrong)}. It is dev-only — move it ` +
+      'to devDependencies so it cannot install in production.',
+  ]
+}
+
+/**
+ * `dogear-next` in `devDependencies` rather than `dependencies` — J5 (#81).
+ *
+ * **The inverse of {@link runtimeDependency}, and for a reason Vite does not have.** `next
+ * start` loads `next.config` in production, so a config importing `dogear-next` fails to load,
+ * and the production server fails to start, wherever devDependencies were not installed. It is
+ * inert there: `withDogear` returns the config untouched outside `next dev`. Reported, never
+ * moved, for the same reason as the Vite case.
+ */
+function devDependency(apps: readonly DetectedApp[]): readonly string[] {
+  const wrong = apps.filter((app) => app.host === 'next' && app.plugin === 'dev')
+  if (wrong.length === 0) return []
+
+  return [
+    `dogear-next is a dev dependency in ${manifestsOf(wrong)}. next start loads ` +
+      'next.config in production too, so move it to dependencies, or a production install ' +
+      'without devDependencies cannot start the server. It does nothing outside next dev.',
+  ]
+}
+
+/**
+ * A Next app with no `app/` or `src/app/` directory — J5 (#81).
+ *
+ * dogear supports the App Router. Its overlay is a tag written into a JSX `<html>`, and a Pages
+ * Router app renders `<Html>` from `next/document` instead, so it would get no overlay and no
+ * message saying why. The Pages Router is in the brief's "Later, maybe".
+ */
+function noAppRouter(apps: readonly DetectedApp[]): readonly string[] {
+  const without = apps.filter((app) => app.appRouter === false)
+  if (without.length === 0) return []
+
+  const named = without
     .slice(0, APP_CAP)
+    .map((app) => (app.dir === '' ? '.' : app.dir))
     .join(', ')
 
   return [
-    `dogear-vite is a runtime dependency in ${named}. It is dev-only — move it to ` +
-      'devDependencies so it cannot install in production.',
+    `${named}: no app/ directory found. dogear supports the Next.js App Router only, and ` +
+      'the overlay will not load in a Pages Router app.',
   ]
+}
+
+/** The distinct manifests a set of apps belong to, capped, for a remark to name. */
+function manifestsOf(apps: readonly DetectedApp[]): string {
+  return [...new Set(apps.map((app) => manifestOf(app)))].slice(0, APP_CAP).join(', ')
 }
 
 /** The package a `runtime` declaration is actually in, which may not be the app's directory. */

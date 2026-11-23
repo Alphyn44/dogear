@@ -21,8 +21,9 @@ cd my-repo
 dogear init
 ```
 
-Then follow what `init` prints: the plugin install for each app it found, and the import and
-`plugins` entry your `vite.config` needs. Install `dogear-cli` at the git root too, with
+Then follow what `init` prints: the package install for each app it found, and the change its
+config needs. That is an import and a `plugins` entry in a `vite.config`, or wrapping the
+export of a `next.config` in `withDogear`. Install `dogear-cli` at the git root too, with
 `npm i -D dogear-cli` (`pnpm add -D -w dogear-cli` at a pnpm workspace root, since pnpm 9
 refuses the add there without `-w`), or in the package that runs your app if the repository
 has no root `package.json`. The plugin is the browser half; see
@@ -49,8 +50,9 @@ against what is already there and reports only what changed. It:
 
 1. **Finds the git root**, and refuses to run outside a repository. The queue location
    depends on it.
-2. **Detects your setup.** Vite config, framework, workspace layout, how many apps, and
-   which agent the repository shows signs of using.
+2. **Detects your setup.** Each app's Vite or Next.js config, framework, workspace layout,
+   how many apps, and which agent the repository shows signs of using. A Next app needs the
+   App Router, and init says so when it finds no `app/` or `src/app/` directory.
 3. **Wires those agents.** Every agent it wires gets the MCP server registered in that
    agent's config, plus a short stanza in your agent rules file, since MCP is a pull
    surface and needs the nudge. The stanza is delimited by `<!-- dogear:start -->` and
@@ -66,9 +68,11 @@ against what is already there and reports only what changed. It:
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
 5. **Appends to `.gitignore`.** `.dogear/queue.json` and `.dogear/*.tmp`, not the whole
    directory, since the config is meant to be committed.
-6. **Prints the plugin install and the `vite.config` change.** It writes neither: configs
+6. **Prints the package install and the config change.** It writes neither: configs
    are too varied to rewrite safely, and a manifest edited without a lockfile update
-   fails the next `npm ci`.
+   fails the next `npm ci`. `dogear-vite` installs as a dev dependency. `dogear-next`
+   installs as a regular one, because `next start` loads `next.config` in production
+   too, and it does nothing there.
 
 | Flag | |
 | --- | --- |

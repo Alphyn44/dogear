@@ -56,15 +56,17 @@ describe('detect() on a single-package repository', () => {
     expect(apps).toEqual([
       {
         dir: '',
+        host: 'vite',
         config: 'vite.config.ts',
         framework: 'react',
         frameworkVersion: '^19.2.0',
-        viteVersion: '^8.2.1',
+        hostVersion: '^8.2.1',
         manifestDir: '',
         manager: 'npm',
         pnpmWorkspaceRoot: false,
         plugin: 'absent',
         configured: false,
+        appRouter: undefined,
       },
     ])
   })
@@ -79,15 +81,17 @@ describe('detect() on a single-package repository', () => {
     expect(detect(root).apps).toEqual([
       {
         dir: '',
+        host: 'vite',
         config: 'vite.config.js',
         framework: undefined,
         frameworkVersion: undefined,
-        viteVersion: '^8.2.1',
+        hostVersion: '^8.2.1',
         manifestDir: '',
         manager: 'npm',
         pnpmWorkspaceRoot: false,
         plugin: 'absent',
         configured: false,
+        appRouter: undefined,
       },
     ])
   })
@@ -124,6 +128,142 @@ describe('detect() on a single-package repository', () => {
 
     expect(workspace).toBe('single')
     expect(apps).toEqual([])
+  })
+})
+
+describe('detect() and a Next.js app — J5 (#81)', () => {
+  it('finds the next config, the framework and both versions', () => {
+    manifest('package.json', {
+      dependencies: { next: '^16.4.6', react: '^19.2.0' },
+    })
+    file('next.config.ts', '')
+    file('app/layout.tsx', '')
+
+    expect(detect(root).apps).toEqual([
+      {
+        dir: '',
+        host: 'next',
+        config: 'next.config.ts',
+        framework: 'react',
+        frameworkVersion: '^19.2.0',
+        hostVersion: '^16.4.6',
+        manifestDir: '',
+        manager: 'npm',
+        pnpmWorkspaceRoot: false,
+        plugin: 'absent',
+        configured: false,
+        appRouter: true,
+      },
+    ])
+  })
+
+  it.each([
+    ['next.config.js'],
+    ['next.config.mjs'],
+    ['next.config.ts'],
+    ['next.config.mts'],
+  ])('recognises %s', (name) => {
+    manifest('package.json', {})
+    file(name, '')
+
+    expect(detect(root).apps.map((app) => app.config)).toEqual([name])
+  })
+
+  it('does NOT recognise next.config.cjs, which Next 16 does not load', () => {
+    // Next's own CONFIG_FILES has no `.cjs`, so `next dev` would ignore this file too, and
+    // telling the user to wrap it would be guidance for a config that never runs.
+    manifest('package.json', {})
+    file('next.config.cjs', '')
+
+    expect(detect(root).apps).toEqual([])
+  })
+
+  it('finds a Next app in a subdirectory of a repository with no root package.json', () => {
+    // #75's layout: a Go repository with its frontend in web/.
+    manifest('web/package.json', { dependencies: { next: '^16.4.6' } })
+    file('web/next.config.mjs', '')
+
+    expect(detect(root).apps).toEqual([
+      expect.objectContaining({
+        dir: 'web',
+        host: 'next',
+        config: 'web/next.config.mjs',
+        manifestDir: 'web',
+      }),
+    ])
+  })
+
+  it('reports a Vite app and a Next app in one repository, each under its own host', () => {
+    manifest('admin/package.json', { devDependencies: { vite: '^8.2.1' } })
+    file('admin/vite.config.ts', '')
+    manifest('web/package.json', { dependencies: { next: '^16.4.6' } })
+    file('web/next.config.ts', '')
+
+    expect(detect(root).apps.map(({ dir, host }) => ({ dir, host }))).toEqual([
+      { dir: 'admin', host: 'vite' },
+      { dir: 'web', host: 'next' },
+    ])
+  })
+
+  it('reports both when one directory holds both configs, Vite first', () => {
+    // Unusual, but each config is wired separately, so each is an app to give guidance for.
+    manifest('package.json', {})
+    file('vite.config.ts', '')
+    file('next.config.ts', '')
+
+    expect(detect(root).apps.map((app) => app.config)).toEqual([
+      'vite.config.ts',
+      'next.config.ts',
+    ])
+  })
+
+  it.each([
+    ['dependencies', 'runtime'],
+    ['devDependencies', 'dev'],
+  ] as const)('reads dogear-next in %s as %s', (field, plugin) => {
+    manifest('package.json', { [field]: { 'dogear-next': '^0.1.0' } })
+    file('next.config.ts', '')
+
+    expect(detect(root).apps[0]?.plugin).toBe(plugin)
+  })
+
+  it('does not count dogear-vite as wiring a Next app', () => {
+    // The plugin field asks about the host's own package. A Next app beside a Vite one may
+    // share a manifest that declares dogear-vite, and that does nothing for next.config.
+    manifest('package.json', { devDependencies: { 'dogear-vite': '^0.1.0' } })
+    file('next.config.ts', '')
+
+    expect(detect(root).apps[0]?.plugin).toBe('absent')
+  })
+
+  it('sees a next.config that already wraps the config in withDogear', () => {
+    manifest('package.json', {})
+    file(
+      'next.config.mjs',
+      "import { withDogear } from 'dogear-next'\nexport default withDogear({})\n",
+    )
+
+    expect(detect(root).apps[0]?.configured).toBe(true)
+  })
+
+  it.each([
+    ['app/page.tsx', true],
+    ['src/app/page.tsx', true],
+    ['pages/index.tsx', false],
+  ])('with %s, reports appRouter %s', (path, expected) => {
+    manifest('package.json', {})
+    file('next.config.ts', '')
+    file(path, '')
+
+    expect(detect(root).apps[0]?.appRouter).toBe(expected)
+  })
+
+  it('does not take a file named app for an App Router', () => {
+    manifest('package.json', {})
+    file('next.config.ts', '')
+    file('app', '')
+
+    expect(detect(root).apps[0]?.appRouter).toBe(false)
   })
 })
 
@@ -435,15 +575,17 @@ describe('detect() on a workspace', () => {
     expect(detect(root).apps).toEqual([
       {
         dir: 'examples/web',
+        host: 'vite',
         config: 'examples/web/vite.config.ts',
         framework: 'react',
         frameworkVersion: '^19.2.0',
-        viteVersion: '^8.2.1',
+        hostVersion: '^8.2.1',
         manifestDir: 'examples/web',
         manager: 'npm',
         pnpmWorkspaceRoot: false,
         plugin: 'absent',
         configured: false,
+        appRouter: undefined,
       },
     ])
   })
@@ -776,10 +918,10 @@ describe('detect() and where the CLI lives (#75)', () => {
     expect(detect(root).cli).toMatchObject({ dir: 'web', state: 'local' })
   })
 
-  it('finds a declaration in a package that is not a Vite app', () => {
-    // The reporter's own layout: detection sees no app in a Next.js frontend, and the question
-    // is where the CLI lives rather than where Vite does. The declaration outranks the one Vite
-    // app there is.
+  it('finds a declaration in a package that is not an app', () => {
+    // The question is where the CLI lives rather than where an app does, so the declaration
+    // outranks the one app there is. #75's reporter had a Next.js frontend that detection could
+    // not see then; J5 (#81) sees it, and this still holds.
     manifest('admin/package.json', {})
     file('admin/vite.config.ts', '')
     manifest('web/package.json', DECLARES)
@@ -799,6 +941,15 @@ describe('detect() and where the CLI lives (#75)', () => {
   it('falls back to the first Vite app’s own package when nothing declares the CLI', () => {
     manifest('web/package.json', { devDependencies: { vite: '^8.2.1' } })
     file('web/vite.config.ts', '')
+
+    expect(detect(root).cli).toMatchObject({ dir: 'web', state: 'absent' })
+  })
+
+  it('falls back to a Next app’s own package too — J5 (#81)', () => {
+    // #75's own layout, a Go repository with a Next.js frontend in web/ that has not declared
+    // the CLI yet. Before J5 detection saw no app here, so there was no home and no agent wired.
+    manifest('web/package.json', { dependencies: { next: '^16.4.6' } })
+    file('web/next.config.ts', '')
 
     expect(detect(root).cli).toMatchObject({ dir: 'web', state: 'absent' })
   })

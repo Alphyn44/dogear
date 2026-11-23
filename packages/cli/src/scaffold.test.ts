@@ -375,8 +375,8 @@ describe('scaffold() reporting what it detected', () => {
     const result = scaffold(root)
 
     expect(result.exitCode).toBe(0)
-    expect(result.output).toContain('vite:      none found')
-    expect(result.output).toContain('note: no vite config found')
+    expect(result.output).toContain('app:       none found')
+    expect(result.output).toContain('note: no vite.config or next.config found')
     expect(existsSync(join(root, QUEUE_DIR))).toBe(true)
   })
 
@@ -390,7 +390,7 @@ describe('scaffold() reporting what it detected', () => {
     const again = scaffold(root)
 
     expect(again.output).toContain('nothing changed')
-    expect(again.output).toContain('note: no vite config found')
+    expect(again.output).toContain('note: no vite.config or next.config found')
   })
 
   it('names each app in a monorepo, because their frameworks differ', () => {
@@ -537,6 +537,137 @@ describe('scaffold() telling the user to install the plugin', () => {
     rmSync(join(root, 'vite.config.ts'))
 
     expect(scaffold(root).output).not.toContain('add dogear to')
+  })
+})
+
+describe('scaffold() on a Next.js app — J5 (#81)', () => {
+  /** Swap the fixture's Vite app for a Next one, App Router included. */
+  function nextRepo(
+    dependencies: Record<string, string> = {},
+    devDependencies = {},
+  ): void {
+    rmSync(join(root, 'vite.config.ts'))
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        dependencies: { next: '^16.4.6', react: '^19.2.0', ...dependencies },
+        devDependencies: { 'dogear-cli': '^0.1.0', ...devDependencies },
+      }),
+    )
+    writeFileSync(join(root, 'next.config.ts'), '')
+    mkdirSync(join(root, 'app'))
+  }
+
+  it('reports the Next app instead of "no vite config found"', () => {
+    nextRepo()
+
+    const output = scaffold(root).output
+
+    expect(output).toContain('next:      next.config.ts (next ^16.4.6)')
+    expect(output).toContain('framework: react ^19.2.0')
+    expect(output).not.toContain('none found')
+    expect(output).not.toContain('no vite.config or next.config found')
+  })
+
+  it('prints the withDogear wrapper and a runtime install, and writes neither', () => {
+    nextRepo()
+    const before = readFileSync(join(root, 'package.json'), 'utf8')
+
+    const output = scaffold(root).output
+
+    expect(output).toContain('add dogear to next.config.ts:')
+    expect(output).toContain("\n  import { withDogear } from 'dogear-next'")
+    expect(output).toContain('then, at the repo root: npm i dogear-next')
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(before)
+    expect(readFileSync(join(root, 'next.config.ts'), 'utf8')).toBe('')
+  })
+
+  it('names a Next app in a subdirectory with its own directory and manager', () => {
+    // The layout #75 and J7 both name: no root package.json, the app in web/, and a lockfile
+    // that only web/ has.
+    rmSync(join(root, 'vite.config.ts'))
+    rmSync(join(root, 'package.json'))
+    mkdirSync(join(root, 'web', 'app'), { recursive: true })
+    writeFileSync(
+      join(root, 'web', 'package.json'),
+      JSON.stringify({ dependencies: { next: '^16.4.6', react: '^19.2.0' } }),
+    )
+    writeFileSync(join(root, 'web', 'pnpm-lock.yaml'), '')
+    writeFileSync(join(root, 'web', 'next.config.mjs'), '')
+
+    const output = scaffold(root).output
+
+    expect(output).toContain('next:      web/next.config.mjs (next ^16.4.6)')
+    expect(output).toContain('add dogear to web/next.config.mjs:')
+    expect(output).toContain('then, in web: pnpm add dogear-next')
+  })
+
+  it('gives a repository with a Vite app and a Next app guidance for each', () => {
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        workspaces: ['apps/*'],
+        devDependencies: { 'dogear-cli': '^0.1.0' },
+      }),
+    )
+    rmSync(join(root, 'vite.config.ts'))
+    for (const [name, config, deps] of [
+      ['admin', 'vite.config.ts', { devDependencies: { vite: '^8.2.1' } }],
+      ['web', 'next.config.ts', { dependencies: { next: '^16.4.6' } }],
+    ] as const) {
+      mkdirSync(join(root, 'apps', name, 'app'), { recursive: true })
+      writeFileSync(join(root, 'apps', name, 'package.json'), JSON.stringify(deps))
+      writeFileSync(join(root, 'apps', name, config), '')
+    }
+
+    const output = scaffold(root).output
+
+    expect(output).toContain('add dogear to apps/admin/vite.config.ts:')
+    expect(output).toContain('then, in apps/admin: npm i -D dogear-vite')
+    expect(output).toContain('add dogear to apps/web/next.config.ts:')
+    expect(output).toContain('then, in apps/web: npm i dogear-next')
+  })
+
+  it('reports dogear-next in devDependencies, and does not move it', () => {
+    // `next start` loads next.config in production, so a production install without
+    // devDependencies cannot load the import. The inverse of dogear-vite's leak note.
+    nextRepo({}, { 'dogear-next': '^0.1.0' })
+    const before = readFileSync(join(root, 'package.json'), 'utf8')
+
+    const output = scaffold(root).output
+
+    expect(output).toContain(
+      'note: dogear-next is a dev dependency in the root package.json. next start loads',
+    )
+    expect(output).not.toContain('dogear-next is a runtime dependency')
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(before)
+  })
+
+  it('says nothing about dogear-next in dependencies, which is where it belongs', () => {
+    nextRepo({ 'dogear-next': '^0.1.0' })
+
+    const output = scaffold(root).output
+
+    expect(output).not.toContain('dogear-next is a')
+    expect(output).not.toContain('dogear-vite is a runtime dependency')
+  })
+
+  it('notes a Next app with no App Router directory', () => {
+    nextRepo()
+    rmSync(join(root, 'app'), { recursive: true })
+    mkdirSync(join(root, 'pages'))
+
+    expect(scaffold(root).output).toContain(
+      'note: .: no app/ directory found. dogear supports the Next.js App Router only',
+    )
+  })
+
+  it('does not note src/app/, which is an App Router too', () => {
+    nextRepo()
+    rmSync(join(root, 'app'), { recursive: true })
+    mkdirSync(join(root, 'src', 'app'), { recursive: true })
+
+    expect(scaffold(root).output).not.toContain('no app/ directory found')
   })
 })
 

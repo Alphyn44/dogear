@@ -698,7 +698,8 @@ is machine-level, the configuration is repo-level.
 ```
 npm i -g dogear-cli                    # once per machine — `dogear` on PATH
 cd my-repo && dogear init               # once per repo
-npm i -D dogear-vite dogear-cli       # what init prints
+npm i -D dogear-vite dogear-cli       # what init prints for a Vite app
+npm i dogear-next && npm i -D dogear-cli   # and for a Next app (J5)
 ```
 
 **`dogear-cli` is installed twice, and the second one is not optional.** Everything step 3
@@ -714,16 +715,16 @@ the Decisions log.
 one, it is the root, and the path is `node_modules/dogear-cli/dist/cli.js`. Without one (a Go
 repository with its frontend in `web/`, say) there is no root `node_modules` to install into, so
 init points through the package that declares `dogear-cli` instead:
-`web/node_modules/dogear-cli/dist/cli.js`. If no package declares it and no Vite app has a
-package of its own, no path init could commit would resolve, and it wires no agent at all rather
+`web/node_modules/dogear-cli/dist/cli.js`. If no package declares it and no app, Vite or Next
+(since J5), has a package of its own, no path init could commit would resolve, and it wires no agent at all rather
 than commit one that cannot. #75 found this; see the Decisions log.
 
 `dogear init` is non-interactive and idempotent. It:
 
 1. **Finds the git root.** Refuses to run outside a repo — the queue location depends
    on it.
-2. **Detects the setup** — Vite config, framework, workspace layout, how many apps,
-   and which agent the repo shows signs of using.
+2. **Detects the setup** — each app's Vite or Next.js config, framework, workspace layout,
+   how many apps, and which agent the repo shows signs of using. Next apps since J5.
 3. **Wires that agent.** Every agent gets the MCP server registered — `.mcp.json`,
    `.cursor/mcp.json` or `.vscode/mcp.json` — plus an `AGENTS.md` stanza, since MCP is
    pull and needs the nudge. Claude Code additionally gets the hook merged into
@@ -736,9 +737,10 @@ than commit one that cannot. #75 found this; see the Decisions log.
 4. **Writes `.dogear/config.json`** and creates `.dogear/`.
 5. **Appends to `.gitignore`** — `.dogear/queue.json` and `.dogear/*.tmp`, not the whole
    directory, since config is meant to be committed.
-6. **Prints the plugin install and the two-line `vite.config` change.** It writes neither.
+6. **Prints the plugin install and the two-line `vite.config` change**, or for a Next app the
+   `withDogear` wrapper and a runtime install of `dogear-next`. It writes neither.
    Config files are too varied to rewrite safely, and the manifest is printed rather than
-   edited for reasons of its own — see the Decisions log. Amended during E8.
+   edited for reasons of its own — see the Decisions log. Amended during E8, and J5.
 7. **Registers the repo** in `~/.dogear/projects.json` — that it *exists*, not any dev
    server, which init has no way to know about. Built by E5 (#30).
 
@@ -2876,9 +2878,10 @@ under both Turbopack and webpack, and `next start` after:
 - Turbopack's production build emits **server source maps whose `sourcesContent` carries the
   user's source verbatim**; the layer 2 marker was found there and nowhere else. A leak gate
   scanning `.next/` has to tell a map's embedded source from emitted code. (J4)
-- `next dev` writes an **`AGENTS.md`** on its first run unless `agentRules: false`, and init's
-  rules step creates `AGENTS.md` when neither it nor `CLAUDE.md` exists. Which runs first changes
-  what init does. (J5)
+- `next dev` writes an **`AGENTS.md`** unless `agentRules: false`, and init's rules step creates
+  `AGENTS.md` when neither it nor `CLAUDE.md` exists. Which runs first changes what init does.
+  (J5) *(Narrowed by J5: Next writes it only when it detects an agent running `next dev`, in the
+  app's own directory, and edits only its own marker block. See J5's entry below.)*
 
 **Under Next the endpoint reads `origin` from `x-forwarded-host`, walks from `cwd`, and
 registers nothing yet. Settled during J3 (#79).**
@@ -3012,6 +3015,34 @@ words. The sentinel moved there too. "Missing or unbuilt" keeps one message
 (`UNBUILT_CORE_WARNING`) in the terminal and one stub in the browser: `dogear-core` is a direct
 dependency of both hosts, so "missing" is a broken install, and splitting the text would change
 `dogear-vite`'s output for a case nobody has hit.
+
+**`dogear-next` is a runtime dependency, the inverse of `dogear-vite`. Settled during J5
+(#81).** `next start` loads `next.config` in `phase-production-server`, which is why
+`withDogear`'s gate is equality with the dev phase (J1). The same fact decides the dependency
+field: a config that imports `dogear-next` fails to load, and the production server fails to
+start, wherever the package is missing, and a deploy that installs without devDependencies before
+`next start` is an ordinary pattern. In production the import is inert, because `withDogear`
+returns the config untouched outside `next dev`. So init's guidance prints `npm i dogear-next`
+with no `-D`, and a `dogear-next` found in devDependencies earns a remark to move it; the
+`dogear-vite` remark, which says the opposite, stays Vite-only. The cost is that `dogear-next` and
+its dependencies, `oxc-parser`'s native binding among them, install in production images. That is
+accepted: a production server that cannot start is worse than a heavier image, and nothing in
+them runs. `output: 'standalone'` would avoid the question, since its server embeds the resolved
+config, but init cannot know which a deploy uses. Printing `-D` beside a warning was declined
+because every user copies the printed command, and the warning is what they skip.
+
+**J5's other rulings.** A Next app is a directory holding a `next.config` under one of the four
+names Next 16 loads (`.js`, `.mjs`, `.ts`, `.mts`, and not `.cjs`), with no fallback to a
+manifest that merely declares `next`, which would also find component libraries. It is reported
+through one `host` field on the existing app record rather than a second list, so a repository
+with a Vite app and a Next app gets a block for each from the same loop, and #75's fallback for
+where the CLI lives now reaches a Next app's package too. The snippet is a fixed ESM template, as
+Vite's is. A Next app with no `app/` or `src/app/` directory gets a remark, because a Pages Router
+app renders no JSX `<html>` for the tag to land in. On `AGENTS.md` (the J1 spike's last fact)
+init needed no Next-specific behaviour: both tools edit only their own marker block and keep the
+rest, in either order. The one collision was a second dogear stanza in an `AGENTS.md` that Next
+created after dogear had written to `CLAUDE.md`, and the rules step now treats the stanza as
+written if either candidate holds it.
 
 **Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
 G5.**
