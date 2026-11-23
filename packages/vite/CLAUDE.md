@@ -4,9 +4,12 @@ These notes load when Claude works with files under this directory. The repo-wid
 
 **Since J3 the endpoint, the config-file reader, the app name and the client-tag helpers live in
 `packages/host/src/`** (`dogear-host`, inlined here by tsup), and since J2 so does the stamp
-transform. The notes below still describe them. What stayed here is the plugin itself and the
-sentinel until J4. The plugin still filters with **Vite's own** `createFilter`;
-`filter-parity.test.ts` here holds `dogear-host/filter`, Next's port, to it.
+transform, and since J4 the sentinel and `validateModifier`. The notes below still describe
+them. What stays here is the plugin itself. The plugin still filters with **Vite's own**
+`createFilter`; `filter-parity.test.ts` here holds `dogear-host/filter`, Next's port, to it.
+
+**J4 made the shared transform parse `.js` as JSX.** That reaches this plugin only if someone adds
+`.js` to `include`; the default names `.jsx` and `.tsx`, so nothing changed for anyone who had not.
 
 **E7 gave `.dogear/config.json` its reader, and the layering is three lines of `??` guarding
 one rule.** `packages/host/src/config-file.ts` returns *only the keys that survived

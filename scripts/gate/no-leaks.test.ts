@@ -33,6 +33,13 @@ const GATED_DIST = `${GATED_FIXTURE}/dist`
  */
 const GATED_MARKER = 'dogear-layer2-marker-must-not-ship'
 
+const NEXT_FIXTURE = 'packages/next/test-built/fixtures/leak'
+const NEXT_DIST = `${NEXT_FIXTURE}/.next`
+const NEXT_GATED_SOURCE = `${NEXT_FIXTURE}/app/gated.jsx`
+
+/** Duplicated from the Next fixture for the reason {@link GATED_MARKER} is, and guarded the same way. */
+const NEXT_GATED_MARKER = 'next-layer2-marker-must-not-ship'
+
 describe('the consumer bundle', () => {
   it('has actually been built', () => {
     expect(
@@ -123,5 +130,56 @@ describe('the gated dynamic import (F1, layer 2)', () => {
   it('carries no sentinel, source or component attribute, or package specifier either', () => {
     // The standard rules on top, so the fixture is held to the same bar as the example.
     expect(formatFindings(scanBuildOutput(GATED_DIST).findings)).toBe('')
+  })
+})
+
+describe('a Next production build (J4)', () => {
+  // The first target built by something other than Vite. Its next.config.mjs is wrapped in
+  // `withDogear`, so what this proves is layer 1 under Next: outside `next dev` the wrapper
+  // registers no loader, so no tag and no stamp, and no rewrite. It also carries layer 2 in
+  // Next's own form, which J1's spike checked by hand and nothing had committed.
+  //
+  // `.next/cache` is the compiler's cache, kept beside the build and never deployed. Source
+  // maps are scanned without `sourcesContent`; see `scanBuildOutput` for why that is the
+  // difference between the app's source and what was built from it.
+  const SCAN = { skip: ['cache'] }
+
+  it('still contains the marker in its source', () => {
+    expect(
+      readFileSync(NEXT_GATED_SOURCE, 'utf8'),
+      `${NEXT_GATED_SOURCE} no longer contains "${NEXT_GATED_MARKER}". The gate is asserting ` +
+        'the absence of a string that is not in the fixture, which proves nothing.',
+    ).toContain(NEXT_GATED_MARKER)
+  })
+
+  it('has actually been built', () => {
+    expect(
+      existsSync(NEXT_DIST),
+      `${NEXT_DIST} is missing. Run \`npm run build:fixtures\` first.`,
+    ).toBe(true)
+  })
+
+  it('contains files to scan', () => {
+    expect(scanBuildOutput(NEXT_DIST, undefined, SCAN).filesScanned).toBeGreaterThan(0)
+  })
+
+  it('eliminated the gated block entirely', () => {
+    const survivors = scanBuildOutput(
+      NEXT_DIST,
+      [
+        {
+          name: 'gated-block',
+          needle: NEXT_GATED_MARKER,
+          why: 'the process.env.NODE_ENV branch survived into production output; layer 2 failed under Next',
+        },
+      ],
+      SCAN,
+    )
+
+    expect(formatFindings(survivors.findings)).toBe('')
+  })
+
+  it('carries no sentinel, source or component attribute, or package specifier', () => {
+    expect(formatFindings(scanBuildOutput(NEXT_DIST, undefined, SCAN).findings)).toBe('')
   })
 })

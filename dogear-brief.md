@@ -184,8 +184,8 @@ attributes to already-compiled `jsx()` calls.
 
 ### `dogear-next`
 
-*Decided by J1 (#77). J3 (#79) built the wrapper and its endpoint, J2 (#78) its stamping;
-injection is J4's.* The same three jobs for a Next.js 16 App Router app,
+*Decided by J1 (#77). J3 (#79) built the wrapper and its endpoint, J2 (#78) its stamping,
+J4 (#80) its injection.* The same three jobs for a Next.js 16 App Router app,
 done from the one place Next lets a tool in without touching the app's source:
 
 ```js
@@ -200,8 +200,9 @@ export default withDogear(nextConfig, options)
 - **Stamping:** a loader registered under both `turbopack.rules` and `webpack()`. Both bundlers
   hand it the source as written, before SWC compiles the JSX, which is what `enforce: 'pre'`
   buys under Vite.
-- **Injection:** the same loader adds dogear's `<script>` tag to every layout that renders
-  `<html>`. The tag fetches core's dev bundle by path through the endpoint, as under Vite.
+- **Injection:** the same loader adds dogear's `<script>` tag to every file with a JSX `<html>`,
+  a `.js` root layout included, as an `async` module script that React 19 hoists into `<head>`.
+  The tag fetches core's dev bundle by path through the endpoint, as under Vite.
 - **Endpoint:** a loopback server running the same endpoint code, reached through a
   `beforeFiles` rewrite of `<endpoint>/*`. The browser stays same-origin.
 
@@ -209,13 +210,14 @@ The Decisions log has the reasoning and the spike that checked each part.
 
 ### `dogear-host`
 
-*Decided by J1 (#77). J3 (#79) created it; J2 (#78) moved the transform in.*
+*Decided by J1 (#77). J3 (#79) created it; J2 (#78) moved the transform in; J4 (#80) the
+sentinel.*
 Private, source-only, never published: the transform, the endpoint, the config-file reader, the
-app name and the client-tag helpers, moved out of `dogear-vite` so both hosts inline one copy.
-Built and inlined the way `dogear-queue` is. Two modules live behind subpaths rather than the
-index: `dogear-host/stamp`, the transform, so that a host's config entry never loads Oxc's native
-binding, and `dogear-host/filter`, the port of Vite's file filter that `dogear-next` uses in
-Vite's absence.
+app name, the client-tag helpers and the sentinel, moved out of `dogear-vite` so both hosts inline
+one copy. Built and inlined the way `dogear-queue` is. Two modules live behind subpaths rather
+than the index: `dogear-host/stamp`, the transform (which since J4 also writes Next's client tag
+in the same pass), so that a host's config entry never loads Oxc's native binding, and
+`dogear-host/filter`, the port of Vite's file filter that `dogear-next` uses in Vite's absence.
 
 ### `dogear-cli`
 
@@ -770,7 +772,8 @@ Layered, structural first:
    module in the graph. The guard is the bundler's own dev flag, and `import.meta.env` is
    Vite's; the gated-import fixture proves that form and no other. **Under Next** the flag is
    `process.env.NODE_ENV === 'development'`, and J1's spike found both Turbopack and webpack
-   eliminate the branch from a production build. Neither host relies on this layer: both
+   eliminate the branch from a production build; since J4 the Next leak fixture proves it for
+   Turbopack on every `check:leak`. Neither host relies on this layer: both
    inject the tag themselves, so no user source imports dogear.
 3. **Export conditions** in `package.json` — `"production"` and `"default"` both resolve
    to a noop module. Unknown conditions fail safe. Both of Next's bundlers name
@@ -778,8 +781,8 @@ Layered, structural first:
    host's overlay depends on it in the live direction, because both fetch core's dev bundle by
    path and never resolve it by name.
 4. **`devDependencies` + CI grep** for a sentinel string in `dist/`. Fails the build
-   loudly if anything leaked. A Next production build is not scanned yet; J4 adds one, and has
-   to tell a source map's embedded copy of the source from emitted code.
+   loudly if anything leaked. Since J4 it also scans a Next production build, reading each
+   source map without its `sourcesContent`, which is the app's source rather than output.
 5. **Runtime hostname check** — bail unless the page's hostname matches `hosts`, which
    defaults to loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`), `*.local`, and
    the private IPv4 ranges. Last line only, and silent when it bails. Unchanged under Next:
@@ -2933,7 +2936,9 @@ loader. `dogear-vite`'s `RegExp` support has no JSON form, and `.dogear/config.j
 ever supply strings, so the asymmetry costs only an option a Next user writes in code.
 
 **Two deliberate limits.** The loader is registered only for `*.jsx` and `*.tsx`, which loses
-nothing, because Oxc parses JSX in no other extension. And dependencies are skipped regardless
+nothing, because Oxc parses JSX in no other extension. *(Amended by J4: the loader now covers
+`*.js` as well and parses it as JSX, because a `.js` root layout must still get the client tag;
+see J4's entry below.)* And dependencies are skipped regardless
 of `exclude`: Turbopack's rule carries `{ not: 'foreign' }` and webpack's excludes
 `node_modules`, so the worker is never asked about a dependency. An `exclude` that omits
 `node_modules` therefore stamps no dependencies under Next. Under Vite the same setting reaches
@@ -2950,6 +2955,63 @@ A parse error stays silent, as under Vite, because `stampSource` returns `null` 
 
 **C5's component attribute rides along.** `stampSource` writes both attributes in one insertion,
 so J2 stamps `data-dogear-component` under Next exactly as under Vite.
+
+**Under Next the overlay is an async module script in every JSX `<html>`, a `.js` layout
+included, and the leak gate scans a Next build without its maps' embedded source. Settled during
+J4 (#80).**
+J1 ruled that the wrapper's loader writes dogear's tag into the root layout. Three things were
+left to decide: which files, what the tag looks like in JSX, and how `check:leak` reads a Next
+build.
+
+**Every JSX `<html>`, not every file named `layout`, and `.js` too.** Route groups give an app
+several root layouts, `global-error` renders its own `<html>`, and a shared component may be the
+file that spells it; a page renders exactly one `<html>`, so one tag reaches it however the
+layouts are arranged. The tag follows neither `include` nor `exclude`, which govern stamping. The
+loader is now registered for `*.js` as well, because `create-next-app --js` writes JSX into
+`app/layout.js` and Oxc reads a `.js` as plain JavaScript; the shared transform parses `.js` as
+JSX, which plain JavaScript survives unchanged. One consequence reaches Vite: a `.js` file a user
+adds to `include` is now stamped under both hosts, where before it was silently skipped. The
+default `include` names `.jsx` and `.tsx` only, so nobody who had not asked sees a difference.
+Matching on the file name was declined because it misses `global-error` and an `<html>` in a
+shared component; leaving `.js` out was declined because a JS app would get no overlay and no
+message, the exact failure this story was written against. An `<html>` that is not JSX in the
+app's own source still gets no tag, and that limit is documented rather than guessed at: the
+loader cannot know that a file it never saw was the root layout.
+
+**`<script async type="module" data-dogear=… src={…}/>`, as `<body>`'s first child.** React 19
+treats an `async` script with a `src` as a resource: it hoists it into `<head>`, renders it once
+however many layouts carry it, does not match it during hydration, and does not re-run it on a
+client navigation. A plain script would be hydrated as an ordinary element, and a client re-render
+of the layout earns React's warning that scripts rendered on the client never execute. `<body>`
+rather than `<html>` because React's nesting check allows only `<head>` and `<body>` there;
+`<html>` is the fallback when the file renders no `<body>` of its own. `async` gives up ordering
+against the app's scripts, which Next loads `async` anyway. Adding a `<head>` when the layout has
+none was declined as rewriting structure Next manages. Checked by running it: a throwaway
+Playwright script against `next dev` under Turbopack and webpack, with a `.js` root layout, found
+the tag hoisted into `<head>`, `window.__dogear` running, and no hydration or nesting warning,
+including after a client re-render. The tag and the stamps are one edit over the source as
+written (`transformSource`), so a stamp never reads a position the tag shifted and the tag is
+never stamped.
+
+**`check:leak` scans a Next production build, and reads a source map without its
+`sourcesContent`.** The fixture is a separate app, `packages/next/test-built/fixtures/leak/`,
+wrapped in `withDogear` and built with Turbopack, Next's default and the bundler whose server
+maps embed source. It also carries layer 2 in Next's form, which J1's spike had checked by hand
+and nothing had committed. The map rule is load-bearing: in that build the layer 2 marker appears
+once, in a server map's `sourcesContent`, and nowhere in emitted code. Stripping the field keeps
+everything else in the map under scan, `sources` above all, so a map path through
+`node_modules/dogear-core` is still a finding. Skipping `.map` files outright was declined for
+losing that. `.next/cache` is skipped by name, as compiler cache that is never deployed. The gate
+also names `dogear-next` and `dogear-host` from J4 on, the first because its specifier surviving
+into a Next build means dogear was in the graph, the second because it is inlined into both hosts
+as `dogear-queue` is.
+
+**Smaller rulings.** `withDogear` gained the `modifier` option it was meant to take, layered over
+the file as under Vite, and `validateModifier` moved to `dogear-host` so both hosts throw the same
+words. The sentinel moved there too. "Missing or unbuilt" keeps one message
+(`UNBUILT_CORE_WARNING`) in the terminal and one stub in the browser: `dogear-core` is a direct
+dependency of both hosts, so "missing" is a broken install, and splitting the text would change
+`dogear-vite`'s output for a case nobody has hit.
 
 **Unscoped `dogear-{cli,core,vite,queue}` rather than `@<handle>/dogear-*`. Settled during
 G5.**

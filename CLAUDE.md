@@ -89,8 +89,8 @@ Don't over-explain basics.
 | `dogear-vite` | Dev-only plugin. Stamps source attributes onto JSX, injects core, serves the endpoint. |
 | `dogear-cli` | `dogear` on PATH: `init` (with `--undo` since E6), `hook`, `mcp`, `prune`, `status` — all implemented since E5. |
 | `dogear-queue` | The queue: git-root walk, atomic read/write, annotation identity, and the agent-facing formatter at the `./format` subpath. Also E5's machine-level registry. **Private, source-only, never published** — see below. |
-| `dogear-host` | What the two hosts share: the endpoint, the config-file reader, the app name, the client-tag helpers (moved out of `dogear-vite` by J3) and the JSX transform (by J2). The file filter is the subpath `dogear-host/filter`. **Private and source-only**, like `dogear-queue`. |
-| `dogear-next` | The second host: `withDogear(nextConfig, options)`, a `next.config` wrapper that does nothing outside `next dev`. Since J3 it serves the endpoint behind a rewrite; since J2 it stamps through a loader registered under both bundlers. **`private: true` until J7 publishes it.** |
+| `dogear-host` | What the two hosts share: the endpoint, the config-file reader, the app name, the client-tag helpers (moved out of `dogear-vite` by J3), the JSX transform (by J2), and the sentinel and the modifier check (by J4). The file filter is the subpath `dogear-host/filter`. **Private and source-only**, like `dogear-queue`. |
+| `dogear-next` | The second host: `withDogear(nextConfig, options)`, a `next.config` wrapper that does nothing outside `next dev`. Since J3 it serves the endpoint behind a rewrite; since J2 it stamps through a loader registered under both bundlers; since J4 the same loader writes the overlay's tag into every JSX `<html>`. **`private: true` until J7 publishes it.** |
 
 **`dogear-queue` and `dogear-host` have no build and are not published.** Each one's `exports`
 points straight at `src/index.ts`. Every package that uses one (`dogear-vite`, `dogear-next`,
@@ -158,10 +158,10 @@ resolves all seven workspaces.
 | `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client, and J3's endpoint behind a real `next dev` under both bundlers. Needs a build first |
 | `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace once per Vite major the plugin admits (I1), and runs the binary, `dogear init` and a real dev server whose served app must carry its stamps. Needs a build first; deliberately not in `verify` |
 | `npm run test:browser` | **H3's round trip.** Drives Chromium against a real dev server: modifier-click, comment, submit, then reads `.dogear/queue.json`. Needs a build and a browser binary; deliberately not in `verify` |
-| `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel; needs a build first |
+| `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel, a Next build included since J4; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, four packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |
-| `npm run build:fixtures` | Production build of F1 layer 2's gated-import fixture; also scanned by `check:leak` |
+| `npm run build:fixtures` | Production builds of F1 layer 2's gated-import fixture (Vite) and J4's Next leak fixture (`next build`, Turbopack, through `scripts/build-next-fixture.mjs` so telemetry stays off); both scanned by `check:leak` |
 | `npm run dev:example` | Dev server for the example app. **Builds core and the plugin first** — see below |
 | `npm run format` | Prettier write; `format:check` is the read-only form |
 | `npm run lint` | Alias for `format:check && typecheck`. **There is no ESLint** |

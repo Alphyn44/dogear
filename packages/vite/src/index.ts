@@ -6,7 +6,7 @@ import {
   registerServer,
   registryPath,
 } from 'dogear-queue'
-import type { ClientConfig, Modifier } from 'dogear-host'
+import type { ClientConfig } from 'dogear-host'
 import {
   buildClientConfig,
   clientScriptSrc,
@@ -15,17 +15,16 @@ import {
   DEFAULT_EXCLUDE,
   DEFAULT_INCLUDE,
   findAppName,
-  MODIFIERS,
   normaliseEndpoint,
   readConfigFile,
   resolveCoreDist,
+  SENTINEL,
   UNBUILT_CORE_WARNING,
+  validateModifier,
 } from 'dogear-host'
 import { stampSource } from 'dogear-host/stamp'
 import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
 import { createFilter } from 'vite'
-
-import { SENTINEL } from './sentinel.js'
 
 export interface DogearOptions {
   /**
@@ -431,34 +430,6 @@ export function dogear(options: DogearOptions = {}): Plugin {
             ],
     },
   }
-}
-
-/**
- * Reject a bad `modifier` loudly, at config time.
- *
- * The mirror image of core's `resolveOptions`, which falls back to the default instead.
- * Same value, two audiences: here it is a developer reading a terminal while their dev
- * server starts, where a typo should be named; there it is a page load in a browser, where a
- * dev tool throwing has broken the app it exists to help inspect.
- *
- * E7 (#40) adds a third audience and it lands on the tolerant side: a bad `modifier` in
- * `.dogear/config.json` is warned about and dropped by ./config-file.ts rather than thrown
- * on. That file is committed, so whoever broke it is often not whoever is running the dev
- * server, and one person's typo must not stop everyone else's `npm run dev`. This function
- * still governs the *option*, which is the author's own code in the file they are editing.
- *
- * Validated in `configureServer` rather than in the factory, for the same reason
- * `normaliseEndpoint` is: a misconfigured dev tool must not be able to take down a
- * production build. `apply: 'serve'` already excludes the plugin from one, and throwing from
- * the factory would run before that had a chance to matter.
- */
-function validateModifier(modifier: Modifier | undefined): Modifier | undefined {
-  if (modifier === undefined || MODIFIERS.includes(modifier)) return modifier
-
-  throw new Error(
-    `dogear: modifier must be one of ${MODIFIERS.join(', ')}, received ` +
-      JSON.stringify(modifier),
-  )
 }
 
 /**

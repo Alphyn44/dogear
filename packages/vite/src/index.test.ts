@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { Modifier } from 'dogear-host'
-import { UNBUILT_CORE_WARNING } from 'dogear-host'
+import { SENTINEL, UNBUILT_CORE_WARNING } from 'dogear-host'
+import { SOURCE_ATTRIBUTE } from 'dogear-host/stamp'
 import type { HtmlTagDescriptor, Plugin, ViteDevServer } from 'vite'
 import { normalizePath } from 'vite'
 import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from 'vitest'
@@ -11,8 +12,6 @@ import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from 'vitest'
 import { readConfig } from '../../core/src/client-config.js'
 import type { DogearOptions } from './index.js'
 import { dogear } from './index.js'
-import { SENTINEL } from './sentinel.js'
-import { SOURCE_ATTRIBUTE } from 'dogear-host/stamp'
 
 /**
  * B1 (#8) turned `transformIndexHtml` into a *conditional* hook: it injects only after

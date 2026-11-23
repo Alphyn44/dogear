@@ -30,7 +30,18 @@ renames the module). webpack gets a top-level `enforce: 'pre'` rule, which runs 
 because Turbopack runs matching rules in order and the stamp must describe the file as written;
 a user `webpack()` runs before ours. The loader never throws: a failure passes the source through
 and emits one warning per process. Registered only when the endpoint is (dev phase, git root,
-server up) and `transform` is not `false`.
+server up), and since J4 **whatever `transform` says**: the loader also carries the overlay's tag,
+and with `transform: false` it only injects (`stamp: false` in its options).
+
+**The overlay is a tag the loader writes into every JSX `<html>` (J4).** `withDogear` builds the
+tag's `src` with the same `buildClientConfig`/`clientScriptSrc` Vite uses (modifier, endpoint,
+`hosts` from the file) and hands it to the loader as `clientSrc`. The tag follows neither `include`
+nor `exclude`, which govern stamping only. That is why the rules cover **`*.js`** too: a `.js` file
+that neither mentions `<html` nor matches `include` passes through unparsed. `dogear-core` is a
+runtime dependency, reached only as `dogear-core/package.json` by `resolveCoreDist`; an unbuilt core
+warns once through `say()`, and the route serves the stub that says so in the browser. **The limit:**
+an `<html>` that is not JSX in the app's own source (a dependency's component, `createElement`)
+gets no tag and no message.
 
 **The start directory is `process.cwd()`.** Next gives a config no way to learn its project
 directory: `next dev` forks its server without a `cwd`, and the directory travels in the private
@@ -53,5 +64,13 @@ config sets `turbopack.root` to this repository. Stopping uses `taskkill /T` on 
 `NEXT_TELEMETRY_DISABLED=1`. Since J2 the copy also gets a `.dogear/config.json` that excludes
 `skipped.jsx`, and the stamp assertions compute each expected `line:column` from the fixture
 file, so editing a fixture comment cannot break them. **No fixture file may spell the
-attribute name**: the build leg scans every file under `.next/`, source maps included, and
-Turbopack's maps embed the source verbatim.
+attribute name or the sentinel**: the build leg scans every file under `.next/`, source maps
+included, and Turbopack's maps embed the source verbatim. Since J4 the root layout is
+`layout.js` (and the config's `include` adds `.js`), so real bundlers prove `.js` injection, and
+the config sets `hosts` so the tag's config can be checked.
+
+**`test-built/fixtures/leak/` is `check:leak`'s Next build, a separate app on purpose (J4).** It
+is built in place by `scripts/build-next-fixture.mjs` into its own `.next/` (gitignored), and the
+dev suite above copies `test-built/fixture/` recursively, so sharing one directory would carry a
+stale production build into every dev copy. Its `gated.jsx` is layer 2 in Next's form; its marker
+names no dogear package, so a surviving branch trips one rule, not two.

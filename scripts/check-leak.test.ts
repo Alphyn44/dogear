@@ -169,6 +169,82 @@ describe('scanBuildOutput — what must NOT trip it', () => {
   })
 })
 
+describe('scanBuildOutput: source maps (J4)', () => {
+  /** A map in the shape Turbopack's production server maps take: the source carried verbatim. */
+  function map(fields: Record<string, unknown>): string {
+    return JSON.stringify({ version: 3, mappings: 'AAAA', names: [], ...fields })
+  }
+
+  it('does not flag the source a map embeds, which is input rather than output', () => {
+    // J1's spike: Turbopack's server maps carry the app's own source in `sourcesContent`, so a
+    // layer 2 gated import that the build eliminated is still spelled out there.
+    write(
+      'server/app/page.js.map',
+      map({
+        sources: ['app/gated.jsx'],
+        sourcesContent: [`if (dev) import("dogear-core") // ${SENTINEL}`],
+      }),
+    )
+
+    const result = scanBuildOutput(dir)
+
+    expect(result.findings).toEqual([])
+    expect(result.filesScanned).toBe(1)
+  })
+
+  it('still flags a map whose sources run through a dogear package, naming the map', () => {
+    write(
+      'static/chunks/main.js.map',
+      map({
+        sources: ['../node_modules/dogear-core/dist/index.js'],
+        sourcesContent: [''],
+      }),
+    )
+
+    const { findings } = scanBuildOutput(dir)
+
+    expect(findings).toHaveLength(1)
+    expect(findings[0]).toMatchObject({
+      rule: 'package-specifier',
+      file: expect.stringContaining('main.js.map'),
+    })
+    expect(findings[0]?.detail).toContain('scanned without sourcesContent')
+  })
+
+  it('still flags emitted code beside a clean map', () => {
+    write('server/app/page.js', `import("dogear-core")`)
+    write(
+      'server/app/page.js.map',
+      map({ sources: ['a.jsx'], sourcesContent: ['dogear-core'] }),
+    )
+
+    const { findings } = scanBuildOutput(dir)
+
+    expect(findings.map((f) => f.file.split('/').pop())).toEqual(['page.js'])
+  })
+
+  it('scans a JSON file that merely mentions sourcesContent in full', () => {
+    // Recognised as a map only when the field really is an array, so this cannot become a
+    // way for a leak to hide.
+    write('manifest.json', JSON.stringify({ sourcesContent: SENTINEL }))
+
+    expect(scanBuildOutput(dir).findings).toHaveLength(1)
+  })
+})
+
+describe('scanBuildOutput: skip', () => {
+  it('leaves out a directory named relative to the target, and only that one', () => {
+    write('cache/swc/entry.js', SENTINEL)
+    write('server/cache/entry.js', SENTINEL)
+
+    const { findings } = scanBuildOutput(dir, undefined, { skip: ['cache'] })
+
+    expect(findings.map((f) => f.file)).toEqual([
+      expect.stringContaining('server/cache/entry.js'),
+    ])
+  })
+})
+
 describe('scanBuildOutput — refusing to pass vacuously', () => {
   it('throws when the target does not exist, rather than reporting clean', () => {
     expect(() => scanBuildOutput(join(dir, 'never-built'))).toThrowError(/does not exist/)
@@ -190,6 +266,8 @@ describe('scanManifest', () => {
     { field: 'dependencies', name: 'dogear-vite', flagged: true },
     { field: 'dependencies', name: 'dogear-core', flagged: true },
     { field: 'dependencies', name: 'dogear-queue', flagged: true },
+    { field: 'dependencies', name: 'dogear-next', flagged: true },
+    { field: 'dependencies', name: 'dogear-host', flagged: true },
     { field: 'dependencies', name: 'dogear', flagged: true },
     // Exact match, not a prefix — see PACKAGE_SPECIFIERS for why the prefix is unusable
     // unscoped. The cost is this row: a dogear package added later and not added to that

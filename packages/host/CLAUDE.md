@@ -8,8 +8,20 @@ endpoint closure out of `dogear-vite` (`endpoint.ts`, `batch.ts`, `client.ts`, `
 `config-file.ts`, `app-name.ts`), and the one Vite import it carried, `Connect` for the
 middleware's type, became the local `EndpointHandler`. Connect accepts it structurally, so the
 Vite call site did not change. J2 moved `stamp.ts` and its tests here; the default
-`include`/`exclude` lists went to `patterns.ts`. `sentinel.ts` stays in `dogear-vite` until J4:
-J1's rule is that the first story needing a module moves it.
+`include`/`exclude` lists went to `patterns.ts`. J4 moved `sentinel.ts` (with its drift test
+against core's copy) and `validateModifier` here, because Next's tag carries the sentinel too and
+both hosts must throw the same words on a bad `modifier` option.
+
+**`transformSource` in `stamp.ts` does both of the loader's jobs in one parse and one
+`MagicString` (J4).** It stamps (when `stamp` is set) and writes Next's client tag into every JSX
+`<html>` (when `clientSrc` is set), both as insertions at offsets into the source *as written*, so
+stamps never read positions the tag shifted, the tag is never stamped, and there is one sourcemap.
+`stampSource` is the stamp-only call Vite makes. Where the tag goes and what it says is
+`inject.ts`: an `async` module script as the first child of `<body>`, falling back to `<html>`,
+because React 19 hoists an async script into `<head>` as a resource and does not hydrate it.
+`inject.ts` is internal, reached only through `dogear-host/stamp`. **A `.js` file is parsed as
+JSX** (`lang: 'jsx'`), because `create-next-app --js` writes JSX into `app/layout.js`; plain
+JavaScript parses the same either way.
 
 **`stamp.ts` is the subpath `dogear-host/stamp`, never an index export.** esbuild keeps an
 external import it cannot prove free of side effects, so a barrel re-export put
@@ -43,9 +55,11 @@ Vite never sets the flag, so a Vite server keeps ignoring a header any client co
 
 **`resolveCoreDist` resolves from wherever it is inlined, not from here.** Its
 `createRequire(import.meta.url)` runs inside the consuming package's `dist/index.js` after tsup
-inlines it, so it finds `dogear-core` through *that* package's dependencies. `dogear-vite` declares
-`dogear-core`; `dogear-next` does not yet, which is J4's job, and until then its client route
-serves the missing-bundle stub.
+inlines it, so it finds `dogear-core` through *that* package's dependencies. Both hosts declare
+`dogear-core` as a runtime dependency (`dogear-next` since J4). Neither may resolve it **by name**:
+the exports map gives every condition but `development` the noop, and a page that loads the noop
+looks exactly like dogear not being installed. `packages/next/src/index.test.ts` holds that as a
+source rule over this package and `dogear-next`.
 
 The tests moved with the code. `client.test.ts` still imports core's source by relative path
 (`../../core/src/…`), which works because this directory sits at the same depth `packages/vite/src`

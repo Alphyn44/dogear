@@ -57,13 +57,17 @@ export interface ScanResult {
  * So the rule names each package, and an explicit list is a list that can go stale:
  * `scripts/packaging.test.ts` asserts every published name appears here. `dogear-queue` is
  * in it too — it is never published, but it is inlined into all three bundles, so its
- * specifier surviving into production output means the same thing.
+ * specifier surviving into production output means the same thing. J4 (#80) added
+ * `dogear-next`, the second host, ahead of its publishing, because the gate scans a Next build
+ * from J4 on; and `dogear-host`, which is inlined into both hosts as `dogear-queue` is.
  */
 export const PACKAGE_SPECIFIERS = [
   'dogear-core',
   'dogear-vite',
+  'dogear-next',
   'dogear-cli',
   'dogear-queue',
+  'dogear-host',
 ] as const
 
 export const RULES: readonly Rule[] = [
@@ -100,16 +104,33 @@ const BINARY_SNIFF_BYTES = 1024
 /** Characters of surrounding context included in a failure report. */
 const EXCERPT_PADDING = 24
 
+export interface ScanOptions {
+  /**
+   * Directory names, relative to the target, whose contents are not scanned. For output a
+   * build keeps beside what it ships: `.next/cache` holds the compiler's own caches, and is
+   * never deployed. A name, not a pattern, so the list says exactly what it leaves out.
+   */
+  readonly skip?: readonly string[]
+}
+
 /**
  * Recursively scan a build output directory (or a single file) for dogear markers.
  *
  * Throws when the target is missing. That is deliberate and is the single most important
  * behaviour here: silently returning "no findings" for a directory that was never built
  * would make this check go green forever the day somebody reorders the CI steps.
+ *
+ * **A source map is scanned without its `sourcesContent`** (J4, #80). That field is a verbatim
+ * copy of the source the map describes, and Turbopack's production build emits server maps
+ * that carry the app's own source in it (J1's spike found F1's layer 2 marker there and nowhere
+ * else). The source is not output: what the build made of it is in the emitted file beside the
+ * map, which is scanned as ever. Everything else in the map stays in, `sources` above all, so a
+ * map path through `node_modules/dogear-core` is still the finding the package rule exists for.
  */
 export function scanBuildOutput(
   target: string,
   rules: readonly Rule[] = RULES,
+  options: ScanOptions = {},
 ): ScanResult {
   let stats
   try {
@@ -121,7 +142,8 @@ export function scanBuildOutput(
     )
   }
 
-  const files = stats.isDirectory() ? walk(target) : [target]
+  const skip = new Set((options.skip ?? []).map((dir) => join(target, dir)))
+  const files = stats.isDirectory() ? walk(target, skip) : [target]
   const findings: Finding[] = []
   let filesScanned = 0
 
@@ -133,10 +155,42 @@ export function scanBuildOutput(
     if (isBinary(buffer)) continue
 
     filesScanned += 1
-    findings.push(...scanText(buffer.toString('utf8'), file, rules))
+    const text = buffer.toString('utf8')
+    const map = withoutEmbeddedSource(text)
+    findings.push(
+      ...(map === undefined
+        ? scanText(text, file, rules)
+        : scanText(map, file, rules, ' (a source map, scanned without sourcesContent)')),
+    )
   }
 
   return { filesScanned, findings }
+}
+
+/**
+ * The map re-serialised without `sourcesContent`, or `undefined` if `text` is not a source map.
+ *
+ * Recognised by content, not by a `.map` extension, for the reason binary files are: a rule
+ * keyed on a name skips whatever nobody thought to name. The cheap test runs first, so ordinary
+ * output is never handed to `JSON.parse`.
+ */
+function withoutEmbeddedSource(text: string): string | undefined {
+  if (!text.trimStart().startsWith('{') || !text.includes('"sourcesContent"'))
+    return undefined
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+    return undefined
+  const { sourcesContent, ...rest } = parsed as Record<string, unknown>
+  if (!Array.isArray(sourcesContent)) return undefined
+
+  return JSON.stringify(rest)
 }
 
 /**
@@ -182,15 +236,25 @@ export function formatFindings(findings: readonly Finding[]): string {
       `    [${finding.rule}] ${finding.detail}`,
     ]),
     '',
-    'This build is not safe to ship. `apply: "serve"` (layer 1) and the exports map',
-    '(layer 3) are what should have prevented it; check those before adjusting this check.',
+    'This build is not safe to ship. `apply: "serve"` or `withDogear`\'s phase check (layer 1)',
+    'and the exports map (layer 3) are what should have prevented it; check those before',
+    'adjusting this check.',
     '',
   ]
 
   return lines.join('\n')
 }
 
-function scanText(text: string, file: string, rules: readonly Rule[]): Finding[] {
+/**
+ * @param note  Appended to the file in the report when what was scanned is not the file's own
+ *   bytes, so an offset that does not match the file on disk explains itself.
+ */
+function scanText(
+  text: string,
+  file: string,
+  rules: readonly Rule[],
+  note = '',
+): Finding[] {
   const findings: Finding[] = []
 
   for (const rule of rules) {
@@ -202,7 +266,7 @@ function scanText(text: string, file: string, rules: readonly Rule[]): Finding[]
       rule: rule.name,
       file: displayPath(file),
       detail:
-        `${occurrences}× "${rule.needle}", first at byte ${offset} — ${rule.why}` +
+        `${occurrences}× "${rule.needle}", first at byte ${offset}${note} — ${rule.why}` +
         `\n           …${excerpt(text, offset, rule.needle.length)}…`,
     })
   }
@@ -210,13 +274,14 @@ function scanText(text: string, file: string, rules: readonly Rule[]): Finding[]
   return findings
 }
 
-function walk(dir: string): string[] {
+function walk(dir: string, skip: ReadonlySet<string>): string[] {
   const found: string[] = []
 
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name)
-    if (entry.isDirectory()) found.push(...walk(full))
-    else if (entry.isFile()) found.push(full)
+    if (entry.isDirectory()) {
+      if (!skip.has(full)) found.push(...walk(full, skip))
+    } else if (entry.isFile()) found.push(full)
   }
 
   // Sorted so a failure report is stable across machines and reruns.

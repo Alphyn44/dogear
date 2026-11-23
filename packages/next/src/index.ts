@@ -1,12 +1,17 @@
 import { fileURLToPath } from 'node:url'
 
 import {
+  buildClientConfig,
+  clientScriptSrc,
   DEFAULT_ENDPOINT,
   DEFAULT_EXCLUDE,
   DEFAULT_INCLUDE,
   findAppName,
   normaliseEndpoint,
   readConfigFile,
+  resolveCoreDist,
+  UNBUILT_CORE_WARNING,
+  validateModifier,
 } from 'dogear-host'
 import { CONFIG_FILE, findGitRoot, QUEUE_DIR } from 'dogear-queue'
 import type { NextConfig } from 'next'
@@ -43,6 +48,16 @@ export interface DogearOptions {
    */
   readonly endpoint?: string
   /**
+   * Which key arms the overlay. Default `'alt'`. Added by J4 (#80), as under Vite.
+   *
+   * Layered over `.dogear/config.json`. A bad value here throws when `next dev` evaluates the
+   * config, while a bad value in the file is warned about and dropped, as under Vite.
+   *
+   * **Spelled out rather than typed as `dogear-host`'s `Modifier`**, because this interface is
+   * published and tsc would copy that import into `dist/index.d.ts`.
+   */
+  readonly modifier?: 'alt' | 'ctrl' | 'meta' | 'shift'
+  /**
    * What to record as the workspace package this server serves, for C4 (#18). Defaults to the
    * `name` from the nearest `package.json` above the directory `next dev` was started in.
    *
@@ -59,9 +74,9 @@ export interface DogearOptions {
    * Stamp `data-dogear-src` onto host JSX elements in dev. Default `true`, for C1 (#15) and
    * J2 (#78).
    *
-   * `false` keeps the endpoint: annotations still arrive, located by the selector floor (C3)
-   * instead of an exact file and line. `enabled` is the switch for dogear as a whole. Layered
-   * over `.dogear/config.json`, as under Vite.
+   * `false` keeps the overlay and the endpoint: annotations still arrive, located by the
+   * selector floor (C3) instead of an exact file and line. `enabled` is the switch for dogear
+   * as a whole. Layered over `.dogear/config.json`, as under Vite.
    */
   readonly transform?: boolean
   /**
@@ -111,14 +126,18 @@ const LOADER = fileURLToPath(new URL('./loader.js', import.meta.url))
 
 /**
  * The Turbopack globs the loader is registered under. Globs without a `/` match the file name,
- * so these two cover every directory. They are exactly the extensions Oxc parses as JSX, and
- * the loader's own filter narrows from there.
+ * so these cover every directory.
+ *
+ * **`*.js` since J4 (#80)**, because `create-next-app --js` writes its root layout as
+ * `app/layout.js`, with JSX in it, and the client tag has to reach it. `transformSource` parses
+ * a `.js` as JSX, and the loader passes any `.js` that neither mentions `<html` nor matches
+ * `include` straight through unparsed. `.ts` is absent because JSX is not syntax there.
  */
-const RULE_GLOBS = ['*.jsx', '*.tsx'] as const
+const RULE_GLOBS = ['*.js', '*.jsx', '*.tsx'] as const
 
 /**
- * dogear's `next.config` wrapper. J1 (#77) decided it; J3 (#79) built its endpoint and J2 (#78)
- * its source stamping.
+ * dogear's `next.config` wrapper. J1 (#77) decided it; J3 (#79) built its endpoint, J2 (#78)
+ * its source stamping and J4 (#80) the overlay's tag.
  *
  * ```js
  * // next.config.mjs
@@ -134,6 +153,12 @@ const RULE_GLOBS = ['*.jsx', '*.tsx'] as const
  *
  * Returns a function of the phase, which is the form Next calls with `(phase, { defaultConfig })`.
  * A user config that is itself a function is called with the same two arguments first.
+ *
+ * **The overlay arrives as a tag the loader writes into every JSX `<html>`**, an `async` module
+ * script that loads core's dev bundle through the endpoint, by path, as under Vite. Nothing
+ * resolves `dogear-core` by name, so the inert build its exports map gives every other
+ * condition is never in reach. An app whose `<html>` is not JSX in its own source, rendered by
+ * a dependency or through `createElement`, gets no tag and no message.
  */
 export function withDogear(
   nextConfig: NextConfigInput = {},
@@ -193,11 +218,23 @@ async function attach(config: NextConfig, options: DogearOptions): Promise<NextC
   const endpoint = normaliseEndpoint(
     options.endpoint ?? file.endpoint ?? DEFAULT_ENDPOINT,
   )
+  // J4 (#80). The same object Vite's tag carries: the modifier, the *normalised* endpoint, and
+  // `hosts` only when the file names some, so core keeps its own defaults otherwise.
+  const client = buildClientConfig({
+    modifier: validateModifier(options.modifier) ?? file.modifier,
+    endpoint,
+    hosts: file.hosts,
+  })
   const app = options.app?.trim() || findAppName(cwd, gitRoot)
+
+  // By path, never by name: see `resolveCoreDist`. Not fatal, as under Vite: the route then
+  // answers with a stub that says the same thing in the browser console.
+  const clientDist = resolveCoreDist()
+  if (clientDist === undefined) say('warn', UNBUILT_CORE_WARNING)
 
   let port: number
   try {
-    ;({ port } = await startEndpointServer({ gitRoot, endpoint, app }))
+    ;({ port } = await startEndpointServer({ gitRoot, endpoint, app, clientDist }))
   } catch (error) {
     say(
       'warn',
@@ -210,7 +247,8 @@ async function attach(config: NextConfig, options: DogearOptions): Promise<NextC
 
   say(
     'log',
-    `[dogear] ready: ${endpoint} writes to ${QUEUE_DIR}/queue.json in ${gitRoot}.`,
+    `[dogear] ready: ${client.modifier}-click an element to annotate, Ctrl+Alt+D to turn ` +
+      `dogear off. ${endpoint} writes to ${QUEUE_DIR}/queue.json in ${gitRoot}.`,
   )
 
   const served: NextConfig = {
@@ -225,20 +263,23 @@ async function attach(config: NextConfig, options: DogearOptions): Promise<NextC
     }),
   }
 
-  // J2 (#78). Under the same preconditions as the endpoint, as under Vite: no git root means no
-  // stamp, because a path relative to a repository dogear could not find is worse than none.
-  if ((options.transform ?? file.transform) === false) return served
-
+  // J2 (#78) and J4 (#80). Under the same preconditions as the endpoint, as under Vite: no git
+  // root means no stamp, because a path relative to a repository dogear could not find is
+  // worse than none, and no endpoint means no tag, because a tag whose import 404s is a worse
+  // failure than absence. The loader is registered even with `transform: false`, because the
+  // tag still has to reach the layout; it then only injects.
   const loader: LoaderOptions = {
     gitRoot,
+    stamp: (options.transform ?? file.transform) !== false,
     include: options.include ?? file.include ?? DEFAULT_INCLUDE,
     exclude: options.exclude ?? file.exclude ?? DEFAULT_EXCLUDE,
+    clientSrc: clientScriptSrc(endpoint, client),
   }
 
   return {
     ...served,
-    turbopack: withStampRules(config.turbopack, loader),
-    webpack: withStampLoader(config.webpack, loader),
+    turbopack: withLoaderRules(config.turbopack, loader),
+    webpack: withLoader(config.webpack, loader),
   }
 }
 
@@ -255,7 +296,7 @@ async function attach(config: NextConfig, options: DogearOptions): Promise<NextC
  * not what another loader made of it. A shorthand list of loaders is one rule, so it is wrapped
  * as one rather than spread into separate rules.
  */
-function withStampRules(
+function withLoaderRules(
   turbopack: NextConfig['turbopack'],
   options: LoaderOptions,
 ): Turbopack {
@@ -298,14 +339,15 @@ function asRuleList(collection: RuleCollection): RuleEntry[] {
  * layer, and the stamps agree across them because the transform is deterministic, which is
  * what keeps hydration from reporting a mismatch.
  */
-function withStampLoader(user: NextConfig['webpack'], options: LoaderOptions): Webpack {
+function withLoader(user: NextConfig['webpack'], options: LoaderOptions): Webpack {
   return (config, context) => {
     const resolved = typeof user === 'function' ? user(config, context) : config
 
     resolved.module ??= {}
     resolved.module.rules ??= []
     resolved.module.rules.push({
-      test: /\.(?:jsx|tsx)$/,
+      // `.js` since J4 (#80), for a root layout written as `app/layout.js`. See `RULE_GLOBS`.
+      test: /\.(?:jsx?|tsx)$/,
       exclude: /[\\/]node_modules[\\/]/,
       enforce: 'pre',
       use: [{ loader: LOADER, options: loaderOptions(options) }],
@@ -319,14 +361,18 @@ function withStampLoader(user: NextConfig['webpack'], options: LoaderOptions): W
  * Loader options in the shape Turbopack's types demand: a JSON object with mutable arrays.
  * A fresh copy per registration, so no bundler can mutate what the other was given.
  */
-function loaderOptions(options: LoaderOptions): { [key: string]: string | string[] } {
+function loaderOptions(options: LoaderOptions): {
+  [key: string]: string | string[] | boolean
+} {
   const list = (patterns: string | readonly string[]) =>
     typeof patterns === 'string' ? patterns : [...patterns]
 
   return {
     gitRoot: options.gitRoot,
+    stamp: options.stamp,
     include: list(options.include),
     exclude: list(options.exclude),
+    clientSrc: options.clientSrc,
   }
 }
 

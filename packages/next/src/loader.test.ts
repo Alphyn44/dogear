@@ -1,31 +1,38 @@
 import { resolve } from 'node:path'
 
-import { DEFAULT_EXCLUDE, DEFAULT_INCLUDE } from 'dogear-host'
+import { DEFAULT_EXCLUDE, DEFAULT_INCLUDE, SENTINEL } from 'dogear-host'
 import { SOURCE_ATTRIBUTE } from 'dogear-host/stamp'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LoaderOptions } from './loader.js'
 
 /**
- * The loader as a bundler calls it — J2 (#78).
+ * The loader as a bundler calls it, for J2 (#78) and J4 (#80).
  *
  * A fake context stands in for webpack's and Turbopack's, naming only the members the loader
  * declares it uses. The module is re-imported per test, because "warn once per process" is
  * module state and each test is its own process as far as that is concerned.
  *
- * What `stampSource` decides is ../../host/src/stamp.test.ts's; what `withDogear` registers is
- * ./index.test.ts's. This file holds the seam between them: the filter, the path and the
- * fallbacks.
+ * What `transformSource` decides is ../../host/src/stamp.test.ts's; what `withDogear` registers
+ * is ./index.test.ts's. This file holds the seam between them: the filter, the path, the two
+ * jobs' separate gates and the fallbacks.
  */
 
 const ROOT = resolve('/repo')
 const SOURCE = 'export const App = () => <div />\n'
+const LAYOUT =
+  'export default function RootLayout({ children }) {\n' +
+  '  return <html><body>{children}</body></html>\n' +
+  '}\n'
 const MAP = { version: 3, mappings: '' }
+const CLIENT_SRC = '/__dogear/client.js?config=%7B%7D'
 
 const DEFAULTS: LoaderOptions = {
   gitRoot: ROOT,
+  stamp: true,
   include: DEFAULT_INCLUDE,
   exclude: DEFAULT_EXCLUDE,
+  clientSrc: CLIENT_SRC,
 }
 
 interface Run {
@@ -141,5 +148,65 @@ describe('the dogear loader', () => {
     expect([first.error, second.error]).toEqual([null, null])
     expect(warnings).toHaveLength(1)
     expect(warnings[0]?.message).toMatch(/^\[dogear\] could not stamp .*a\.tsx/)
+  })
+})
+
+describe('the client tag (J4)', () => {
+  it('goes into a root layout, alongside its stamps', () => {
+    const { code } = run(resolve(ROOT, 'app/layout.tsx'), DEFAULTS, LAYOUT)
+
+    expect(code).toContain(`data-dogear="${SENTINEL}"`)
+    expect(code).toContain(`src={${JSON.stringify(CLIENT_SRC)}}`)
+    expect(code).toContain(`<body ${SOURCE_ATTRIBUTE}="app/layout.tsx:2:16"`)
+  })
+
+  it('goes into a layout.js, which create-next-app --js writes with JSX in it', () => {
+    // Outside the default include, so it is not stamped: the tag does not follow the filter.
+    const { code } = run(resolve(ROOT, 'app/layout.js'), DEFAULTS, LAYOUT)
+
+    expect(code).toContain(`data-dogear="${SENTINEL}"`)
+    expect(code).not.toContain(SOURCE_ATTRIBUTE)
+  })
+
+  it('goes in with stamping off', () => {
+    const { code } = run(
+      resolve(ROOT, 'app/layout.tsx'),
+      { ...DEFAULTS, stamp: false },
+      LAYOUT,
+    )
+
+    expect(code).toContain(`data-dogear="${SENTINEL}"`)
+    expect(code).not.toContain(SOURCE_ATTRIBUTE)
+  })
+
+  it('goes into a layout the configuration excludes from stamping', () => {
+    const options = { ...DEFAULTS, exclude: ['**/app/layout.tsx'] }
+    const { code } = run(resolve(ROOT, 'app/layout.tsx'), options, LAYOUT)
+
+    expect(code).toContain(`data-dogear="${SENTINEL}"`)
+    expect(code).not.toContain(SOURCE_ATTRIBUTE)
+  })
+
+  it('passes a .js file with no <html> and nothing to stamp through untouched', () => {
+    // The cheap path every other .js file in an app takes, now that the loader is registered
+    // for them all.
+    const { code, map } = run(
+      resolve(ROOT, 'app/util.js'),
+      DEFAULTS,
+      'export const a = 1\n',
+    )
+
+    expect(code).toBe('export const a = 1\n')
+    expect(map).toBe(MAP)
+  })
+
+  it('refuses options without a client src, as a version skew', () => {
+    const warnings: Error[] = []
+    const { clientSrc: _, ...skewed } = DEFAULTS
+
+    const { code } = run(resolve(ROOT, 'app/layout.tsx'), skewed, LAYOUT, { warnings })
+
+    expect(code).toBe(LAYOUT)
+    expect(warnings).toHaveLength(1)
   })
 })

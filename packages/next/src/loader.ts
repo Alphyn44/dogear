@@ -1,16 +1,22 @@
 import { isAbsolute, resolve } from 'node:path'
 
 import { createFilter } from 'dogear-host/filter'
-import { stampSource } from 'dogear-host/stamp'
+import { transformSource } from 'dogear-host/stamp'
 
 /**
- * dogear's loader for both of `next dev`'s bundlers — J2 (#78).
+ * dogear's loader for both of `next dev`'s bundlers, for J2 (#78) and J4 (#80).
  *
- * J1 ruled that stamping attaches as one loader, registered by `withDogear` under both
- * `turbopack.rules` and `webpack()`. Both bundlers hand a loader the source as written, before
- * SWC compiles the JSX, which is what `enforce: 'pre'` buys under Vite; everything that decides
- * *what* to stamp is `stampSource`'s, shared with `dogear-vite` through `dogear-host`. This
- * module only decides whether to call it.
+ * J1 ruled that stamping and injection attach as one loader, registered by `withDogear` under
+ * both `turbopack.rules` and `webpack()`. Both bundlers hand a loader the source as written,
+ * before SWC compiles the JSX, which is what `enforce: 'pre'` buys under Vite; everything that
+ * decides *what* to stamp, and where the tag goes, is `transformSource`'s, in `dogear-host`.
+ * This module only decides whether to call it.
+ *
+ * **Two jobs with two different filters.** Stamping follows `include` and `exclude`, as under
+ * Vite. The client tag follows neither: it goes into every file with a JSX `<html>`, because
+ * a root layout the configuration happens to exclude from stamping still has to load the
+ * overlay. A file that is not stamped and does not mention `<html` passes straight through
+ * without being parsed, which is what keeps registering the loader for every `.js` file cheap.
  *
  * **A separate tsup entry, `dist/loader.js`.** The config wrapper never imports it, so
  * evaluating `next.config` does not load Oxc's native binding; only a bundler that runs the
@@ -34,8 +40,12 @@ import { stampSource } from 'dogear-host/stamp'
  */
 export interface LoaderOptions {
   readonly gitRoot: string
+  /** `false` when `transform` is off: the loader then only injects. */
+  readonly stamp: boolean
   readonly include: string | readonly string[]
   readonly exclude: string | readonly string[]
+  /** The client tag's `src`, built by `withDogear` from the same config Vite's tag carries. */
+  readonly clientSrc: string
 }
 
 /**
@@ -67,27 +77,35 @@ export default function dogearLoader(
     const options = readOptions(this.getOptions())
     const file = absolutePath(this.resourcePath, this.rootContext)
 
-    if (!filterFor(options)(file)) {
+    const stamp = options.stamp && filterFor(options)(file)
+    // A substring test, not a parse: it can only say "maybe", and `transformSource` decides.
+    const inject = source.includes('<html')
+
+    if (!stamp && !inject) {
       this.callback(null, source, map)
       return
     }
 
-    const stamped = stampSource(source, file, options.gitRoot)
-    if (stamped === null) {
+    const result = transformSource(source, file, {
+      gitRoot: options.gitRoot,
+      stamp,
+      ...(inject ? { clientSrc: options.clientSrc } : {}),
+    })
+    if (result === null) {
       this.callback(null, source, map)
       return
     }
 
     // No incoming map to chain: this loader runs first, on the file as written, so the map it
     // returns is the first in the chain and SWC composes its own on top.
-    this.callback(null, stamped.code, stamped.map)
+    this.callback(null, result.code, result.map)
   } catch (error) {
     if (!warned) {
       warned = true
       this.emitWarning(
         new Error(
           `[dogear] could not stamp ${this.resourcePath}, so it carries no source ` +
-            `attribute; later files may not either. ${
+            `attribute or client tag; later files may not either. ${
               error instanceof Error ? error.message : String(error)
             }`,
         ),
@@ -106,8 +124,10 @@ function readOptions(raw: unknown): LoaderOptions {
   const options = raw as Partial<Record<keyof LoaderOptions, unknown>> | null
   if (
     typeof options?.gitRoot === 'string' &&
+    typeof options.stamp === 'boolean' &&
     isPatterns(options.include) &&
-    isPatterns(options.exclude)
+    isPatterns(options.exclude) &&
+    typeof options.clientSrc === 'string'
   ) {
     return options as LoaderOptions
   }

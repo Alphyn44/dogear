@@ -4,6 +4,8 @@ node_modules/
 # Build output
 dist/
 *.tsbuildinfo
+# J4's Next leak fixture, built in place by `npm run build:fixtures`.
+.next/
 
 # `npm pack` output. Written to the repo root, and the manual install smoke check
 # in E1 (#26) runs it — so this is a file you will create again every time you

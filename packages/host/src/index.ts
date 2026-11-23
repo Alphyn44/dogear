@@ -16,8 +16,8 @@
  * - The file filter is `dogear-host/filter`. It pulls in `picomatch`, which only `dogear-next`
  *   depends on, and which would otherwise be bundled into `dogear-vite`.
  *
- * The sentinel (J4) still lives in `dogear-vite`. J1's rule is that the first story needing a
- * module moves it.
+ * The client tag's JSX for Next (./inject.ts) is reached only through `dogear-host/stamp`,
+ * which applies it in the same pass as the stamps; it is not exported here.
  */
 
 export { findAppName } from './app-name.js'
@@ -31,6 +31,7 @@ export {
   MODIFIERS,
   resolveCoreDist,
   UNBUILT_CORE_WARNING,
+  validateModifier,
 } from './client.js'
 export type { FileConfig } from './config-file.js'
 export { readConfigFile, RECOGNISED_KEYS } from './config-file.js'
@@ -42,3 +43,4 @@ export {
   normaliseEndpoint,
 } from './endpoint.js'
 export { DEFAULT_EXCLUDE, DEFAULT_INCLUDE } from './patterns.js'
+export { SENTINEL } from './sentinel.js'

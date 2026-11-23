@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -9,6 +16,7 @@ import {
   DEFAULT_ENDPOINT,
   DEFAULT_EXCLUDE,
   DEFAULT_INCLUDE,
+  UNBUILT_CORE_WARNING,
 } from 'dogear-host'
 import { queuePathFor, readQueue } from 'dogear-queue'
 import type { NextConfig } from 'next'
@@ -16,6 +24,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { withDogear, type NextConfigInput } from './index.js'
 import { stopEndpointServers } from './server.js'
+
+/**
+ * Whether core's dev bundle exists is environmental: present after a build, absent in CI,
+ * which runs this suite first. So the one test about its absence says so, and every other
+ * test gets whatever is on disk, which none of them asserts on.
+ */
+const core = vi.hoisted(() => ({ missing: false }))
+vi.mock('dogear-host', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('dogear-host')>()
+  return {
+    ...actual,
+    resolveCoreDist: () => (core.missing ? undefined : actual.resolveCoreDist()),
+  }
+})
 
 /**
  * `withDogear` without Next, for J3 (#79).
@@ -49,6 +71,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  core.missing = false
   vi.restoreAllMocks()
   await stopEndpointServers()
   rmSync(root, { recursive: true, force: true })
@@ -340,6 +363,156 @@ describe('staying out of the way', () => {
 })
 
 /**
+ * J4 (#80): what the client tag will say, as `withDogear` computes it, and the bundle its
+ * `src` names. Where the tag goes is ../../host/src/stamp.test.ts's; that a real page loads it
+ * is ../test-built/next-dev.test.ts's.
+ */
+describe('the client tag', () => {
+  /** The config the loader will write into the tag's `src`, decoded. */
+  async function tagConfig(
+    options: Parameters<typeof withDogear>[1] = {},
+  ): Promise<Record<string, unknown>> {
+    const config = await inDev({}, options)
+    const rules = (config.turbopack?.rules ?? {}) as unknown as Record<
+      string,
+      { loaders: { options: { clientSrc: string } }[] }
+    >
+    const src = rules['*.tsx']?.loaders[0]?.options.clientSrc
+    if (src === undefined) throw new Error('expected a loader with a clientSrc')
+
+    const url = new URL(src, 'http://localhost')
+    return JSON.parse(url.searchParams.get('config') ?? 'null') as Record<string, unknown>
+  }
+
+  function writeConfigFile(contents: object): void {
+    mkdirSync(join(root, '.dogear'), { recursive: true })
+    writeFileSync(
+      join(root, '.dogear', 'config.json'),
+      JSON.stringify({ version: 1, ...contents }),
+    )
+  }
+
+  it('carries the default modifier and the endpoint, and no hosts unless the file names some', async () => {
+    // Absent rather than the defaults, so core keeps its own list: see `ClientConfig.hosts`.
+    await expect(tagConfig()).resolves.toEqual({
+      modifier: 'alt',
+      endpoint: DEFAULT_ENDPOINT,
+    })
+  })
+
+  it('carries the hosts from .dogear/config.json, which core checks before anything else', async () => {
+    // F3's runtime hostname check, reached the way it is under Vite: on the tag's query string.
+    writeConfigFile({ hosts: ['localhost', '10.0.0.0/8'] })
+
+    await expect(tagConfig()).resolves.toMatchObject({
+      hosts: ['localhost', '10.0.0.0/8'],
+    })
+  })
+
+  it('carries the normalised endpoint the rewrite serves', async () => {
+    await expect(tagConfig({ endpoint: '/_tools/dogear/' })).resolves.toMatchObject({
+      endpoint: '/_tools/dogear',
+    })
+  })
+
+  it.each([
+    {
+      layer: 'the file over the default',
+      file: { modifier: 'shift' },
+      options: {},
+      expected: 'shift',
+    },
+    {
+      layer: 'the option over the file',
+      file: { modifier: 'shift' },
+      options: { modifier: 'ctrl' as const },
+      expected: 'ctrl',
+    },
+  ])('layers the modifier: $layer', async ({ file, options, expected }) => {
+    writeConfigFile(file)
+
+    await expect(tagConfig(options)).resolves.toMatchObject({ modifier: expected })
+  })
+
+  it('throws on a bad modifier option, in the Vite plugin’s words', async () => {
+    await expect(inDev({}, { modifier: 'hyper' as unknown as 'alt' })).rejects.toThrow(
+      /modifier must be one of alt, ctrl, meta, shift/,
+    )
+  })
+
+  it('names the tag in the ready line, as Vite does', async () => {
+    await inDev({}, { modifier: 'shift' })
+
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('[dogear] ready: shift-click an element to annotate'),
+    )
+  })
+
+  describe('with core missing or unbuilt', () => {
+    it('says so in the terminal, once however often the config is evaluated', async () => {
+      core.missing = true
+
+      await inDev()
+      await inDev()
+
+      const warned = vi
+        .mocked(console.warn)
+        .mock.calls.filter(([message]) => message === UNBUILT_CORE_WARNING)
+      expect(warned).toHaveLength(1)
+    })
+
+    it('says so in the browser console, through the stub the tag loads', async () => {
+      core.missing = true
+      const { base } = await endpointOf(await inDev())
+
+      const response = await fetch(`${base}${DEFAULT_ENDPOINT}/client.js`)
+
+      expect(response.status).toBe(200)
+      await expect(response.text()).resolves.toMatch(
+        /console\.warn\([\s\S]*dogear-core has not been built/,
+      )
+    })
+  })
+})
+
+/**
+ * J4 (#80), the second criterion as a source rule. Core's exports map gives every condition but
+ * `development` the inert build, so a host that resolves `dogear-core` by name can land on it,
+ * and the result looks exactly like dogear not being installed. Both hosts reach the dev bundle
+ * through `dogear-core/package.json` instead; this keeps anyone from adding the other kind.
+ */
+describe('never resolving dogear-core by name', () => {
+  const SOURCES = [
+    ...['index.ts', 'loader.ts', 'server.ts'].map(
+      (file) => new URL(`./${file}`, import.meta.url),
+    ),
+    ...['client.ts', 'client-route.ts', 'endpoint.ts', 'inject.ts', 'stamp.ts'].map(
+      (file) => new URL(`../../host/src/${file}`, import.meta.url),
+    ),
+  ]
+
+  it.each(
+    SOURCES.map((url) => ({ file: url.pathname.split('/').slice(-3).join('/'), url })),
+  )('$file names dogear-core only as its manifest', ({ url }) => {
+    const source = readFileSync(url, 'utf8')
+    const specifiers = source.match(/['"]dogear-core[^'"]*['"]/g) ?? []
+
+    expect(specifiers.filter((s) => !s.includes('dogear-core/package.json'))).toEqual([])
+  })
+
+  it('is reading the file that does resolve the manifest', () => {
+    // The control: without it, a moved `resolveCoreDist` would leave the rule above reading
+    // files that never mention core, and passing.
+    const client = readFileSync(
+      SOURCES.find((url) => url.pathname.endsWith('/client.ts'))!,
+      'utf8',
+    )
+
+    expect(client).toContain("'dogear-core/package.json'")
+  })
+})
+
+/**
  * J2 (#78): the loader, as `withDogear` registers it. What each bundler then hands the loader is
  * ../test-built/next-dev.test.ts's job; what the loader does with it is ./loader.test.ts's.
  */
@@ -376,10 +549,11 @@ describe('source stamping', () => {
     )
   }
 
-  it('registers one loader under Turbopack for .jsx and .tsx, outside node_modules', async () => {
+  it('registers one loader under Turbopack for .js, .jsx and .tsx, outside node_modules', async () => {
+    // `.js` since J4 (#80): `create-next-app --js` writes its root layout as `app/layout.js`.
     const rules = turbopackRules(await inDev())
 
-    expect(Object.keys(rules).sort()).toEqual(['*.jsx', '*.tsx'])
+    expect(Object.keys(rules).sort()).toEqual(['*.js', '*.jsx', '*.tsx'])
     for (const rule of Object.values(rules) as TurbopackRule[]) {
       expect(rule).toEqual({
         loaders: [
@@ -387,8 +561,12 @@ describe('source stamping', () => {
             loader: expect.stringMatching(/[\\/]loader\.js$/),
             options: {
               gitRoot: root,
+              stamp: true,
               include: DEFAULT_INCLUDE,
               exclude: DEFAULT_EXCLUDE,
+              clientSrc: `${DEFAULT_ENDPOINT}/client.js?config=${encodeURIComponent(
+                JSON.stringify({ modifier: 'alt', endpoint: DEFAULT_ENDPOINT }),
+              )}`,
             },
           },
         ],
@@ -399,7 +577,7 @@ describe('source stamping', () => {
     }
   })
 
-  it('registers the same loader under webpack, as a pre loader for .jsx and .tsx', async () => {
+  it('registers the same loader under webpack, as a pre loader for .js, .jsx and .tsx', async () => {
     const config = await inDev()
     const rule = ourWebpackRule(config)
     const [turbopackLoader] = (turbopackRules(config)['*.tsx'] as TurbopackRule).loaders
@@ -407,8 +585,8 @@ describe('source stamping', () => {
     expect(rule.enforce).toBe('pre')
     expect(rule.use).toEqual([turbopackLoader])
     expect(
-      ['App.tsx', 'App.jsx', 'App.ts', 'App.js'].map((f) => rule.test.test(f)),
-    ).toEqual([true, true, false, false])
+      ['App.tsx', 'App.jsx', 'App.ts', 'App.js', 'App.mjs'].map((f) => rule.test.test(f)),
+    ).toEqual([true, true, false, true, false])
     expect(rule.exclude.test('/repo/node_modules/pkg/A.tsx')).toBe(true)
     expect(rule.exclude.test('C:\\repo\\node_modules\\pkg\\A.tsx')).toBe(true)
     expect(rule.exclude.test('/repo/src/A.tsx')).toBe(false)
@@ -452,14 +630,17 @@ describe('source stamping', () => {
     { why: 'the transform: false option', file: {}, options: { transform: false } },
     { why: 'transform: false in the file', file: { transform: false }, options: {} },
   ])(
-    'registers no loader for $why, and keeps the endpoint',
+    'keeps the loader for $why, to inject only, and keeps the endpoint',
     async ({ file, options }) => {
+      // J4 (#80). Before it, `transform: false` registered no loader at all; the client tag
+      // now rides the same loader, and the overlay is not what `transform` turns off.
       writeConfigFile(file)
 
-      const config = await inDev({ webpack: null }, options)
+      const config = await inDev({}, options)
+      const { loaders } = turbopackRules(config)['*.tsx'] as TurbopackRule
 
-      expect(config.turbopack).toBeUndefined()
-      expect(config.webpack).toBeNull()
+      expect(loaders[0]?.options).toMatchObject({ stamp: false })
+      expect(ourWebpackRule(config).use[0]?.options).toMatchObject({ stamp: false })
       expect(config.rewrites).toBeTypeOf('function')
     },
   )
@@ -467,9 +648,11 @@ describe('source stamping', () => {
   it('lets transform: true in the option beat the file', async () => {
     writeConfigFile({ transform: false })
 
-    expect(
-      Object.keys(turbopackRules(await inDev({}, { transform: true }))),
-    ).toHaveLength(2)
+    const { loaders } = turbopackRules(await inDev({}, { transform: true }))[
+      '*.tsx'
+    ] as TurbopackRule
+
+    expect(loaders[0]?.options).toMatchObject({ stamp: true })
   })
 
   it('registers nothing outside the dev phase', async () => {

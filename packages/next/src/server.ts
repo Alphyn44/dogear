@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import { createEndpoint } from 'dogear-host'
+import { type ClientDist, createEndpoint } from 'dogear-host'
 
 /**
  * The loopback server behind dogear's rewrite, for J3 (#79).
@@ -24,6 +24,8 @@ export interface EndpointServerOptions {
   /** Already normalised. */
   readonly endpoint: string
   readonly app: string | undefined
+  /** Core's dev bundle, or `undefined` when it is missing or unbuilt: the route then stubs. */
+  readonly clientDist: ClientDist | undefined
 }
 
 export interface StartedServer {
@@ -61,8 +63,8 @@ export function processState(): ProcessState {
  * **`unref()`**, so dogear can never be the reason a `next dev` that is shutting down stays
  * alive.
  *
- * **`clientDist` is `undefined` until J4.** The client route then answers with core's
- * missing-bundle stub, which is harmless while nothing injects a tag that asks for it.
+ * `clientDist` is resolved by the caller, which also owns the terminal line for an unbuilt
+ * core; the client route here reads the bundle from disk on every request, as under Vite.
  */
 export async function startEndpointServer(
   options: EndpointServerOptions,
@@ -76,9 +78,7 @@ export async function startEndpointServer(
   const handler = createEndpoint({
     gitRoot: options.gitRoot,
     endpoint: options.endpoint,
-    // TODO(dogear): J4 (#80) resolves core's dev bundle here, and adds dogear-core as a
-    // dependency so `resolveCoreDist` can find it from dogear-next's own location.
-    clientDist: undefined,
+    clientDist: options.clientDist,
     app: options.app,
     forwarded: true,
   })

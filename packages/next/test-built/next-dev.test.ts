@@ -11,6 +11,7 @@ import {
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { SENTINEL, UNBUILT_CORE_WARNING } from 'dogear-host'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { discard, freePort, REPO_ROOT } from '../../../test-packed/fixture.js'
@@ -39,6 +40,7 @@ const SCRATCH = join(HERE, '..', '.scratch')
 const NEXT_BIN = join(REPO_ROOT, 'node_modules', 'next', 'dist', 'bin', 'next')
 
 const ONE = JSON.stringify({ version: 1, batch: [{ comment: 'from a real next dev' }] })
+const HOSTS = ['127.0.0.1', 'localhost']
 
 beforeAll(() => {
   if (!existsSync(join(REPO_ROOT, 'packages', 'next', 'dist', 'index.js'))) {
@@ -63,6 +65,25 @@ describe('the built package', () => {
       /from ["']oxc-parser["']/,
     )
   })
+
+  it('names dogear-core only as its manifest, never as a module to resolve (J4)', () => {
+    // The built twin of the source rule in ../src/index.test.ts: an esbuild rewrite or a
+    // bundled dependency could introduce a specifier no source file spells.
+    const dist = join(REPO_ROOT, 'packages', 'next', 'dist')
+
+    for (const file of ['index.js', 'loader.js']) {
+      const specifiers =
+        readFileSync(join(dist, file), 'utf8').match(/["']dogear-core[^"']*["']/g) ?? []
+      expect(
+        specifiers.filter((s) => !s.includes('dogear-core/package.json')),
+        file,
+      ).toEqual([])
+    }
+    // The control: the wrapper does reach core, by the one route that cannot land on the noop.
+    expect(readFileSync(join(dist, 'index.js'), 'utf8')).toContain(
+      'dogear-core/package.json',
+    )
+  })
 })
 
 /** A copy of the fixture app with its own git root and a generated `next.config.mjs`. */
@@ -78,10 +99,17 @@ function createApp(): string {
   )
   // J2 (#78): the file layer of the transform's configuration, so a real run proves it decides
   // which files are stamped. The default exclude is restated because setting one replaces it.
+  // J4 (#80): `include` adds `.js` for the root layout, and `hosts` proves F3's list reaches
+  // the client tag. It names the address this suite browses, so the overlay would still run.
   mkdirSync(join(root, '.dogear'))
   writeFileSync(
     join(root, '.dogear', 'config.json'),
-    `${JSON.stringify({ version: 1, exclude: ['**/node_modules/**', '**/skipped.jsx'] })}\n`,
+    `${JSON.stringify({
+      version: 1,
+      include: ['**/*.jsx', '**/*.js'],
+      exclude: ['**/node_modules/**', '**/skipped.jsx'],
+      hosts: HOSTS,
+    })}\n`,
   )
   writeFileSync(
     join(root, 'next.config.mjs'),
@@ -281,8 +309,8 @@ describe.each([
         component: 'Counter',
       },
       {
-        kind: 'the root layout',
-        file: 'layout.jsx',
+        kind: 'the root layout, a .js file the configuration includes',
+        file: 'layout.js',
         tag: 'body',
         component: 'RootLayout',
       },
@@ -302,6 +330,56 @@ describe.each([
 
     it('reported no loader failure', () => {
       expect(next.log()).not.toContain('could not stamp')
+    })
+  })
+
+  describe('the overlay (J4)', () => {
+    let tags: string[]
+
+    beforeAll(async () => {
+      const html = await (await fetch(`${next.origin}/`)).text()
+      tags = html.match(/<script\b[^>]*\bdata-dogear="[^"]*"[^>]*>/g) ?? []
+    }, 60_000)
+
+    /** The tag's `src`, as the browser will request it. */
+    function src(): string {
+      const value = tags[0]?.match(/\bsrc="([^"]*)"/)?.[1]
+      if (value === undefined) throw new Error(`no src on ${String(tags[0])}`)
+      return value.replace(/&amp;/g, '&')
+    }
+
+    it('puts one async module tag carrying the sentinel on the page, from a .js layout', () => {
+      // One, although webpack runs the loader once per layer: React renders an async script
+      // as a resource, once.
+      expect(tags, next.log()).toHaveLength(1)
+      expect(tags[0]).toContain(`data-dogear="${SENTINEL}"`)
+      expect(tags[0]).toMatch(/\btype="module"/)
+      expect(tags[0]).toMatch(/\basync=""/)
+    })
+
+    it('hands core the modifier, the endpoint and the hosts from .dogear/config.json', () => {
+      // F3's runtime check reads `hosts` from here, as it does under Vite.
+      const config = new URL(src(), next.origin).searchParams.get('config')
+
+      expect(JSON.parse(config ?? 'null')).toEqual({
+        modifier: 'alt',
+        endpoint: '/__dogear',
+        hosts: HOSTS,
+      })
+    })
+
+    it('loads core’s dev bundle through the endpoint, not the stub', async () => {
+      const response = await fetch(new URL(src(), next.origin))
+      const body = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toMatch(/javascript/)
+      // The missing-bundle stub carries no sentinel; the real bundle does.
+      expect(body).toContain(SENTINEL)
+    }, 60_000)
+
+    it('did not warn that core is unbuilt', () => {
+      expect(next.log()).not.toContain(UNBUILT_CORE_WARNING)
     })
   })
 })
@@ -367,5 +445,15 @@ describe('next build, then next start', () => {
 
     expect(html).toContain('dogear next fixture')
     expect(html).not.toContain('data-dogear-src')
+  })
+
+  it('serves a page with no client tag in it, and carries the sentinel nowhere (J4)', async () => {
+    const html = await (await fetch(`${server!.origin}/`)).text()
+    const carrying = filesUnder(join(root, '.next')).filter((file) =>
+      readFileSync(file, 'latin1').includes(SENTINEL),
+    )
+
+    expect(html).not.toContain('data-dogear')
+    expect(carrying).toEqual([])
   })
 })
