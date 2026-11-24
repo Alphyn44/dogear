@@ -71,11 +71,15 @@ export function createFilter(
  * The base is escaped first because it is a real directory spliced into a glob. A repository
  * at `C:\Code Projects (old)\app` would otherwise read its parentheses as an extglob and
  * match nothing.
+ *
+ * **`\` is in the class although none can reach it** (#89): `toForwardSlashes` has already
+ * turned every one into `/`, as rollup's `normalizePath` does. It is there so the escaping is
+ * complete on its own terms rather than correct only because of the line before it.
  */
 function matcherString(pattern: string, base: string): string {
   if (isAbsolute(pattern) || pattern.startsWith('**')) return toForwardSlashes(pattern)
 
-  const escaped = toForwardSlashes(resolve(base)).replace(/[-^$*+?.()|[\]{}]/g, '\\$&')
+  const escaped = toForwardSlashes(resolve(base)).replace(/[-\\^$*+?.()|[\]{}]/g, '\\$&')
   return posix.join(escaped, toForwardSlashes(pattern))
 }
 

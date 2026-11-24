@@ -114,7 +114,7 @@ export type EndpointHandler = (
  * script tag off-host is a new shape of the same hole, and one rule closes both.
  */
 export function normaliseEndpoint(endpoint: string): string {
-  const trimmed = endpoint.trim().replace(/\/+$/, '')
+  const trimmed = withoutTrailingSlashes(endpoint.trim())
   const normalised = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
 
   if (normalised === '/') {
@@ -139,6 +139,20 @@ export function normaliseEndpoint(endpoint: string): string {
   }
 
   return normalised
+}
+
+/**
+ * `path` with every trailing `/` removed (#89).
+ *
+ * A loop rather than `replace(/\/+$/, '')`, which is quadratic: on a long run of slashes that
+ * does not end the string, the engine retries the match from every slash in it. The value
+ * only ever comes from the developer's own config, so this was never reachable from outside,
+ * but a dev server should not be able to hang on a typo in its own config file.
+ */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path[end - 1] === '/') end -= 1
+  return path.slice(0, end)
 }
 
 /**

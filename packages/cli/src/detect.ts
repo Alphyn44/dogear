@@ -876,9 +876,21 @@ function isDirectory(path: string): boolean {
 
 /** Backslashes to forward slashes, and no leading or trailing separator. */
 function normalize(pattern: string): string {
-  return pattern
-    .split(sep)
-    .join('/')
-    .replace(/^\.?\/+/, '')
-    .replace(/\/+$/, '')
+  return withoutTrailingSlashes(
+    pattern
+      .split(sep)
+      .join('/')
+      .replace(/^\.?\/+/, ''),
+  )
+}
+
+/**
+ * A loop rather than `replace(/\/+$/, '')`, which is quadratic on a long run of slashes that
+ * does not end the string (#89). The leading strip above is anchored at the start, so it has
+ * no such problem.
+ */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path[end - 1] === '/') end -= 1
+  return path.slice(0, end)
 }

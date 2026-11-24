@@ -90,8 +90,22 @@ describe('normaliseEndpoint', () => {
     { input: '__dogear', expected: '/__dogear', why: 'a leading slash is added' },
     { input: '  /__x  ', expected: '/__x', why: 'surrounding whitespace is trimmed' },
     { input: '/a/b/', expected: '/a/b', why: 'nested paths survive' },
+    {
+      input: '/__dogear///',
+      expected: '/__dogear',
+      why: 'every trailing slash is dropped',
+    },
   ])('turns $input into $expected — $why', ({ input, expected }) => {
     expect(normaliseEndpoint(input)).toBe(expected)
+  })
+
+  it('handles a long run of slashes inside the path in linear time (#89)', () => {
+    // The old `/\/+$/` retried from every slash in a run that does not end the string, so this
+    // input took tens of seconds and the case would fail on vitest's timeout. No timing
+    // assertion, which would be flaky: the timeout is the guard.
+    const input = `/a${'/'.repeat(200_000)}b`
+
+    expect(normaliseEndpoint(input)).toBe(input)
   })
 
   it.each(['/', '', '   '])(
