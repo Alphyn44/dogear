@@ -9,6 +9,11 @@ job across all three platforms instead. `test-packed/fixture.ts` holds the share
 `packAll` → `createScratchProject` (under `tmpdir`, never inside the repo, because
 `findGitRoot` walks *up*) → `startDevServer` → `runInstalledCli`. It is the slowest thing in
 the repository by an order of magnitude, so each install is shared by the whole file.
+Since J6 (#82) it also serves the two Next suites. `packAll(destination, dirs)` packs any
+`PackageDir`, which is `PUBLISHED` plus `next`: `dogear-next` stays out of `PUBLISHED` until J7
+publishes it, because it is `0.0.0` until then and `scripts/packaging.test.ts` requires the
+published versions to match. `startNext` and its `taskkill /T` stop, which J3's `next dev`
+suite used to keep to itself, live here for both.
 
 **Since I1 (#73) there is one install per Vite major, and the list is written down, not
 derived.** `VITE_LEGS` pairs each major with the `@vitejs/plugin-react` major that supports

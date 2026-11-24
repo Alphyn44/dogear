@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import {
   cpSync,
   existsSync,
@@ -14,7 +14,12 @@ import { fileURLToPath } from 'node:url'
 import { SENTINEL, UNBUILT_CORE_WARNING } from 'dogear-host'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { discard, freePort, REPO_ROOT } from '../../../test-packed/fixture.js'
+import {
+  discard,
+  REPO_ROOT,
+  startNext,
+  type Running,
+} from '../../../test-packed/fixture.js'
 
 /**
  * J3 (#79) against a real Next 16: the rewrite, the proxy and the phase gate, which the unit
@@ -133,78 +138,6 @@ function createApp(): string {
   return root
 }
 
-interface Running {
-  readonly origin: string
-  readonly log: () => string
-  readonly stop: () => Promise<void>
-}
-
-/**
- * Start a Next command in `root` and wait until `/` answers.
- *
- * **Stopping kills the whole tree.** `next dev` forks the server into a child process, and on
- * Windows `child.kill()` ends only the parent, leaving the child holding the port and file
- * handles on the scratch directory. `taskkill /T` takes the tree.
- */
-async function startNext(root: string, args: readonly string[]): Promise<Running> {
-  const port = await freePort()
-  const origin = `http://127.0.0.1:${port}`
-
-  const child = spawn(
-    process.execPath,
-    [NEXT_BIN, ...args, '--port', String(port), '--hostname', '127.0.0.1'],
-    {
-      cwd: root,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      // Next's telemetry would be the suite's only network egress.
-      env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
-    },
-  )
-
-  let log = ''
-  child.stdout?.on('data', (chunk: Buffer) => (log += chunk.toString()))
-  child.stderr?.on('data', (chunk: Buffer) => (log += chunk.toString()))
-
-  const stop = () => stopTree(child)
-
-  const deadline = Date.now() + 120_000
-  for (;;) {
-    if (child.exitCode !== null) {
-      throw new Error(
-        `next ${args.join(' ')} exited with ${String(child.exitCode)}:\n${log}`,
-      )
-    }
-    try {
-      const response = await fetch(`${origin}/`)
-      if (response.ok) return { origin, log: () => log, stop }
-    } catch {
-      // Not listening yet.
-    }
-    if (Date.now() > deadline) {
-      await stop()
-      throw new Error(
-        `next ${args.join(' ')} did not serve ${origin} within 120s:\n${log}`,
-      )
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  }
-}
-
-function stopTree(child: ChildProcess): Promise<void> {
-  return new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve()
-      return
-    }
-    child.once('close', () => resolve())
-    if (process.platform === 'win32' && child.pid !== undefined) {
-      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-    } else {
-      child.kill()
-    }
-  })
-}
-
 /**
  * Where `needle` starts in a fixture file, as `line:column`, both 1-based: what the stamp must
  * say if it describes the file as written. Computed from the fixture rather than written into
@@ -240,7 +173,7 @@ describe.each([
 
   beforeAll(async () => {
     root = createApp()
-    next = await startNext(root, ['dev', ...flags])
+    next = await startNext(root, ['dev', ...flags], NEXT_BIN)
   }, 180_000)
 
   afterAll(async () => {
@@ -399,7 +332,7 @@ describe('next build, then next start', () => {
     if (build.status !== 0) {
       throw new Error(`next build failed:\n${build.stdout}\n${build.stderr}`)
     }
-    server = await startNext(root, ['start'])
+    server = await startNext(root, ['start'], NEXT_BIN)
   }, 360_000)
 
   afterAll(async () => {

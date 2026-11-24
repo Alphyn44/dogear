@@ -261,9 +261,14 @@ jobs:
   # platform buys nothing for it. WebKit would be the interesting axis rather than the OS, and
   # that is B8 (#35), which this harness makes a small follow-up.
   #
+  # J6 (#82) runs the same gesture in a Next app, under Turbopack and webpack, with stamping on
+  # and off. It packs dogear-core and dogear-next and installs them with next and react from the
+  # registry, because its subject includes what npm would install; `npm run build` below is
+  # what gives those tarballs a dist/ to carry.
+  #
   # Here and not in verify.yml, like every job in this file: the browser binaries are a
-  # download, verify.yml is what release.yml gates on, and a release must not be able to fail
-  # because a browser CDN was slow.
+  # download, J6's install reaches the registry, verify.yml is what release.yml gates on, and a
+  # release must not be able to fail because a browser CDN or a registry was slow.
   browser:
     name: browser round trip
     runs-on: ubuntu-latest

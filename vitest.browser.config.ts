@@ -22,6 +22,12 @@ import { defineConfig } from 'vitest/config'
  * built `dist/client.js`. `requireBuild()` in ./test-browser/fixture.ts fails with the command
  * to run rather than letting the stub bundle surface as "no annotation arrived".
  *
+ * **J6 (#82) runs the same story in a Next app**, ./test-browser/next.test.ts, under both of
+ * Next's dev bundlers. Unlike H3's Vite leg it installs from the registry: its fourth criterion
+ * is packed tarballs rather than workspace links. That is fine here and would not be in
+ * verify.yml, for the reason above. Its one install has a timeout of its own in the suite, so
+ * the hook timeout below still describes a dev server's cold start.
+ *
  * Selection is by directory, as with the other five, so no config needs an `exclude` to stay
  * out of another's way. `test-browser/*.test.ts` is non-recursive for the same reason
  * `test-packed/*.test.ts` is — ./test-browser/app/ holds the fixture's own source, and a

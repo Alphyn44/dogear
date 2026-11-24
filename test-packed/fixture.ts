@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import {
   existsSync,
@@ -31,8 +31,16 @@ export const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 export const PUBLISHED = ['core', 'vite', 'cli'] as const
 export type PublishedDir = (typeof PUBLISHED)[number]
 
+/**
+ * Any package this harness can pack: the three above, and `dogear-next` ahead of its first
+ * publish (J6, #82). It joins {@link PUBLISHED} at J7, and this type collapses back into
+ * {@link PublishedDir} then. Kept out until then because packaging.test.ts requires every
+ * published manifest to carry the same version, and `dogear-next` is still `0.0.0`.
+ */
+export type PackageDir = PublishedDir | 'next'
+
 /** `core` -> `dogear-core`. packaging.test.ts pins that this mapping is still true. */
-export const npmName = (dir: PublishedDir): string => `dogear-${dir}`
+export const npmName = (dir: PackageDir): string => `dogear-${dir}`
 
 interface Manifest {
   readonly name: string
@@ -40,7 +48,7 @@ interface Manifest {
   readonly peerDependencies?: Readonly<Record<string, string>>
 }
 
-export function manifestOf(dir: PublishedDir): Manifest {
+export function manifestOf(dir: PackageDir): Manifest {
   return JSON.parse(
     readFileSync(join(REPO_ROOT, 'packages', dir, 'package.json'), 'utf8'),
   ) as Manifest
@@ -206,12 +214,19 @@ interface PackReport {
  * would need revving on every bump. `npm pack` packs whatever the manifests say, and the
  * tarball filenames come back in the `--json` report rather than being assembled from a
  * version string — so a pull request bumping 1.1 to 1.2 needs no edit in this directory.
+ *
+ * `dirs` since J6 (#82), whose Next suite packs `core` and `next` through this same call
+ * rather than a second copy of it. `npm pack` packs a `private` package without complaint;
+ * `private` only stops a publish.
  */
-export async function packAll(destination: string): Promise<ReadonlyMap<string, Packed>> {
+export async function packAll(
+  destination: string,
+  dirs: readonly PackageDir[] = PUBLISHED,
+): Promise<ReadonlyMap<string, Packed>> {
   const { stdout } = await runNpm(
     [
       'pack',
-      ...PUBLISHED.flatMap((dir) => ['-w', npmName(dir)]),
+      ...dirs.flatMap((dir) => ['-w', npmName(dir)]),
       '--pack-destination',
       destination,
       '--json',
@@ -255,10 +270,7 @@ export function builtFiles(dir: PublishedDir): readonly string[] {
   return walk(join(REPO_ROOT, 'packages', dir, 'dist'), 'dist/')
 }
 
-export function tarballFor(
-  packed: ReadonlyMap<string, Packed>,
-  dir: PublishedDir,
-): string {
+export function tarballFor(packed: ReadonlyMap<string, Packed>, dir: PackageDir): string {
   const entry = packed.get(npmName(dir))
   if (entry === undefined)
     throw new Error(`npm pack produced no tarball for ${npmName(dir)}`)
@@ -671,6 +683,88 @@ export async function startDevServer(root: string): Promise<DevServer> {
     }
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
+}
+
+/** A running Next command: where it serves, what it has printed, and how to stop it. */
+export interface Running {
+  readonly origin: string
+  readonly log: () => string
+  readonly stop: () => Promise<void>
+}
+
+/**
+ * Start a Next command in `root` and wait until `/` answers.
+ *
+ * `bin` is the `next` entry to run: the workspace's for J3's (#79) suite, which uses this
+ * repository's install, and the scratch project's own for J6's (#82), which installs from
+ * tarballs. Moved here from packages/next/test-built/next-dev.test.ts by J6 so the two
+ * suites share one copy of the tree-kill below.
+ *
+ * **Stopping kills the whole tree.** `next dev` forks the server into a child process, and on
+ * Windows `child.kill()` ends only the parent, leaving the child holding the port and file
+ * handles on the scratch directory. `taskkill /T` takes the tree.
+ */
+export async function startNext(
+  root: string,
+  args: readonly string[],
+  bin: string,
+): Promise<Running> {
+  const port = await freePort()
+  const origin = `http://127.0.0.1:${port}`
+
+  const child = spawn(
+    process.execPath,
+    [bin, ...args, '--port', String(port), '--hostname', '127.0.0.1'],
+    {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Next's telemetry would be the suite's only network egress.
+      env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    },
+  )
+
+  let log = ''
+  child.stdout?.on('data', (chunk: Buffer) => (log += chunk.toString()))
+  child.stderr?.on('data', (chunk: Buffer) => (log += chunk.toString()))
+
+  const stop = () => stopTree(child)
+
+  const deadline = Date.now() + 120_000
+  for (;;) {
+    if (child.exitCode !== null) {
+      throw new Error(
+        `next ${args.join(' ')} exited with ${String(child.exitCode)}:\n${log}`,
+      )
+    }
+    try {
+      const response = await fetch(`${origin}/`)
+      if (response.ok) return { origin, log: () => log, stop }
+    } catch {
+      // Not listening yet.
+    }
+    if (Date.now() > deadline) {
+      await stop()
+      throw new Error(
+        `next ${args.join(' ')} did not serve ${origin} within 120s:\n${log}`,
+      )
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+}
+
+function stopTree(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve()
+      return
+    }
+    child.once('close', () => resolve())
+    if (process.platform === 'win32' && child.pid !== undefined) {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+    } else {
+      child.kill()
+    }
+  })
 }
 
 /** Spawn the installed CLI the way everything `dogear init` writes spawns it. */

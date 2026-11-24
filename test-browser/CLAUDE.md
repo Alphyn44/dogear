@@ -7,7 +7,7 @@ endpoint writes to `queuePathFor(findGitRoot(server.config.root))`, the example'
 *this repository*, and there is no override — so every run would append test annotations to the
 developer's own `.dogear/queue.json` and stamp paths naming this repo's real source. So
 `test-browser/` copies a committed fixture app into a `mkdtemp` directory with a bare `.git` of
-its own, the same conclusion `createScratchProject` reached for H1. It **installs nothing**:
+its own, the same conclusion `createScratchProject` reached for H1. H3's Vite leg **installs nothing**:
 `react`, `@vitejs/plugin-react` and `vite` are hoisted to the workspace root, so one
 **junction** at `<scratch>/node_modules` reaches them along with the workspace symlinks for
 `dogear-vite` and `dogear-core` — which means the fixture consumes the *built* plugin through
@@ -40,3 +40,18 @@ against a second server configured `transform: false` and must produce an annota
 working, only the resolution absent. Same standing rule as `check-leak.test.ts`, H8's
 classifier self-test and H7's `dependencies.total > 0`: a guard that would go green forever has
 not passed, it has failed to run.
+
+**J6's Next leg (`next.test.ts`) installs, and lives under `tmpdir` anyway.** Its fourth
+criterion is packed tarballs, so `next-fixture.ts` runs `packAll(…, ['core', 'next'])` and one
+`npm install` of both with `next` (from `dogear-next`'s peer range) and React. That puts real
+files in the project's `node_modules`, so J3's reason for living inside `packages/next/` (the
+junction realpathing `next` out of Turbopack's root) does not arise. **One install, four legs
+in turn:** `useLeg` rewrites `next.config.mjs` with a `distDir` per bundler and stamping value
+and deletes the queue, and `startNext` from `test-packed/fixture.ts` (shared with J3's suite)
+kills the whole tree on stop, so the next leg can reuse the directory. Two Next-only details.
+The target is selected by `#target`, because `next dev` adds its own Dev Tools button to the
+page. And the suite waits for `#clicks[data-hydrated]`, set from an effect in `target.jsx`,
+before any gesture: the button only gets its handler on hydration, and a modifier-click before
+that would leave the counter unmoved whatever dogear did. The stamping-off block runs under
+**both** bundlers, since each reaches the loader's `stamp` option through a different hook;
+swapping the two blocks' values makes all four cases fail, which is how that was checked.

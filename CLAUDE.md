@@ -157,7 +157,7 @@ resolves all seven workspaces.
 | `npm test` | vitest across all packages and `scripts/*.test.ts`. Build-independent by design |
 | `npm run test:built` | Suites that spawn the built binary — A4's zero-bytes-on-stdout and hook-timeout guards, plus D1's MCP server driven by a real client, and J3's endpoint behind a real `next dev` under both bundlers. Needs a build first |
 | `npm run test:packed` | **H1's install gate.** Packs the three tarballs, installs them outside the workspace once per Vite major the plugin admits (I1), and runs the binary, `dogear init` and a real dev server whose served app must carry its stamps. Needs a build first; deliberately not in `verify` |
-| `npm run test:browser` | **H3's round trip.** Drives Chromium against a real dev server: modifier-click, comment, submit, then reads `.dogear/queue.json`. Needs a build and a browser binary; deliberately not in `verify` |
+| `npm run test:browser` | **H3's round trip, and J6's under Next.** Drives Chromium against a real dev server: modifier-click, comment, submit, then reads `.dogear/queue.json`. The Next leg installs packed tarballs from the registry and runs Turbopack and webpack. Needs a build and a browser binary; deliberately not in `verify` |
 | `npm run check:leak` | **F2's production-leak gate.** Scans built output for dogear's sentinel, a Next build included since J4; needs a build first |
 | `npm run build` | tsup for JS, `tsc --emitDeclarationOnly` for types, four packages |
 | `npm run build:example` | Production Vite build of `examples/react-app` — what the leak check scans |

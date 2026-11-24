@@ -60,7 +60,8 @@ into this repository. Inside the package, Node finds the workspace's modules by 
 the copy's bare `.git` still stops `findGitRoot` first, so no annotation reaches the developer's
 own queue. That same `.git` is also where Turbopack bounds its root, which is why the generated
 config sets `turbopack.root` to this repository. Stopping uses `taskkill /T` on Windows, because
-`next dev` forks its server and `child.kill()` would orphan it holding the port. Every spawn sets
+`next dev` forks its server and `child.kill()` would orphan it holding the port; since J6 (#82)
+that lives in `startNext` in `test-packed/fixture.ts`, shared with `test-browser/next.test.ts`. Every spawn sets
 `NEXT_TELEMETRY_DISABLED=1`. Since J2 the copy also gets a `.dogear/config.json` that excludes
 `skipped.jsx`, and the stamp assertions compute each expected `line:column` from the fixture
 file, so editing a fixture comment cannot break them. **No fixture file may spell the
