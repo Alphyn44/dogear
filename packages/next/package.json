@@ -1,6 +1,6 @@
 {
   "name": "dogear-next",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Dev-only Next.js config wrapper for dogear. Stamps source attributes, injects the overlay, serves the endpoint.",
   "license": "MIT",
@@ -37,7 +37,7 @@
     "react-dom": "^19.2.8"
   },
   "dependencies": {
-    "dogear-core": "^0.1.0",
+    "dogear-core": "^0.2.0",
     "magic-string": "^0.30.21",
     "oxc-parser": "^0.152.0",
     "picomatch": "^4.0.7"
