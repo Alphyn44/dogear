@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { Browser, Page } from 'playwright'
@@ -228,4 +228,18 @@ describe('the project under test', () => {
       expect(manifest.version).toBe(manifestOf(dir).version)
     },
   )
+
+  it("resolves dogear-next's dogear-core to the tarball, not a nested registry copy", () => {
+    // J7 (#83), the same check test-packed/install.test.ts makes for dogear-vite. A core minor
+    // bump that leaves dogear-next's caret range behind makes npm install a second core from
+    // the registry underneath the wrapper, and everything above would still pass while a real
+    // install paired the new wrapper with the old overlay.
+    expect(
+      existsSync(
+        join(root, 'node_modules', 'dogear-next', 'node_modules', 'dogear-core'),
+      ),
+      "dogear-next's dogear-core range does not admit the core version in this tree. A core " +
+        "minor bump has to move dogear-next's range too.",
+    ).toBe(false)
+  })
 })

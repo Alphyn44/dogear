@@ -27,20 +27,25 @@ import { fileURLToPath } from 'node:url'
 /** The repository root. This file lives in `test-packed/`. */
 export const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** The three that publish, in the shape scripts/packaging.test.ts already uses. */
-export const PUBLISHED = ['core', 'vite', 'cli'] as const
+/** The four that publish, in the shape scripts/packaging.test.ts already uses. `next` since J7. */
+export const PUBLISHED = ['core', 'vite', 'cli', 'next'] as const
 export type PublishedDir = (typeof PUBLISHED)[number]
 
 /**
- * Any package this harness can pack: the three above, and `dogear-next` ahead of its first
- * publish (J6, #82). It joins {@link PUBLISHED} at J7, and this type collapses back into
- * {@link PublishedDir} then. Kept out until then because packaging.test.ts requires every
- * published manifest to carry the same version, and `dogear-next` is still `0.0.0`.
+ * What a Vite project installs: every published package but `dogear-next` (J7, #83).
+ *
+ * `dogear-next` is packed and its tarball checked like the others, but installing it here would
+ * make npm fetch its `next` peer into every Vite leg, on every platform and package manager,
+ * for a project no user has. test-browser/next.test.ts installs it the way a Next app does.
  */
-export type PackageDir = PublishedDir | 'next'
+export const VITE_INSTALL = [
+  'core',
+  'vite',
+  'cli',
+] as const satisfies readonly PublishedDir[]
 
 /** `core` -> `dogear-core`. packaging.test.ts pins that this mapping is still true. */
-export const npmName = (dir: PackageDir): string => `dogear-${dir}`
+export const npmName = (dir: PublishedDir): string => `dogear-${dir}`
 
 interface Manifest {
   readonly name: string
@@ -48,7 +53,7 @@ interface Manifest {
   readonly peerDependencies?: Readonly<Record<string, string>>
 }
 
-export function manifestOf(dir: PackageDir): Manifest {
+export function manifestOf(dir: PublishedDir): Manifest {
   return JSON.parse(
     readFileSync(join(REPO_ROOT, 'packages', dir, 'package.json'), 'utf8'),
   ) as Manifest
@@ -208,20 +213,20 @@ interface PackReport {
 }
 
 /**
- * Pack all three in one `npm pack`, and keep them together for the install afterwards.
+ * Pack every published package in one `npm pack`, and keep them together for the install
+ * afterwards.
  *
  * No version literal appears anywhere here, deliberately: the versions go up, and a literal
  * would need revving on every bump. `npm pack` packs whatever the manifests say, and the
  * tarball filenames come back in the `--json` report rather than being assembled from a
  * version string — so a pull request bumping 1.1 to 1.2 needs no edit in this directory.
  *
- * `dirs` since J6 (#82), whose Next suite packs `core` and `next` through this same call
- * rather than a second copy of it. `npm pack` packs a `private` package without complaint;
- * `private` only stops a publish.
+ * `dirs` since J6 (#82), whose Next suite packs only `core` and `next` through this same call
+ * rather than a second copy of it.
  */
 export async function packAll(
   destination: string,
-  dirs: readonly PackageDir[] = PUBLISHED,
+  dirs: readonly PublishedDir[] = PUBLISHED,
 ): Promise<ReadonlyMap<string, Packed>> {
   const { stdout } = await runNpm(
     [
@@ -270,7 +275,10 @@ export function builtFiles(dir: PublishedDir): readonly string[] {
   return walk(join(REPO_ROOT, 'packages', dir, 'dist'), 'dist/')
 }
 
-export function tarballFor(packed: ReadonlyMap<string, Packed>, dir: PackageDir): string {
+export function tarballFor(
+  packed: ReadonlyMap<string, Packed>,
+  dir: PublishedDir,
+): string {
   const entry = packed.get(npmName(dir))
   if (entry === undefined)
     throw new Error(`npm pack produced no tarball for ${npmName(dir)}`)
@@ -419,8 +427,9 @@ export async function createScratchProject(
 
   // All three tarballs in ONE command. dogear-vite depends on dogear-core by range, and
   // passing them together is what lets the local core satisfy it instead of the registry —
-  // the same thing the M5 smoke test relied on without saying so.
-  const tarballs = PUBLISHED.map((dir) => specifierFor(manager, packed, dir))
+  // the same thing the M5 smoke test relied on without saying so. VITE_INSTALL rather than
+  // PUBLISHED since J7: see that list for why dogear-next is left out.
+  const tarballs = VITE_INSTALL.map((dir) => specifierFor(manager, packed, dir))
 
   await runManager(manager, [...installVerb(manager), ...tarballs, ...hostPackages], root)
 

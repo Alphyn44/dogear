@@ -26,8 +26,9 @@ config needs. That is an import and a `plugins` entry in a `vite.config`, or wra
 export of a `next.config` in `withDogear`. Install `dogear-cli` at the git root too, with
 `npm i -D dogear-cli` (`pnpm add -D -w dogear-cli` at a pnpm workspace root, since pnpm 9
 refuses the add there without `-w`), or in the package that runs your app if the repository
-has no root `package.json`. The plugin is the browser half; see
-[`dogear-vite`](https://www.npmjs.com/package/dogear-vite).
+has no root `package.json`. The host package is the browser half; see
+[`dogear-vite`](https://www.npmjs.com/package/dogear-vite) or
+[`dogear-next`](https://www.npmjs.com/package/dogear-next).
 
 This package is installed **twice on purpose**: globally, so `dogear` is on your PATH, and
 locally, because the MCP server and prompt-hook entries `init` writes are committed and

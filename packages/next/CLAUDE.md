@@ -2,6 +2,12 @@
 
 These notes load when Claude works with files under this directory. The repo-wide rules are in the root `CLAUDE.md`.
 
+**Published since J7 (#83), in lockstep with the other three.** It is a **runtime** dependency
+in a user's app, unlike `dogear-vite`, because `next start` loads `next.config`. Its README is
+the only page a Next user reads, and `src/docs.test.ts` pins it: the config-file keys, the
+default hosts, the endpoint rules, and the `withDogear` snippet matching what `dogear init`
+prints. Its `dogear-core` range has to move with every core minor, exactly as `dogear-vite`'s.
+
 **The phase check is the primary production defense, and it is equality.** `withDogear` returns
 the user's config, the same object, unless the phase is `phase-development-server`. Never test
 "not building": `next start` evaluates the config in `phase-production-server`. The literal is

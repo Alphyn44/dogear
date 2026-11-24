@@ -84,8 +84,9 @@ export interface DogearOptions {
    * resolve against the git root, as under Vite. Layered over `.dogear/config.json`.
    *
    * **Glob strings only**, where `dogear-vite` also takes a `RegExp`: Turbopack runs the loader
-   * in a worker process, and what reaches it must be JSON. Only `.jsx` and `.tsx` files reach
-   * the loader at all, which loses nothing, because Oxc parses no JSX in any other extension.
+   * in a worker process, and what reaches it must be JSON. Only `.js`, `.jsx` and `.tsx` files
+   * reach the loader at all, `.js` since J4 (#80) for a root layout written in it; add
+   * `'**\/*.js'` here to stamp components kept in `.js` files too.
    */
   readonly include?: string | readonly string[]
   /**

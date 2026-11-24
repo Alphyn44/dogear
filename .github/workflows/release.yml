@@ -5,7 +5,7 @@ name: Release
 # Each package's trusted-publisher configuration on npmjs.com names the repository, the
 # workflow *filename*, and the allowed action (`npm publish`). Renaming or moving this file
 # revokes publishing, and the failure is an auth error that does not mention the filename.
-# If it has to move, update all three configurations first. The TRIGGER is not part of that
+# If it has to move, update all four configurations first. The TRIGGER is not part of that
 # configuration, which is why #64 could change it without touching npmjs.com.
 #
 # WHAT PUBLISHES IS THE MANIFEST, and that is unchanged since G4. Each package.json version
@@ -68,7 +68,9 @@ jobs:
           targets=""
           skipped=""
 
-          for dir in core vite cli; do
+          # `next` since J7 (#83). A package added here needs its manual bootstrap publish and
+          # its trusted publisher BEFORE the merge that adds it; see RELEASING.md.
+          for dir in core vite cli next; do
             name=$(node -p "require('./packages/$dir/package.json').name")
             version=$(node -p "require('./packages/$dir/package.json').version")
 
@@ -192,6 +194,9 @@ jobs:
             packages/core/dist/index.d.ts \
             packages/vite/dist/index.js \
             packages/vite/dist/index.d.ts \
+            packages/next/dist/index.js \
+            packages/next/dist/loader.js \
+            packages/next/dist/index.d.ts \
             packages/cli/dist/cli.js
           do
             if [ ! -s "$file" ]; then
@@ -262,8 +267,8 @@ jobs:
 
       # Explicit -w flags matching the root `build` script, never `--workspaces`: the root
       # `workspaces` array is ["packages/*", "examples/*"], so a workspaces-wide publish
-      # would name dogear-queue and dogear-example-react. Both are `private: true` and npm
-      # would skip them, but "happens to be skipped" is a weaker guarantee than "never
+      # would name dogear-queue, dogear-host and dogear-example-react. All three are
+      # `private: true` and npm would skip them, but "happens to be skipped" is a weaker guarantee than "never
       # named", and scripts/packaging.test.ts is what keeps that `private` there.
       #
       # No --provenance flag: trusted publishing emits attestations on its own. No
@@ -320,9 +325,9 @@ jobs:
 
   # Tags are a RECORD of what shipped, never the thing that ships it (#64).
   #
-  # Per package — `dogear-core@0.1.2` — even though the three release in lockstep and a
+  # Per package — `dogear-core@0.1.2` — even though the packages release in lockstep and a
   # repo-wide `v0.1.2` would usually be honest. The case a record has to survive is the
-  # PARTIAL release, and that is exactly when the three are not at one version: this job runs
+  # PARTIAL release, and that is exactly when they are not at one version: this job runs
   # on `!cancelled()` precisely so a run that published two of three still records them. A
   # per-package tag names what npm actually received and needs no rule for the exception.
   # `v0.1.0` and `v0.1.1` remain as relics of the tag-trigger era.

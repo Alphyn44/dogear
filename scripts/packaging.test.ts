@@ -54,8 +54,11 @@ import { PACKAGE_SPECIFIERS } from './check-leak.js'
  * vitest runs from.
  */
 
-/** The three that publish. See below for why dogear-queue is not among them. */
-const PUBLISHED = ['core', 'vite', 'cli'] as const
+/**
+ * The four that publish, `next` since J7 (#83). See below for why dogear-queue is not among
+ * them; dogear-host stays private for the same reason.
+ */
+const PUBLISHED = ['core', 'vite', 'cli', 'next'] as const
 
 const read = (path: string): string => readFileSync(path, 'utf8')
 
@@ -170,18 +173,18 @@ describe.each(PUBLISHED)('dogear-%s', (dir) => {
   })
 })
 
-describe('dogear-vite', () => {
-  /**
-   * The plugin's one published runtime dependency, and the only cross-package range that
-   * reaches a consumer's `node_modules`.
-   *
-   * It is a real dependency rather than a bundled one: the plugin resolves
-   * `dogear-core/package.json` to locate the bundle it serves at `<endpoint>/client.js`.
-   * So the range is load-bearing in a way the `dogear-queue` devDependencies below are
-   * not — those are inlined at build time and never installed by anyone downstream.
-   */
+/**
+ * Each host's one published runtime dependency on core, and the only cross-package ranges that
+ * reach a consumer's `node_modules`. `next` since J7 (#83).
+ *
+ * Real dependencies rather than bundled ones: both hosts resolve `dogear-core/package.json` to
+ * locate the bundle they serve at `<endpoint>/client.js`. So the range is load-bearing in a way
+ * the `dogear-queue` devDependencies below are not — those are inlined at build time and never
+ * installed by anyone downstream.
+ */
+describe.each(['vite', 'next'] as const)('dogear-%s', (dir) => {
   it('names a concrete range for dogear-core', () => {
-    const range = manifest('vite').dependencies?.['dogear-core']
+    const range = manifest(dir).dependencies?.['dogear-core']
 
     expect(range).toBeDefined()
     // Each of these resolves to the workspace copy while developing and to something
@@ -210,17 +213,17 @@ describe('the published versions', () => {
    * fast `npm test` suite, so a release pull request that bumps two of three goes red before
    * it merges — and merging is what publishes since #64.
    */
-  it('are identical across all three packages', () => {
+  it('are identical across all four packages', () => {
     const versions = PUBLISHED.map((dir) => [dir, manifest(dir).version] as const)
     const distinct = new Set(versions.map(([, version]) => version))
 
     expect(
       distinct.size,
-      `the three packages must carry the same version, and they do not: ${versions
+      `the published packages must carry the same version, and they do not: ${versions
         .map(([dir, version]) => `dogear-${dir}@${String(version)}`)
         .join(
           ', ',
-        )}. Every release bumps all three, including ones with no change in it. ` +
+        )}. Every release bumps all of them, including ones with no change in it. ` +
         'See RELEASING.md.',
     ).toBe(1)
   })

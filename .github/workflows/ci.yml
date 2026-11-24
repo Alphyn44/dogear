@@ -196,8 +196,8 @@ jobs:
 
       - run: npm ci
 
-      # `npm pack` packs what is on disk, and none of the three packages has a prepack script
-      # that would build for it. Without this the job would pack three empty dist/ directories
+      # `npm pack` packs what is on disk, and none of the packages has a prepack script that
+      # would build for it. Without this the job would pack four empty dist/ directories
       # and report the failure it exists to catch, every time.
       - run: npm run build
 
@@ -680,7 +680,7 @@ jobs:
           // that example is private and ships to nobody, so "ships" here is slightly wider than
           // "reaches a user", and a react advisory could fail an unrelated pull request. Over-
           // reporting is the safe direction for a gate, the example is the dogfood app, and the
-          // alternative (cross-referencing each advisory's `nodes` against the three published
+          // alternative (cross-referencing each advisory's `nodes` against the published
           // subtrees) is considerably more machinery than the difference is worth.
           const shipping = new Set(Object.keys(auditProd.vulnerabilities || {}))
 

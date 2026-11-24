@@ -137,10 +137,11 @@ work on deployed/staging URLs, annotations survive reloads for free,
 
 ## Architecture
 
-One monorepo (npm workspaces). Three packages publish today: `dogear-core`, `dogear-vite` and
-`dogear-cli`. J1 adds a fourth, `dogear-next`, the second host. Two more are private,
-source-only and inlined by whatever bundles them: `dogear-queue` (the queue, the formatter and
-the registry), and `dogear-host`, which J1 decided will hold what the two hosts share.
+One monorepo (npm workspaces). Four packages publish, in lockstep: `dogear-core`,
+`dogear-vite`, `dogear-next` (the second host, decided by J1 and published by J7) and
+`dogear-cli`. Two more are private, source-only and inlined by whatever bundles them:
+`dogear-queue` (the queue, the formatter and the registry), and `dogear-host`, which holds what
+the two hosts share.
 
 ### `dogear-core`
 
