@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -11,6 +11,7 @@ import {
   discard,
   manifestOf,
   packAll,
+  REPO_ROOT,
   runInstalledCli,
   runManager,
 } from '../fixture.js'
@@ -148,11 +149,22 @@ describe.each(NODE_MODULES_LEGS)('installed with $name', ({ manager, linker }) =
     const fromPlugin = createRequire(
       join(scratch, 'node_modules', 'dogear-vite', 'dist', 'index.js'),
     )
-    const resolved = JSON.parse(
-      readFileSync(fromPlugin.resolve('dogear-core/package.json'), 'utf8'),
-    ) as { version: string }
+    const manifestPath = fromPlugin.resolve('dogear-core/package.json')
+    const resolved = JSON.parse(readFileSync(manifestPath, 'utf8')) as { version: string }
 
     expect(resolved.version).toBe(manifestOf('core').version)
+
+    // The version alone cannot tell the tarball from a registry copy that happens to carry the
+    // same number, and until 0.2.0 that is exactly what pnpm installed: the range resolved from
+    // the registry, the published 0.1.1 matched the local 0.1.1, and this case passed while
+    // testing the registry. The bundle the plugin serves is what this repository just built, and
+    // no registry copy carries it byte for byte.
+    expect(
+      readFileSync(join(dirname(manifestPath), 'dist', 'client.js'), 'utf8') ===
+        readFileSync(join(REPO_ROOT, 'packages', 'core', 'dist', 'client.js'), 'utf8'),
+      `${manager} resolved dogear-vite's dogear-core to ${dirname(manifestPath)}, which is not ` +
+        'the packed tarball. See resolutionsFor in ../fixture.ts.',
+    ).toBe(true)
   })
 })
 

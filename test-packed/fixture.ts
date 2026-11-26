@@ -425,6 +425,24 @@ export async function createScratchProject(
     )
   }
 
+  // pnpm's counterpart to Yarn's `resolutions`, and for the same reason (J7, #83): pnpm will not
+  // satisfy dogear-vite's dogear-core range from the core tarball beside it either, and fetches
+  // the range from the registry. That passed silently until 0.2.0, because the registry had a
+  // core of the same version; with 0.2.0 unpublished it fails outright. pnpm 11 reads
+  // `overrides` from `pnpm-workspace.yaml` only, not from package.json's `pnpm` field, and the
+  // file also makes this directory its own workspace root, so pnpm stops walking up here. That
+  // is why the install verb is `add -w` rather than `--ignore-workspace`: see installVerb.
+  if (manager === 'pnpm') {
+    writeFileSync(
+      join(root, 'pnpm-workspace.yaml'),
+      [
+        'overrides:',
+        `  ${npmName('core')}: ${JSON.stringify(coreLocator(packed))}`,
+        '',
+      ].join('\n'),
+    )
+  }
+
   // All three tarballs in ONE command. dogear-vite depends on dogear-core by range, and
   // passing them together is what lets the local core satisfy it instead of the registry —
   // the same thing the M5 smoke test relied on without saying so. VITE_INSTALL rather than
@@ -443,7 +461,9 @@ export async function createScratchProject(
  * three tarballs and `dogear-vite`'s `dogear-core: ^0.1.0` still goes to the registry, so the
  * project gets the local core at the top level and a *second*, published one nested underneath
  * the plugin. Measured, not assumed: top-level `0.1.1` with `0.1.0` under `dogear-vite/`, and
- * with this field the nested copy is gone. npm and pnpm both dedupe it without being asked.
+ * with this field the nested copy is gone. npm dedupes it without being asked. **pnpm does not
+ * either** (J7, #83), which went unnoticed while the registry carried a core of the same
+ * version; it gets `overrides` in a `pnpm-workspace.yaml` instead, see {@link createScratchProject}.
  *
  * **This is a property of installing from local tarballs, not of dogear.** Nobody installs the
  * published packages this way: a real `yarn add -D dogear-vite` resolves both from the registry
@@ -458,11 +478,12 @@ function resolutionsFor(
 ): { readonly resolutions?: Readonly<Record<string, string>> } {
   if (manager !== 'yarn') return {}
 
-  return {
-    resolutions: {
-      [npmName('core')]: `file:${tarballFor(packed, 'core').replace(/\\/g, '/')}`,
-    },
-  }
+  return { resolutions: { [npmName('core')]: coreLocator(packed) } }
+}
+
+/** `file:<core tarball>`, forward-slashed, for the two managers that need telling. */
+function coreLocator(packed: ReadonlyMap<string, Packed>): string {
+  return `file:${tarballFor(packed, 'core').replace(/\\/g, '/')}`
 }
 
 /**
@@ -565,17 +586,18 @@ export interface ScratchOptions {
  * them every install writes a lockfile and a manifest entry into a scratch project that exists
  * for one assertion, and yarn additionally treats a dirty lockfile as a CI failure.
  *
- * pnpm gets `--ignore-workspace` because the scratch project lives under `tmpdir`, and pnpm
- * walks *up* for a `pnpm-workspace.yaml` exactly as `findGitRoot` walks up for `.git` — a
- * developer whose temp directory sits inside one would otherwise get a different install from
- * the same test.
+ * pnpm walks *up* for a `pnpm-workspace.yaml` exactly as `findGitRoot` walks up for `.git`, so
+ * a developer whose temp directory sat inside one would get a different install from the same
+ * test. That used to be `--ignore-workspace`. Since J7 (#83) the scratch project carries a
+ * `pnpm-workspace.yaml` of its own (for `overrides`, see createScratchProject), so the walk stops
+ * at it, and `-w` is what pnpm requires to add a dependency at a workspace root.
  */
 function installVerb(manager: Manager): readonly string[] {
   switch (manager) {
     case 'npm':
       return ['install', '--no-save', '--no-audit', '--no-fund']
     case 'pnpm':
-      return ['add', '--ignore-workspace', '--reporter=append-only']
+      return ['add', '-w', '--reporter=append-only']
     case 'yarn':
       return ['add']
   }

@@ -17,6 +17,15 @@ every per-tarball check in `install.test.ts`, while installing it into the Vite 
 npm fetch its `next` peer into each of them; `test-browser/next.test.ts` installs it the way a
 Next app does instead.
 
+**Neither pnpm nor Yarn lets a sibling tarball satisfy another package's range, and only npm
+dedupes on its own.** Yarn gets `resolutions` in the scratch `package.json`; pnpm gets
+`overrides` in a scratch `pnpm-workspace.yaml`, since pnpm 11 ignores package.json's `pnpm`
+field, which also makes the scratch root its own workspace root (hence `add -w`). The pnpm leg
+went unnoticed until 0.2.0 (J7, #83): it had been installing core from the registry, and passing
+because the registry carried the same version. So `cli-path.test.ts` now compares the resolved
+core's `dist/client.js` byte for byte with this repository's build, which no registry copy can
+match.
+
 **Since I1 (#73) there is one install per Vite major, and the list is written down, not
 derived.** `VITE_LEGS` pairs each major with the `@vitejs/plugin-react` major that supports
 it, and `install.test.ts` checks it against `dogear-vite`'s peer range in both directions, so
