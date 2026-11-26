@@ -2,12 +2,12 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from '
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { SENTINEL } from 'dogear-host'
 import type { ViteDevServer } from 'vite'
 import { createServer, resolveConfig } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { dogear } from './index.js'
-import { SENTINEL } from './sentinel.js'
 
 /**
  * A1 end to end, minus the browser.

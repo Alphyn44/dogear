@@ -17,11 +17,11 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "npm run build -w dogear-core -w dogear-vite -w dogear-cli",
+    "build": "npm run build -w dogear-core -w dogear-vite -w dogear-next -w dogear-cli",
     "build:example": "npm run build -w dogear-example-react",
-    "build:fixtures": "vite build packages/core/test-built/fixtures/gated-import --logLevel warn",
+    "build:fixtures": "vite build packages/core/test-built/fixtures/gated-import --logLevel warn && node scripts/build-next-fixture.mjs",
     "dev:example": "npm run build -w dogear-core -w dogear-vite && npm run dev -w dogear-example-react",
-    "typecheck": "npm run typecheck -w dogear-queue -w dogear-core -w dogear-vite -w dogear-cli && tsc --noEmit -p scripts/tsconfig.json && tsc --noEmit -p test-packed/tsconfig.json && tsc --noEmit -p test-browser/tsconfig.json",
+    "typecheck": "npm run typecheck -w dogear-queue -w dogear-host -w dogear-core -w dogear-vite -w dogear-next -w dogear-cli && tsc --noEmit -p scripts/tsconfig.json && tsc --noEmit -p test-packed/tsconfig.json && tsc --noEmit -p test-browser/tsconfig.json",
     "typecheck:example": "npm run typecheck -w dogear-example-react",
     "test": "vitest run",
     "test:built": "vitest run --config vitest.built.config.ts",
@@ -37,7 +37,7 @@
   "devDependencies": {
     "@types/node": "^20.19.0",
     "@yarnpkg/cli-dist": "^4.18.0",
-    "happy-dom": "^20.11.2",
+    "happy-dom": "^21.0.4",
     "playwright": "^1.62.1",
     "pnpm": "^11.24.0",
     "prettier": "^3.9.6",

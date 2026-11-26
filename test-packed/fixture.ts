@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import {
   existsSync,
@@ -27,9 +27,22 @@ import { fileURLToPath } from 'node:url'
 /** The repository root. This file lives in `test-packed/`. */
 export const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** The three that publish, in the shape scripts/packaging.test.ts already uses. */
-export const PUBLISHED = ['core', 'vite', 'cli'] as const
+/** The four that publish, in the shape scripts/packaging.test.ts already uses. `next` since J7. */
+export const PUBLISHED = ['core', 'vite', 'cli', 'next'] as const
 export type PublishedDir = (typeof PUBLISHED)[number]
+
+/**
+ * What a Vite project installs: every published package but `dogear-next` (J7, #83).
+ *
+ * `dogear-next` is packed and its tarball checked like the others, but installing it here would
+ * make npm fetch its `next` peer into every Vite leg, on every platform and package manager,
+ * for a project no user has. test-browser/next.test.ts installs it the way a Next app does.
+ */
+export const VITE_INSTALL = [
+  'core',
+  'vite',
+  'cli',
+] as const satisfies readonly PublishedDir[]
 
 /** `core` -> `dogear-core`. packaging.test.ts pins that this mapping is still true. */
 export const npmName = (dir: PublishedDir): string => `dogear-${dir}`
@@ -200,18 +213,25 @@ interface PackReport {
 }
 
 /**
- * Pack all three in one `npm pack`, and keep them together for the install afterwards.
+ * Pack every published package in one `npm pack`, and keep them together for the install
+ * afterwards.
  *
  * No version literal appears anywhere here, deliberately: the versions go up, and a literal
  * would need revving on every bump. `npm pack` packs whatever the manifests say, and the
  * tarball filenames come back in the `--json` report rather than being assembled from a
  * version string — so a pull request bumping 1.1 to 1.2 needs no edit in this directory.
+ *
+ * `dirs` since J6 (#82), whose Next suite packs only `core` and `next` through this same call
+ * rather than a second copy of it.
  */
-export async function packAll(destination: string): Promise<ReadonlyMap<string, Packed>> {
+export async function packAll(
+  destination: string,
+  dirs: readonly PublishedDir[] = PUBLISHED,
+): Promise<ReadonlyMap<string, Packed>> {
   const { stdout } = await runNpm(
     [
       'pack',
-      ...PUBLISHED.flatMap((dir) => ['-w', npmName(dir)]),
+      ...dirs.flatMap((dir) => ['-w', npmName(dir)]),
       '--pack-destination',
       destination,
       '--json',
@@ -405,10 +425,29 @@ export async function createScratchProject(
     )
   }
 
+  // pnpm's counterpart to Yarn's `resolutions`, and for the same reason (J7, #83): pnpm will not
+  // satisfy dogear-vite's dogear-core range from the core tarball beside it either, and fetches
+  // the range from the registry. That passed silently until 0.2.0, because the registry had a
+  // core of the same version; with 0.2.0 unpublished it fails outright. pnpm 11 reads
+  // `overrides` from `pnpm-workspace.yaml` only, not from package.json's `pnpm` field, and the
+  // file also makes this directory its own workspace root, so pnpm stops walking up here. That
+  // is why the install verb is `add -w` rather than `--ignore-workspace`: see installVerb.
+  if (manager === 'pnpm') {
+    writeFileSync(
+      join(root, 'pnpm-workspace.yaml'),
+      [
+        'overrides:',
+        `  ${npmName('core')}: ${JSON.stringify(coreLocator(packed))}`,
+        '',
+      ].join('\n'),
+    )
+  }
+
   // All three tarballs in ONE command. dogear-vite depends on dogear-core by range, and
   // passing them together is what lets the local core satisfy it instead of the registry —
-  // the same thing the M5 smoke test relied on without saying so.
-  const tarballs = PUBLISHED.map((dir) => specifierFor(manager, packed, dir))
+  // the same thing the M5 smoke test relied on without saying so. VITE_INSTALL rather than
+  // PUBLISHED since J7: see that list for why dogear-next is left out.
+  const tarballs = VITE_INSTALL.map((dir) => specifierFor(manager, packed, dir))
 
   await runManager(manager, [...installVerb(manager), ...tarballs, ...hostPackages], root)
 
@@ -422,7 +461,9 @@ export async function createScratchProject(
  * three tarballs and `dogear-vite`'s `dogear-core: ^0.1.0` still goes to the registry, so the
  * project gets the local core at the top level and a *second*, published one nested underneath
  * the plugin. Measured, not assumed: top-level `0.1.1` with `0.1.0` under `dogear-vite/`, and
- * with this field the nested copy is gone. npm and pnpm both dedupe it without being asked.
+ * with this field the nested copy is gone. npm dedupes it without being asked. **pnpm does not
+ * either** (J7, #83), which went unnoticed while the registry carried a core of the same
+ * version; it gets `overrides` in a `pnpm-workspace.yaml` instead, see {@link createScratchProject}.
  *
  * **This is a property of installing from local tarballs, not of dogear.** Nobody installs the
  * published packages this way: a real `yarn add -D dogear-vite` resolves both from the registry
@@ -437,11 +478,12 @@ function resolutionsFor(
 ): { readonly resolutions?: Readonly<Record<string, string>> } {
   if (manager !== 'yarn') return {}
 
-  return {
-    resolutions: {
-      [npmName('core')]: `file:${tarballFor(packed, 'core').replace(/\\/g, '/')}`,
-    },
-  }
+  return { resolutions: { [npmName('core')]: coreLocator(packed) } }
+}
+
+/** `file:<core tarball>`, forward-slashed, for the two managers that need telling. */
+function coreLocator(packed: ReadonlyMap<string, Packed>): string {
+  return `file:${tarballFor(packed, 'core').replace(/\\/g, '/')}`
 }
 
 /**
@@ -544,17 +586,18 @@ export interface ScratchOptions {
  * them every install writes a lockfile and a manifest entry into a scratch project that exists
  * for one assertion, and yarn additionally treats a dirty lockfile as a CI failure.
  *
- * pnpm gets `--ignore-workspace` because the scratch project lives under `tmpdir`, and pnpm
- * walks *up* for a `pnpm-workspace.yaml` exactly as `findGitRoot` walks up for `.git` — a
- * developer whose temp directory sits inside one would otherwise get a different install from
- * the same test.
+ * pnpm walks *up* for a `pnpm-workspace.yaml` exactly as `findGitRoot` walks up for `.git`, so
+ * a developer whose temp directory sat inside one would get a different install from the same
+ * test. That used to be `--ignore-workspace`. Since J7 (#83) the scratch project carries a
+ * `pnpm-workspace.yaml` of its own (for `overrides`, see createScratchProject), so the walk stops
+ * at it, and `-w` is what pnpm requires to add a dependency at a workspace root.
  */
 function installVerb(manager: Manager): readonly string[] {
   switch (manager) {
     case 'npm':
       return ['install', '--no-save', '--no-audit', '--no-fund']
     case 'pnpm':
-      return ['add', '--ignore-workspace', '--reporter=append-only']
+      return ['add', '-w', '--reporter=append-only']
     case 'yarn':
       return ['add']
   }
@@ -671,6 +714,88 @@ export async function startDevServer(root: string): Promise<DevServer> {
     }
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
+}
+
+/** A running Next command: where it serves, what it has printed, and how to stop it. */
+export interface Running {
+  readonly origin: string
+  readonly log: () => string
+  readonly stop: () => Promise<void>
+}
+
+/**
+ * Start a Next command in `root` and wait until `/` answers.
+ *
+ * `bin` is the `next` entry to run: the workspace's for J3's (#79) suite, which uses this
+ * repository's install, and the scratch project's own for J6's (#82), which installs from
+ * tarballs. Moved here from packages/next/test-built/next-dev.test.ts by J6 so the two
+ * suites share one copy of the tree-kill below.
+ *
+ * **Stopping kills the whole tree.** `next dev` forks the server into a child process, and on
+ * Windows `child.kill()` ends only the parent, leaving the child holding the port and file
+ * handles on the scratch directory. `taskkill /T` takes the tree.
+ */
+export async function startNext(
+  root: string,
+  args: readonly string[],
+  bin: string,
+): Promise<Running> {
+  const port = await freePort()
+  const origin = `http://127.0.0.1:${port}`
+
+  const child = spawn(
+    process.execPath,
+    [bin, ...args, '--port', String(port), '--hostname', '127.0.0.1'],
+    {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Next's telemetry would be the suite's only network egress.
+      env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    },
+  )
+
+  let log = ''
+  child.stdout?.on('data', (chunk: Buffer) => (log += chunk.toString()))
+  child.stderr?.on('data', (chunk: Buffer) => (log += chunk.toString()))
+
+  const stop = () => stopTree(child)
+
+  const deadline = Date.now() + 120_000
+  for (;;) {
+    if (child.exitCode !== null) {
+      throw new Error(
+        `next ${args.join(' ')} exited with ${String(child.exitCode)}:\n${log}`,
+      )
+    }
+    try {
+      const response = await fetch(`${origin}/`)
+      if (response.ok) return { origin, log: () => log, stop }
+    } catch {
+      // Not listening yet.
+    }
+    if (Date.now() > deadline) {
+      await stop()
+      throw new Error(
+        `next ${args.join(' ')} did not serve ${origin} within 120s:\n${log}`,
+      )
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+}
+
+function stopTree(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve()
+      return
+    }
+    child.once('close', () => resolve())
+    if (process.platform === 'win32' && child.pid !== undefined) {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+    } else {
+      child.kill()
+    }
+  })
 }
 
 /** Spawn the installed CLI the way everything `dogear init` writes spawns it. */

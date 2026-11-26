@@ -1,4 +1,4 @@
-import type { DetectedApp, Detection, Manager } from './detect.js'
+import type { DetectedApp, Detection, Host, Manager } from './detect.js'
 
 /**
  * What `dogear init` tells you to do yourself — E8 (#41), the brief's install step 6.
@@ -29,20 +29,27 @@ import type { DetectedApp, Detection, Manager } from './detect.js'
  * reasoning excludes the framework plugin from the body: `plugins: [dogear(), react()]` reads
  * closer to the user's actual file and asserts an import that may not exist under that name,
  * which makes a copyable snippet subtly wrong.
+ *
+ * **J5 (#81) added Next, and changed none of the above.** A Next app gets a `next.config`
+ * wrapper in place of a `plugins` entry, and `dogear-next` in place of `dogear-vite`; init still
+ * writes neither, for E8's two reasons, which apply to `next.config` and its manifest unchanged.
  */
 
 /** How many apps get a snippet before the rest are counted. Mirrors ./scaffold.ts's APP_CAP. */
 const CAP = 5
 
-/** `pnpm add -D`, and its two counterparts. Reached through {@link installCommand}. */
+/** `pnpm add`, and its two counterparts. Reached through {@link installCommand}. */
 const INSTALL: Record<Manager, string> = {
-  npm: 'npm i -D',
-  pnpm: 'pnpm add -D',
-  yarn: 'yarn add -D',
+  npm: 'npm i',
+  pnpm: 'pnpm add',
+  yarn: 'yarn add',
 }
 
+/** The dependency map an install writes to. See {@link installCommand}. */
+export type Field = 'dev' | 'runtime'
+
 /**
- * The dev-dependency install for a package, as the user should type it.
+ * The install for a package, as the user should type it. A dev dependency unless told otherwise.
  *
  * Exported since H6 (#58) so ./scaffold.ts's `dogear-cli` remark names the manager the repository
  * actually uses. It said `npm i -D` to every repository until then, including the pnpm and yarn
@@ -52,18 +59,34 @@ const INSTALL: Record<Manager, string> = {
  * and 11 accept either form, so the flag is never wrong where it is added. It needs pnpm to be
  * the manager as well: a workspace file with no lockfile yet still resolves to npm, by
  * `managerOf`'s rule in ./detect.ts, and npm has no such flag.
+ *
+ * **`runtime` exists for `dogear-next` alone (J5, #81)**, and it is the one place dogear asks to
+ * be installed as a runtime dependency. `next start` loads `next.config` in production, so a
+ * config that imports `dogear-next` cannot load wherever devDependencies were left out. See the
+ * brief's Decisions log.
  */
-export function installCommand(manager: Manager, pnpmWorkspaceRoot: boolean): string {
-  return manager === 'pnpm' && pnpmWorkspaceRoot ? `${INSTALL.pnpm} -w` : INSTALL[manager]
+export function installCommand(
+  manager: Manager,
+  pnpmWorkspaceRoot: boolean,
+  field: Field = 'dev',
+): string {
+  const flags = [
+    ...(field === 'dev' ? ['-D'] : []),
+    ...(manager === 'pnpm' && pnpmWorkspaceRoot ? ['-w'] : []),
+  ]
+  return [INSTALL[manager], ...flags].join(' ')
 }
 
 /**
  * The trailing block, as report lines — or nothing at all.
  *
- * Empty in three cases, and none of them deserves a line saying so: a repository with no Vite
- * app (E2's `note:` already says the overlay will not load), a repository whose every app
- * already declares the plugin, and the same under `--dry-run`, which prints this identically
- * because it was never something being withheld.
+ * Empty in three cases, and none of them deserves a line saying so: a repository with no app
+ * (E2's `note:` already says the overlay will not load), a repository whose every app is
+ * already wired, and the same under `--dry-run`, which prints this identically because it was
+ * never something being withheld.
+ *
+ * Since J5 (#81) an app is a Vite app or a Next app, and each gets its own host's block from
+ * {@link HOSTS}. A repository with one of each gets two blocks.
  */
 export function guidance(detection: Detection): readonly string[] {
   const unwired = detection.apps.filter(
@@ -97,18 +120,10 @@ export function guidance(detection: Detection): readonly string[] {
  */
 function block(app: DetectedApp): readonly string[] {
   const lines: string[] = []
+  const { snippet, name, field } = HOSTS[app.host]
 
   if (!app.configured) {
-    lines.push(
-      '',
-      `add dogear to ${app.config}:`,
-      '',
-      "  import { dogear } from 'dogear-vite'",
-      '',
-      '  export default defineConfig({',
-      '    plugins: [dogear()],',
-      '  })',
-    )
+    lines.push('', `add dogear to ${app.config}:`, '', ...snippet)
   }
 
   if (app.plugin === 'absent') {
@@ -117,11 +132,49 @@ function block(app: DetectedApp): readonly string[] {
     const lead = app.configured ? `install it ${where(app)}` : `then, ${where(app)}`
     lines.push(
       '',
-      `${lead}: ${installCommand(app.manager, app.pnpmWorkspaceRoot)} dogear-vite`,
+      `${lead}: ${installCommand(app.manager, app.pnpmWorkspaceRoot, field)} ${name}`,
     )
   }
 
   return lines
+}
+
+/**
+ * Each host's fixed snippet, package and dependency field.
+ *
+ * **Next's snippet is fixed for the reason Vite's is**, see the header. It is ESM because that
+ * is what `create-next-app` writes for both `next.config.ts` and `--js`'s `next.config.mjs`, and
+ * it names `nextConfig` because that is the variable both of those declare. A `.js` config could
+ * be either module format, so tailoring by extension would guess, and a wrong guess pasted into
+ * a config is a dev server that will not start.
+ *
+ * **`dogear-next` installs as a runtime dependency**, the inverse of `dogear-vite`. See
+ * {@link installCommand}.
+ */
+const HOSTS: Record<
+  Host,
+  { readonly snippet: readonly string[]; readonly name: string; readonly field: Field }
+> = {
+  vite: {
+    snippet: [
+      "  import { dogear } from 'dogear-vite'",
+      '',
+      '  export default defineConfig({',
+      '    plugins: [dogear()],',
+      '  })',
+    ],
+    name: 'dogear-vite',
+    field: 'dev',
+  },
+  next: {
+    snippet: [
+      "  import { withDogear } from 'dogear-next'",
+      '',
+      '  export default withDogear(nextConfig)',
+    ],
+    name: 'dogear-next',
+    field: 'runtime',
+  },
 }
 
 /**

@@ -17,7 +17,7 @@ import { defineConfig } from 'vitest/config'
  * reason #65 gives for keeping an audit out of those nine steps.
  *
  * Needs `npm run build` first, like vitest.built.config.ts: `npm pack` packs what is on disk,
- * and none of the three packages has a prepack script that would build for it.
+ * and none of the packages has a prepack script that would build for it.
  *
  * Selection is by directory, as with the other three, so no config needs an `exclude` to stay
  * out of another's way.

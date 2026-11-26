@@ -459,7 +459,7 @@ export function sourceLineOf(
     throw new Error(
       `expected exactly one line starting with ${JSON.stringify(opening)} in ` +
         `${relativePath}, found ${String(matches.length)}. ` +
-        'See the docblock in app/src/Target.jsx.',
+        `See the docblock in ${relativePath}.`,
     )
   }
 

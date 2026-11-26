@@ -60,6 +60,33 @@ export const MODIFIERS: readonly Modifier[] = Object.freeze([
 export const DEFAULT_MODIFIER: Modifier = 'alt'
 
 /**
+ * Reject a bad `modifier` option loudly, at config time.
+ *
+ * The mirror image of core's `resolveOptions`, which falls back to the default instead.
+ * Same value, two audiences: here it is a developer reading a terminal while their dev
+ * server starts, where a typo should be named; there it is a page load in a browser, where a
+ * dev tool throwing has broken the app it exists to help inspect.
+ *
+ * E7 (#40) adds a third audience and it lands on the tolerant side: a bad `modifier` in
+ * `.dogear/config.json` is warned about and dropped by ./config-file.ts rather than thrown
+ * on. That file is committed, so whoever broke it is often not whoever is running the dev
+ * server, and one person's typo must not stop everyone else's `npm run dev`. This function
+ * still governs the *option*, which is the author's own code in the file they are editing.
+ *
+ * Each host calls it where it already validates the endpoint, never while a production build
+ * could be running it: a misconfigured dev tool must not be able to take down a build. Moved
+ * here from `dogear-vite` by J4 (#80), so both hosts throw the same words.
+ */
+export function validateModifier(modifier: Modifier | undefined): Modifier | undefined {
+  if (modifier === undefined || MODIFIERS.includes(modifier)) return modifier
+
+  throw new Error(
+    `dogear: modifier must be one of ${MODIFIERS.join(', ')}, received ` +
+      JSON.stringify(modifier),
+  )
+}
+
+/**
  * Exactly what is serialised into the config parameter. Must satisfy core's `InitOptions`.
  *
  * `endpoint` is B5's (#12) addition, and it is the case F4's transport was chosen for: one

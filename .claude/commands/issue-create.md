@@ -70,7 +70,7 @@ false claim. Before drafting, settle exactly these. This repo is indexed, so use
 
 For coverage claims specifically: **never audit by filename.** A behaviour is tested if a
 suite exercises it, whatever that suite is called. Check the importers and what the parent
-suites stub. The reverse also happens, and CLAUDE.md records the sharpest case: a listener
+suites stub. The reverse also happens, and `packages/core/CLAUDE.md` records the sharpest case: a listener
 count taken by spying on `EventTarget.prototype` alone reads zero both while running and after
 teardown, so a "the listeners are gone" assertion passes without testing anything. A suite
 existing is not the behaviour being covered.

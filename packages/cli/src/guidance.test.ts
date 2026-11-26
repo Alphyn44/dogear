@@ -20,10 +20,11 @@ import { guidance } from './guidance.js'
 function app(overrides: Partial<DetectedApp> = {}): DetectedApp {
   return {
     dir: 'apps/web',
+    host: 'vite',
     config: 'apps/web/vite.config.ts',
     framework: 'react',
     frameworkVersion: '^19.2.0',
-    viteVersion: '^8.2.1',
+    hostVersion: '^8.2.1',
     manifestDir: 'apps/web',
     manager: 'npm',
     pnpmWorkspaceRoot: false,
@@ -31,12 +32,24 @@ function app(overrides: Partial<DetectedApp> = {}): DetectedApp {
     // The unwired baseline: neither declared nor in the config. G3 (#44) made these two
     // independent, so every case below says which of them it is varying.
     configured: false,
+    appRouter: undefined,
     ...overrides,
   }
 }
 
+/** The same unwired baseline, as a Next app — J5 (#81). */
+function nextApp(overrides: Partial<DetectedApp> = {}): DetectedApp {
+  return app({
+    host: 'next',
+    config: 'apps/web/next.config.ts',
+    hostVersion: '^16.4.6',
+    appRouter: true,
+    ...overrides,
+  })
+}
+
 // `agents` and `cli` are E3's (#28) and guidance() reads neither — it prints the plugin
-// install, which is a question about the Vite apps. Spelled out rather than cast so that a
+// install, which is a question about the apps. Spelled out rather than cast so that a
 // future field has to be answered here too. The manager is each app's own since #75, so it is
 // varied through `app()` rather than here.
 function detection(apps: readonly DetectedApp[]): Detection {
@@ -187,6 +200,84 @@ describe('guidance() and the install command', () => {
   })
 })
 
+describe('guidance() for a Next app — J5 (#81)', () => {
+  it('prints the withDogear wrapper and a runtime install, exactly as they must be typed', () => {
+    expect(guidance(detection([nextApp()]))).toEqual([
+      '',
+      'add dogear to apps/web/next.config.ts:',
+      '',
+      "  import { withDogear } from 'dogear-next'",
+      '',
+      '  export default withDogear(nextConfig)',
+      '',
+      'then, in apps/web: npm i dogear-next',
+    ])
+  })
+
+  it.each([
+    ['npm', false, 'then, in apps/web: npm i dogear-next'],
+    ['pnpm', false, 'then, in apps/web: pnpm add dogear-next'],
+    ['yarn', false, 'then, in apps/web: yarn add dogear-next'],
+    ['pnpm', true, 'then, in apps/web: pnpm add -w dogear-next'],
+  ] as const)(
+    'uses the %s form (pnpmWorkspaceRoot %s)',
+    (manager, pnpmWorkspaceRoot, expected) => {
+      expect(guidance(detection([nextApp({ manager, pnpmWorkspaceRoot })]))).toContain(
+        expected,
+      )
+    },
+  )
+
+  it('never installs dogear-next as a DEV dependency', () => {
+    // `next start` loads next.config in production, so a config importing dogear-next cannot
+    // load wherever devDependencies were left out. The inverse of dogear-vite's rule above, and
+    // a printed command is still the one place init can get it wrong at scale.
+    for (const manager of ['npm', 'pnpm', 'yarn'] as const) {
+      for (const pnpmWorkspaceRoot of [false, true]) {
+        const lines = guidance(detection([nextApp({ manager, pnpmWorkspaceRoot })]))
+        expect(lines.join('\n')).not.toMatch(/-D/)
+      }
+    }
+  })
+
+  it('prints only the snippet for an app that already declares dogear-next', () => {
+    const lines = guidance(detection([nextApp({ plugin: 'runtime', configured: false })]))
+
+    expect(lines).toContain('add dogear to apps/web/next.config.ts:')
+    expect(lines.join('\n')).not.toContain('npm i')
+  })
+
+  it('prints only the install for a next.config that already mentions dogear', () => {
+    expect(guidance(detection([nextApp({ configured: true })]))).toEqual([
+      '',
+      'install it in apps/web: npm i dogear-next',
+    ])
+  })
+
+  it.each([['dev'], ['runtime']] as const)(
+    'is silent for a wired app whose manifest declares dogear-next in %s',
+    (plugin) => {
+      // `dev` is wrong and earns ./scaffold.ts a note, but the import resolves in dev, so an
+      // install line would be the wrong correction.
+      expect(guidance(detection([nextApp({ plugin, configured: true })]))).toEqual([])
+    },
+  )
+
+  it('gives a Vite app and a Next app in one repository a block each, in their own form', () => {
+    const lines = guidance(
+      detection([
+        app({ dir: 'admin', config: 'admin/vite.config.ts', manifestDir: 'admin' }),
+        nextApp({ dir: 'web', config: 'web/next.config.mjs', manifestDir: 'web' }),
+      ]),
+    )
+
+    expect(lines).toContain('add dogear to admin/vite.config.ts:')
+    expect(lines).toContain('then, in admin: npm i -D dogear-vite')
+    expect(lines).toContain('add dogear to web/next.config.mjs:')
+    expect(lines).toContain('then, in web: npm i dogear-next')
+  })
+})
+
 describe('guidance() when there is nothing to say', () => {
   it.each([['dev'], ['runtime']] as const)(
     'is silent for an app whose manifest declares the plugin in %s',
@@ -198,7 +289,7 @@ describe('guidance() when there is nothing to say', () => {
   )
 
   it('is silent on a repository with no apps at all', () => {
-    // E2's `note: no vite config found` already covers it. A second line saying the same thing
+    // E2's `note: no vite.config or next.config found` already covers it. A second line saying the same thing
     // in different words is how a report stops being read.
     expect(guidance(detection([]))).toEqual([])
   })

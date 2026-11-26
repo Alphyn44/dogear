@@ -20,7 +20,7 @@ import { afterAll } from 'vitest'
  * `packages/cli/src/init.test.ts` did precisely this, and it was caught by opening the file
  * rather than by a test.
  *
- * One directory per worker process, not per test: `setupFiles` runs once per test file, and
+ * One directory per test file, not per test: `setupFiles` runs once per test file, and
  * anything needing finer isolation than that has `isolateRegistry()`.
  */
 const home = mkdtempSync(join(tmpdir(), 'dogear-vitest-home-'))

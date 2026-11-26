@@ -4,6 +4,8 @@ import type { SourceMap } from 'magic-string'
 import MagicString from 'magic-string'
 import { parseSync } from 'oxc-parser'
 
+import { clientTag, tagSites } from './inject.js'
+
 /**
  * The JSX attribute transform — C1 (#15), and layer 1 of the brief's source-resolution
  * ladder.
@@ -19,11 +21,18 @@ import { parseSync } from 'oxc-parser'
  * *returns* `{ program, errors }` rather than throwing. C1 first took it from Vite 8, which
  * re-exports the same parser from Rolldown, and that one import was the whole of the plugin's
  * Vite 8 floor: Vite 7 has no parser that reads TSX to give. I1 (#73) moved it to
- * `oxc-parser`, which is what let the peer range admit Vite 7, and it is also what makes this
- * module host-independent for J2 to reuse under Next. `stamp.test.ts` holds the second half
- * as a source rule. `magic-string` is here because a transform that returns code without a
- * sourcemap makes Vite log "Sourcemap is likely to be incorrect" against every file it
- * touches.
+ * `oxc-parser`, which is what let the peer range admit Vite 7, and it is also what made this
+ * module host-independent: J2 (#78) moved it out of `dogear-vite` into this package, and both
+ * hosts now inline this one copy. `stamp.test.ts` holds that as a source rule. `magic-string`
+ * is here because a transform that returns code without a sourcemap makes Vite log
+ * "Sourcemap is likely to be incorrect" against every file it touches.
+ *
+ * Both parser and map library stay **external** in each host's build: they are runtime
+ * dependencies of `dogear-vite` and `dogear-next` alike, and `oxc-parser` ships a native
+ * binary per platform that no bundler could inline. That is also why this module is the
+ * subpath `dogear-host/stamp` rather than an index export: esbuild keeps an external import it
+ * cannot prove side-effect free, so any entry that reached this file through the index would
+ * load the native binding, `dogear-next`'s config wrapper included.
  *
  * **Only host elements are stamped** — lowercase `JSXIdentifier` names. `<Button/>` gets
  * nothing: React would pass the attribute through as an unknown prop, and if the component
@@ -77,6 +86,19 @@ export interface StampResult {
   readonly map: SourceMap
 }
 
+/** What {@link transformSource} does to one file. */
+export interface TransformOptions {
+  /** Paths in the attribute are relative to this; see the Decisions log. */
+  readonly gitRoot: string
+  /** Stamp host elements. `false` leaves every element as written. */
+  readonly stamp: boolean
+  /**
+   * The `src` of dogear's client tag, to insert into every JSX `<html>`, for J4 (#80). Absent
+   * means no tag. Only `dogear-next` sets it; Vite injects its tag into HTML instead.
+   */
+  readonly clientSrc?: string
+}
+
 /**
  * Stamp every host element in `code` with its source location.
  *
@@ -86,11 +108,12 @@ export interface StampResult {
  * string matters, because it keeps dogear out of the module's transform chain entirely.
  *
  * **A parse error is silent.** `parseSync` reports errors rather than throwing, and we drop
- * them: dogear cannot distinguish "you are mid-keystroke" from "you put a `.js` in `include`",
- * and Vite reports the real syntax error a moment later with a proper code frame. A dogear
- * warning on every keystroke inside a broken file would be pure noise.
+ * them: dogear cannot distinguish "you are mid-keystroke" from "you put a file that is not JS
+ * in `include`", and Vite reports the real syntax error a moment later with a proper code
+ * frame. A dogear warning on every keystroke inside a broken file would be pure noise.
  *
- * @param id  The Vite module id. May carry a query (`/src/App.tsx?t=1739…`); it is stripped.
+ * @param id  The module id: Vite's, or a loader's `resourcePath` under Next. May carry a query
+ *   (`/src/App.tsx?t=1739…`); it is stripped.
  * @param gitRoot  Paths in the attribute are relative to this — see the Decisions log.
  */
 export function stampSource(
@@ -98,20 +121,82 @@ export function stampSource(
   id: string,
   gitRoot: string,
 ): StampResult | null {
+  return transformSource(code, id, { gitRoot, stamp: true })
+}
+
+/**
+ * Stamp, insert dogear's client tag, or both, in one parse and one edit, for J4 (#80).
+ *
+ * **One `MagicString` over the source as written**, never one transform run over the other's
+ * output. Stamping second would read positions from code the tag had already shifted, and
+ * stamp the tag itself; stamping first and injecting into the result would need two
+ * sourcemaps composed into the one a loader may return. Both are insertions at offsets into
+ * the original, so a single edit takes both and the map it emits is the only one there is.
+ *
+ * The tag is inserted without a newline, for the reason the stamps are: every line number
+ * downstream, including the ones SWC compiles against, stays as written.
+ *
+ * **A `.js` file is parsed as JSX.** Oxc infers the language from the extension and reads a
+ * `.js` as plain JavaScript, but `create-next-app --js` writes JSX into `app/layout.js`, and a
+ * root layout the parser rejected would silently get no tag. Plain JavaScript parses the same
+ * either way, so this costs nothing for a file without JSX. It also means a `.js` file that a
+ * user adds to `include` is stamped under both hosts; the default `include` names `.jsx` and
+ * `.tsx` only, so nothing changes for anyone who has not asked.
+ *
+ * Stamping needs the file inside the repository and the tag does not: an attribute naming a
+ * path the agent cannot open is worse than none, while the tag names no path at all.
+ *
+ * Returns `null` when neither job changed anything, as {@link stampSource} does.
+ */
+export function transformSource(
+  code: string,
+  id: string,
+  options: TransformOptions,
+): StampResult | null {
   const file = stripQuery(id)
 
-  const repoPath = repoRelative(file, gitRoot)
-  if (repoPath === null) return null
+  const repoPath = options.stamp ? repoRelative(file, options.gitRoot) : null
+  if (repoPath === null && options.clientSrc === undefined) return null
 
-  const parsed = parseSync(file, code)
+  const parsed = parseSync(file, code, file.endsWith('.js') ? { lang: 'jsx' } : undefined)
   if (parsed.errors.length > 0) return null
 
+  const magic = new MagicString(code)
+  let edits = 0
+
+  if (repoPath !== null) edits += stampInto(magic, parsed.program, code, repoPath)
+
+  if (options.clientSrc !== undefined) {
+    const tag = clientTag(options.clientSrc)
+    for (const site of tagSites(parsed.program)) {
+      // `appendRight`, so the tag attaches to what follows the opening `>` rather than to the
+      // `>` itself. A stamp lands before that `>`, at a different offset, so the two can never
+      // contend for the same position.
+      magic.appendRight(site, tag)
+      edits += 1
+    }
+  }
+
+  if (edits === 0) return null
+
+  return {
+    code: magic.toString(),
+    map: magic.generateMap({ hires: true, source: file }),
+  }
+}
+
+/** Add the attributes to every host element in `program`. Returns how many it stamped. */
+function stampInto(
+  magic: MagicString,
+  program: unknown,
+  code: string,
+  repoPath: string,
+): number {
   const found: FoundElement[] = []
-  collectOpeningElements(parsed.program, null, found)
-  if (found.length === 0) return null
+  collectOpeningElements(program, null, found)
+  if (found.length === 0) return 0
 
   const starts = lineStarts(code)
-  const magic = new MagicString(code)
   let stamped = 0
 
   for (const { element, component } of found) {
@@ -138,12 +223,7 @@ export function stampSource(
     stamped += 1
   }
 
-  if (stamped === 0) return null
-
-  return {
-    code: magic.toString(),
-    map: magic.generateMap({ hires: true, source: file }),
-  }
+  return stamped
 }
 
 /**

@@ -12,10 +12,10 @@ import { normaliseEndpoint } from './endpoint.js'
  *
  * `dogear init` has written this file since E4 and nothing has ever opened it. What arrives
  * here is therefore **user data in a committed file**, which is the whole reason this module
- * exists rather than a `JSON.parse` inline in ./index.ts: every value has to be checked, and
+ * exists rather than a `JSON.parse` inline in each host: every value has to be checked, and
  * every rejection has to be *said*, because there is no second reader to complain to.
  *
- * **Nothing here throws, and that is not the same rule ./index.ts follows for its own
+ * **Nothing here throws, and that is not the same rule each host follows for its own
  * options.** A bad `dogear({ modifier: 'banana' })` throws at config time — it is the
  * author's own code, in the file they are editing, and a typo should be named loudly. This
  * file is committed and shared: whoever broke it is often not whoever is running the dev
@@ -37,7 +37,7 @@ import { normaliseEndpoint } from './endpoint.js'
  * a file carrying them is correct and must not be warned about — which is the only reason
  * this list is separate from the set below.
  *
- * Exported for ./docs.test.ts, which asserts the package README documents every one of them.
+ * Exported for packages/vite/src/docs.test.ts, which asserts the package README documents every one of them.
  * G6 (#51) put that table in the README because the brief — where the list lived until then —
  * is not in the published tarball, so an npm reader had no way to learn `hosts` existed.
  */
@@ -62,7 +62,7 @@ const VERSION = 1
 /**
  * What the file contributed, after validation — only the keys that survived.
  *
- * Every field optional, and absence is load-bearing: ./index.ts layers this under its plugin
+ * Every field optional, and absence is load-bearing: each host layers this under its own
  * options with `??`, so a key that is missing here falls through to the default rather than
  * to a value this module invented. `Object.keys()` on the result is therefore also the list
  * of what the file actually changed, which is what the confirmation line reports.
@@ -85,7 +85,7 @@ export interface FileConfig {
  * `warn`.
  *
  * The logger is injected rather than reached for, so this is testable without standing up a
- * dev server — ./index.ts passes `server.config.logger.warn`. Every message it emits is a
+ * dev server — dogear-vite passes `server.config.logger.warn`. Every message it emits is a
  * `[dogear] …` line a developer reads in a terminal while their dev server starts, which is
  * the only feedback channel this file will ever have.
  *
@@ -180,7 +180,7 @@ export function readConfigFile(
     // It throws, and from a *file* that is the one thing this module may not do: `dogear
     // init` never validates what it writes, so an endpoint that cannot be used is ordinary
     // user data, and a dev server that dies on it fails the criterion this reader exists to
-    // meet. Caught, reported, dropped — and ./index.ts then normalises the surviving value
+    // meet. Caught, reported, dropped — and the host then normalises the surviving value
     // for real, which is idempotent.
     if (typeof endpoint === 'string') {
       try {

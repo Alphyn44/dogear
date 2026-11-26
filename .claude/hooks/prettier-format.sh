@@ -38,7 +38,7 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$SCRIPT_DIR/../..}"
 # path there.
 NORMALIZED="${FILE_PATH//\\/\/}"
 case "$NORMALIZED" in
-  */node_modules/*|*/dist/*|*/.dogear/*) exit 0 ;;
+  */node_modules/*|*/dist/*|*/.next/*|*/.dogear/*) exit 0 ;;
 esac
 
 # Mark this turn as touching TypeScript. The Stop hook reads this marker to

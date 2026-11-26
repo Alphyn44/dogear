@@ -18,6 +18,14 @@ export default defineConfig({
     // selecting by directory keeps the two configs from needing exclude rules.
     include: ['packages/*/src/**/*.test.ts', 'scripts/*.test.ts'],
     environment: 'node',
+    // #87. vitest's default `forks` pool starts a Node process for every test file, and
+    // starting a process is what makes this suite slow on Windows: `threads` took about 2.5s
+    // off a three-worker run there. Each thread still gets its own copy of `process.env`, so
+    // the helpers that set and restore variables keep their isolation. The other configs keep
+    // `forks`; they spawn servers and binaries, and the time they take is not the start-up.
+    // A suite that needs `process.chdir()` or a native addon has to run elsewhere: neither
+    // works in a worker thread.
+    pool: 'threads',
     // E5 (#30). Keeps `DOGEAR_HOME` off the developer's real home directory by default —
     // see ./vitest.setup.ts for why this is a global rather than a convention.
     setupFiles: ['./vitest.setup.ts'],

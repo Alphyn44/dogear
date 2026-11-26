@@ -24,7 +24,7 @@
 # true on that second pass; bailing on it is what stops a permanently-broken
 # typecheck from trapping the session in a loop it cannot exit. The
 # .turn-verify-blocked marker is a fallback for machines where _parse.sh finds no
-# Python and drops to its sed path, which can only read string fields and would
+# node and drops to its sed path, which can only read string fields and would
 # silently return nothing for a JSON boolean.
 #
 # Note the deliberate consequence: the turn where Claude FIXES the failure is not

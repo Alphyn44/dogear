@@ -196,8 +196,8 @@ jobs:
 
       - run: npm ci
 
-      # `npm pack` packs what is on disk, and none of the three packages has a prepack script
-      # that would build for it. Without this the job would pack three empty dist/ directories
+      # `npm pack` packs what is on disk, and none of the packages has a prepack script that
+      # would build for it. Without this the job would pack four empty dist/ directories
       # and report the failure it exists to catch, every time.
       - run: npm run build
 
@@ -261,9 +261,14 @@ jobs:
   # platform buys nothing for it. WebKit would be the interesting axis rather than the OS, and
   # that is B8 (#35), which this harness makes a small follow-up.
   #
+  # J6 (#82) runs the same gesture in a Next app, under Turbopack and webpack, with stamping on
+  # and off. It packs dogear-core and dogear-next and installs them with next and react from the
+  # registry, because its subject includes what npm would install; `npm run build` below is
+  # what gives those tarballs a dist/ to carry.
+  #
   # Here and not in verify.yml, like every job in this file: the browser binaries are a
-  # download, verify.yml is what release.yml gates on, and a release must not be able to fail
-  # because a browser CDN was slow.
+  # download, J6's install reaches the registry, verify.yml is what release.yml gates on, and a
+  # release must not be able to fail because a browser CDN or a registry was slow.
   browser:
     name: browser round trip
     runs-on: ubuntu-latest
@@ -675,7 +680,7 @@ jobs:
           // that example is private and ships to nobody, so "ships" here is slightly wider than
           // "reaches a user", and a react advisory could fail an unrelated pull request. Over-
           // reporting is the safe direction for a gate, the example is the dogfood app, and the
-          // alternative (cross-referencing each advisory's `nodes` against the three published
+          // alternative (cross-referencing each advisory's `nodes` against the published
           // subtrees) is considerably more machinery than the difference is worth.
           const shipping = new Set(Object.keys(auditProd.vulnerabilities || {}))
 

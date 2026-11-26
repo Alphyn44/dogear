@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE, stampSource } from './stamp.js'
+import { SENTINEL } from './sentinel.js'
+import {
+  COMPONENT_ATTRIBUTE,
+  SOURCE_ATTRIBUTE,
+  stampSource,
+  transformSource,
+} from './stamp.js'
 
 /**
  * C1 (#15) as the issue asks for it: table-driven, against fixture source.
@@ -219,12 +225,20 @@ describe('returning null — leave the module untouched', () => {
       id: '/elsewhere/src/App.tsx',
     },
     {
-      what: 'a .js file, which Oxc does not parse as JSX',
+      what: 'a .ts file, where JSX is not syntax',
       code: 'const a = <div />\n',
-      id: '/repo/src/legacy.js',
+      id: '/repo/src/legacy.ts',
     },
   ])('returns null for $what', ({ code, id }) => {
     expect(stamp(code, id)).toBeNull()
+  })
+
+  it('parses a .js file as JSX, since J4 (#80)', () => {
+    // `create-next-app --js` writes JSX into `app/layout.js`, and the client tag has to reach
+    // it. Only a `.js` the configuration includes is ever stamped; the default names none.
+    expect(stamped('const a = <div />\n', '/repo/src/legacy.js')).toContain(
+      `${SOURCE_ATTRIBUTE}="src/legacy.js:1:11"`,
+    )
   })
 
   it('is silent about a parse failure', () => {
@@ -399,20 +413,140 @@ describe('the sourcemap', () => {
   })
 })
 
+describe('transformSource: the client tag (J4)', () => {
+  const SRC = '/__dogear/client.js?config=%7B%7D'
+  const TAG = `<script async type="module" data-dogear="${SENTINEL}" src={"${SRC}"} />`
+  const LAYOUT = '/repo/app/layout.tsx'
+
+  function injected(code: string, id = LAYOUT, stamp = false): string | null {
+    return (
+      transformSource(code, id, { gitRoot: ROOT, stamp, clientSrc: SRC })?.code ?? null
+    )
+  }
+
+  it.each([
+    {
+      where: 'first inside <body>',
+      code: 'const L = () => <html lang="en"><body className="x">{c}</body></html>',
+      out: `const L = () => <html lang="en"><body className="x">${TAG}{c}</body></html>`,
+    },
+    {
+      where: 'first inside <html>, when its <body> is rendered elsewhere',
+      code: 'const L = () => <html><Body>{c}</Body></html>',
+      out: `const L = () => <html>${TAG}<Body>{c}</Body></html>`,
+    },
+    {
+      where: 'first inside <html>, when its <body> is self-closing',
+      code: 'const L = () => <html><body /></html>',
+      out: `const L = () => <html>${TAG}<body /></html>`,
+    },
+    {
+      where: 'into every <html>, not just the first',
+      code: 'const L = (a) => a ? <html><body /></html> : <html><body>x</body></html>',
+      out: `const L = (a) => a ? <html>${TAG}<body /></html> : <html><body>${TAG}x</body></html>`,
+    },
+  ])('goes $where', ({ code, out }) => {
+    expect(injected(code)).toBe(out)
+  })
+
+  it.each([
+    { what: 'a file with no <html>', code: 'const a = <main><body /></main>' },
+    { what: 'a self-closing <html>, which has no children', code: 'const a = <html />' },
+    { what: 'a component named Html', code: 'const a = <Html><body /></Html>' },
+  ])('leaves $what alone', ({ code }) => {
+    expect(injected(code)).toBeNull()
+  })
+
+  it('goes into a layout.js, which create-next-app --js writes', () => {
+    expect(
+      injected('const L = () => <html><body /></html>', '/repo/app/layout.js'),
+    ).toContain(TAG)
+  })
+
+  it('goes into a file outside the repository, which it cannot stamp', () => {
+    // The tag names no path; an attribute naming one the agent cannot open is what the
+    // repository check exists to prevent, and that check is for stamps only.
+    const code = injected(
+      'const L = () => <html><body /></html>',
+      '/elsewhere/layout.tsx',
+      true,
+    )
+
+    expect(code).toContain(TAG)
+    expect(code).not.toContain(SOURCE_ATTRIBUTE)
+  })
+
+  it('stamps at the positions as written, and never stamps the tag', () => {
+    const code = [
+      'export default function RootLayout({ children }) {',
+      '  return (',
+      '    <html>',
+      '      <body>{children}</body>',
+      '    </html>',
+      '  )',
+      '}',
+    ].join('\n')
+
+    const result = injected(code, LAYOUT, true)
+
+    expect(result).toContain(`<html ${SOURCE_ATTRIBUTE}="app/layout.tsx:3:5"`)
+    expect(result).toContain(`<body ${SOURCE_ATTRIBUTE}="app/layout.tsx:4:7"`)
+    expect(count(result ?? '', SOURCE_ATTRIBUTE)).toBe(2)
+    expect(result).toContain(TAG)
+    // No newline in the tag, so every line SWC compiles against stays where it was.
+    expect(result?.split('\n')).toHaveLength(code.split('\n').length)
+  })
+
+  it('returns one map covering both edits', () => {
+    const result = transformSource('const L = () => <html><body /></html>', LAYOUT, {
+      gitRoot: ROOT,
+      stamp: true,
+      clientSrc: SRC,
+    })
+
+    expect(result?.map.sources).toEqual([LAYOUT])
+    expect(result?.map.mappings).not.toBe('')
+  })
+
+  it('escapes a src no endpoint should produce, rather than breaking the JSX', () => {
+    const result = transformSource('const L = () => <html><body /></html>', LAYOUT, {
+      gitRoot: ROOT,
+      stamp: false,
+      clientSrc: '/a"}b',
+    })
+
+    expect(result?.code).toContain('src={"/a\\"}b"}')
+    // Still a file Oxc parses, which is what SWC is about to be handed.
+    expect(
+      transformSource(result?.code ?? '', LAYOUT, { gitRoot: ROOT, stamp: true }),
+    ).not.toBeNull()
+  })
+
+  it('does nothing with stamping off and no tag to insert', () => {
+    expect(
+      transformSource('const L = () => <html />', LAYOUT, {
+        gitRoot: ROOT,
+        stamp: false,
+      }),
+    ).toBeNull()
+  })
+})
+
 describe('the host boundary', () => {
   /**
    * A source rule, in the shape ./listeners.test.ts in dogear-core and
    * dogear-queue's ./format.test.ts established. I1 (#73) took the parser from `oxc-parser`
    * instead of Vite 8's re-export, and replaced `normalizePath` with a local replace, so that
-   * this module runs under Vite 7 and under a host that is not Vite at all (J2). A value
-   * import from `vite` here would still typecheck and pass every case in this file, because
-   * the workspace has Vite 8 installed; the failure would surface only as an `ERESOLVE` or a
-   * missing export in someone else's project.
+   * this module runs under Vite 7 and under a host that is not Vite at all. J2 (#78) moved it
+   * here, where both hosts inline it. A value import from `vite` or `next` here would still
+   * typecheck and pass every case in this file, because the workspace has both installed; the
+   * failure would surface only as an `ERESOLVE` or a missing export in someone else's project.
    */
-  it('imports nothing from vite', () => {
+  it('imports nothing from either host', () => {
     const source = readFileSync(new URL('./stamp.ts', import.meta.url), 'utf8')
 
     expect(source).not.toMatch(/from 'vite'/)
+    expect(source).not.toMatch(/from 'next[/']/)
     // The control: the parser import this rule exists to keep in place. Without it, a rename
     // of the file under test would leave the rule above reading nothing and passing.
     expect(source).toMatch(/from 'oxc-parser'/)

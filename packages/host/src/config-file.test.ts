@@ -60,7 +60,7 @@ describe('the quiet cases', () => {
   it('says nothing for the file `dogear init` actually writes', () => {
     // E4 writes `{ "version": 1 }` and stops — see the brief's Decisions log. Every repo that
     // has ever run init is in this state, so it is the case that must not produce output, and
-    // it must contribute no keys either or ./index.ts would log a confirmation line for it.
+    // it must contribute no keys either or the host would log a confirmation line for it.
     const { config, warnings } = readObject({ version: 1 })
 
     expect(config).toEqual({})
@@ -123,7 +123,7 @@ describe('every layered key, when it is valid', () => {
       hosts: ['localhost', '*.test'],
     })
 
-    // Object.keys is what ./index.ts reports in its confirmation line, so the set matters as
+    // Object.keys is what each host reports in its confirmation line, so the set matters as
     // much as the values.
     expect(Object.keys(config).sort()).toEqual([
       'enabled',
@@ -185,15 +185,15 @@ describe('a key that is present but wrong', () => {
   it('does not throw, however wrong the value is', () => {
     // The rule this module exists for: a committed file is shared, so one person's typo must
     // not stop everyone else's dev server. A plugin *option* still throws — see
-    // `validateModifier` in ./index.ts.
+    // `validateModifier` in dogear-vite.
     write(JSON.stringify({ modifier: 'banana', hosts: 7, include: {} }))
 
     expect(() => read()).not.toThrow()
   })
 
   it('does not throw on an endpoint that `normaliseEndpoint` rejects', () => {
-    // Found by ./index.test.ts, not predicted: `'/'` is a non-empty string, so an earlier
-    // draft of this reader accepted it and let ./index.ts throw on it a few lines later —
+    // Found by dogear-vite's index.test.ts, not predicted: `'/'` is a non-empty string, so an earlier
+    // draft of this reader accepted it and let the plugin throw on it a few lines later —
     // a dev server killed by a data file, which is precisely the failure this ticket's
     // acceptance criteria rule out.
     for (const endpoint of ['/', '//evil.com', '/x?y']) {

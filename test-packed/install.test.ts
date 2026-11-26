@@ -87,6 +87,9 @@ const ENTRYPOINTS: Readonly<Record<PublishedDir, readonly string[]>> = {
   core: ['dist/index.js', 'dist/noop.js', 'dist/client.js', 'dist/index.d.ts'],
   vite: ['dist/index.js', 'dist/index.d.ts'],
   cli: ['dist/cli.js'],
+  // J7 (#83). The loader is a second entry `index.js` names by absolute path and never imports,
+  // so nothing would notice its absence until Turbopack failed to find it in a user's app.
+  next: ['dist/index.js', 'dist/loader.js', 'dist/index.d.ts'],
 }
 
 describe.each(PUBLISHED)('the dogear-%s tarball', (dir) => {

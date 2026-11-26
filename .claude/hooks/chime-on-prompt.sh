@@ -31,10 +31,9 @@ if [ -z "$CMD" ]; then
   exit 0
 fi
 
-# Python is required for reliable JSON settings parsing. Fail open (silent)
-# if unavailable — the project's other hooks already depend on Python, so
-# this branch is rarely hit.
-if ! _hook_find_python; then
+# node is required for the settings parsing below, as it is for hook_extract.
+# Fail open (silent) if it is missing: a missing chime is the cheap failure.
+if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 
@@ -44,71 +43,61 @@ decision="$(
   CMD_TO_CHECK="$CMD" \
   PROJECT_DIR="$PROJECT_DIR" \
   HOME_DIR="${HOME:-${USERPROFILE:-}}" \
-  $_HOOK_PYBIN - <<'PYEOF'
-import json, os, sys
+  node - <<'JSEOF'
+const fs = require("fs");
+const path = require("path");
 
-cmd = os.environ.get("CMD_TO_CHECK", "")
-project = os.environ.get("PROJECT_DIR", "")
-home = os.environ.get("HOME_DIR", "")
+const cmd = process.env.CMD_TO_CHECK || "";
+const project = process.env.PROJECT_DIR || "";
+const home = process.env.HOME_DIR || "";
 
-settings_files = [
-    os.path.join(project, ".claude", "settings.json"),
-    os.path.join(project, ".claude", "settings.local.json"),
-    os.path.join(home, ".claude", "settings.json"),
-]
+const settingsFiles = [
+  path.join(project, ".claude", "settings.json"),
+  path.join(project, ".claude", "settings.local.json"),
+  path.join(home, ".claude", "settings.json"),
+];
 
-def parse(pattern):
-    """Bash(...) → (kind, value) or None for non-Bash patterns."""
-    if not (pattern.startswith("Bash(") and pattern.endswith(")")):
-        return None
-    body = pattern[5:-1]
-    if body.endswith(":*"):
-        return ("prefix", body[:-2])
-    if body.endswith(" *"):
-        return ("prefix", body[:-2])
-    if body.endswith("*"):
-        return ("prefix", body[:-1].rstrip(":"))
-    return ("exact", body)
+// Bash(...) -> [kind, value], or null for non-Bash patterns.
+function parse(pattern) {
+  if (typeof pattern !== "string") return null;
+  if (!(pattern.startsWith("Bash(") && pattern.endsWith(")"))) return null;
+  const body = pattern.slice(5, -1);
+  if (body.endsWith(":*")) return ["prefix", body.slice(0, -2)];
+  if (body.endsWith(" *")) return ["prefix", body.slice(0, -2)];
+  if (body.endsWith("*")) return ["prefix", body.slice(0, -1).replace(/:+$/, "")];
+  return ["exact", body];
+}
 
-def is_match(cmd, parsed):
-    kind, val = parsed
-    if kind == "exact":
-        return cmd == val
-    # prefix: empty matches everything; otherwise command must equal val or
-    # start with val + " " (so "git" doesn't match "git-foo").
-    if val == "":
-        return True
-    return cmd == val or cmd.startswith(val + " ")
+// prefix: empty matches everything; otherwise the command must equal the value
+// or start with value + " " (so "git" doesn't match "git-foo").
+function isMatch([kind, val]) {
+  if (kind === "exact") return cmd === val;
+  if (val === "") return true;
+  return cmd === val || cmd.startsWith(val + " ");
+}
 
-allow, deny = [], []
-for path in settings_files:
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except Exception:
-        continue
-    perms = (data.get("permissions") or {})
-    for p in (perms.get("allow") or []):
-        parsed = parse(p)
-        if parsed is not None:
-            allow.append(parsed)
-    for p in (perms.get("deny") or []):
-        parsed = parse(p)
-        if parsed is not None:
-            deny.append(parsed)
+const allow = [];
+const deny = [];
+for (const file of settingsFiles) {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    continue;
+  }
+  const perms = (data && data.permissions) || {};
+  for (const p of perms.allow || []) {
+    const parsed = parse(p);
+    if (parsed) allow.push(parsed);
+  }
+  for (const p of perms.deny || []) {
+    const parsed = parse(p);
+    if (parsed) deny.push(parsed);
+  }
+}
 
-for p in deny:
-    if is_match(cmd, p):
-        print("silent")
-        sys.exit(0)
-
-for p in allow:
-    if is_match(cmd, p):
-        print("silent")
-        sys.exit(0)
-
-print("chime")
-PYEOF
+console.log(deny.some(isMatch) || allow.some(isMatch) ? "silent" : "chime");
+JSEOF
 )"
 
 if [ "$decision" = "chime" ]; then

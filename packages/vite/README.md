@@ -132,8 +132,8 @@ The plugin declares `apply: 'serve'`, so it does not exist during a build. That 
 both the injected script and the attribute transform, so your production DOM is untouched
 and your bundle contains nothing of dogear's.
 
-Four further layers sit behind that one: a gated dynamic import for non-Vite consumers,
-export conditions that send every unrecognised resolver to a noop module, a CI check that
+Four further layers sit behind that one: a dev-gated dynamic import for anyone who loads
+`dogear-core` themselves rather than through this plugin, export conditions that send every unrecognised resolver to a noop module, a CI check that
 fails loudly on a leaked sentinel string, and a runtime hostname bail. See
 [the brief](https://github.com/Alphyn44/dogear/blob/main/dogear-brief.md#keeping-it-out-of-production).
 

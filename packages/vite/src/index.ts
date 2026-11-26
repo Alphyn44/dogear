@@ -6,40 +6,25 @@ import {
   registerServer,
   registryPath,
 } from 'dogear-queue'
-import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
-import { createFilter } from 'vite'
-
-import { findAppName } from './app-name.js'
-import type { ClientConfig, Modifier } from './client.js'
+import type { ClientConfig } from 'dogear-host'
 import {
   buildClientConfig,
   clientScriptSrc,
-  MODIFIERS,
+  createEndpoint,
+  DEFAULT_ENDPOINT,
+  DEFAULT_EXCLUDE,
+  DEFAULT_INCLUDE,
+  findAppName,
+  normaliseEndpoint,
+  readConfigFile,
   resolveCoreDist,
+  SENTINEL,
   UNBUILT_CORE_WARNING,
-} from './client.js'
-import { readConfigFile } from './config-file.js'
-import { createEndpoint, DEFAULT_ENDPOINT, normaliseEndpoint } from './endpoint.js'
-import { SENTINEL } from './sentinel.js'
-import { stampSource } from './stamp.js'
-
-/**
- * Which files the JSX transform touches by default — C1 (#15), and the same pair the
- * brief's `.dogear/config.json` names.
- *
- * JSX-only by design. A `.js` holding JSX is not parsed as JSX by Oxc, and forcing it would
- * mean dogear deciding a file's language against the project's own toolchain. The brief
- * lists `.js` files among the places the attribute legitimately does not reach; they get
- * the selector floor (C3) instead.
- */
-const DEFAULT_INCLUDE = ['**/*.jsx', '**/*.tsx']
-
-/**
- * Never transform dependencies. Stamping them would point the agent at code inside
- * `node_modules` that it has no business editing, and a linked workspace dependency is
- * already covered by its own dev server.
- */
-const DEFAULT_EXCLUDE = ['**/node_modules/**']
+  validateModifier,
+} from 'dogear-host'
+import { stampSource } from 'dogear-host/stamp'
+import type { FilterPattern, Plugin, ViteDevServer } from 'vite'
+import { createFilter } from 'vite'
 
 export interface DogearOptions {
   /**
@@ -84,8 +69,12 @@ export interface DogearOptions {
    *
    * `'meta'` is the Windows key on Windows, where the OS claims it on keyup — it works, but
    * it is a poor choice there.
+   *
+   * **Spelled out rather than typed as `dogear-host`'s `Modifier`.** This interface is
+   * published, and tsc's declaration emit would copy that import into `dist/index.d.ts`,
+   * naming a private package no consumer can install. `index.test.ts` holds the two equal.
    */
-  readonly modifier?: Modifier
+  readonly modifier?: 'alt' | 'ctrl' | 'meta' | 'shift'
   /**
    * Stamp `data-dogear-src` onto host JSX elements in dev. Default `true` — C1 (#15).
    *
@@ -366,6 +355,8 @@ export function dogear(options: DogearOptions = {}): Plugin {
       if ((options.transform ?? file.transform) !== false) {
         stamping = {
           gitRoot,
+          // Vite's `createFilter`, not `dogear-host/filter`: this host has the real one, and
+          // ./filter-parity.test.ts holds the port to it rather than the other way round.
           matches: createFilter(
             options.include ?? file.include ?? DEFAULT_INCLUDE,
             options.exclude ?? file.exclude ?? DEFAULT_EXCLUDE,
@@ -439,34 +430,6 @@ export function dogear(options: DogearOptions = {}): Plugin {
             ],
     },
   }
-}
-
-/**
- * Reject a bad `modifier` loudly, at config time.
- *
- * The mirror image of core's `resolveOptions`, which falls back to the default instead.
- * Same value, two audiences: here it is a developer reading a terminal while their dev
- * server starts, where a typo should be named; there it is a page load in a browser, where a
- * dev tool throwing has broken the app it exists to help inspect.
- *
- * E7 (#40) adds a third audience and it lands on the tolerant side: a bad `modifier` in
- * `.dogear/config.json` is warned about and dropped by ./config-file.ts rather than thrown
- * on. That file is committed, so whoever broke it is often not whoever is running the dev
- * server, and one person's typo must not stop everyone else's `npm run dev`. This function
- * still governs the *option*, which is the author's own code in the file they are editing.
- *
- * Validated in `configureServer` rather than in the factory, for the same reason
- * `normaliseEndpoint` is: a misconfigured dev tool must not be able to take down a
- * production build. `apply: 'serve'` already excludes the plugin from one, and throwing from
- * the factory would run before that had a chance to matter.
- */
-function validateModifier(modifier: Modifier | undefined): Modifier | undefined {
-  if (modifier === undefined || MODIFIERS.includes(modifier)) return modifier
-
-  throw new Error(
-    `dogear: modifier must be one of ${MODIFIERS.join(', ')}, received ` +
-      JSON.stringify(modifier),
-  )
 }
 
 /**

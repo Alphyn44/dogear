@@ -3,8 +3,8 @@
 Click an element in your running app, leave a comment on it, and have your coding agent
 receive that comment already bound to the exact source file and line.
 
-A Vite plugin, an overlay, and an MCP server. No extension, no IDE change, no account.
-Nothing leaves localhost.
+A Vite plugin or a Next.js config wrapper, an overlay, and an MCP server. No extension, no IDE
+change, no account. Nothing leaves localhost.
 
 ## Install
 
@@ -22,16 +22,24 @@ dogear init
 ```
 
 `dogear init` finds your git root, detects your setup, registers dogear's MCP server with
-your agent, and prints the import and `plugins` entry your `vite.config` needs. Install the
-plugin where your app lives, and `dogear-cli` at the git root (or, if the repository has no
-root `package.json`, in the package that runs your app):
+your agent, and prints the package install and config change each app needs. It writes
+neither: configs are too varied to rewrite safely. Install `dogear-cli` at the git root (or,
+if the repository has no root `package.json`, in the package that runs your app):
 
 ```sh
-npm i -D dogear-vite dogear-cli
+npm i -D dogear-cli
 ```
 
-At the root of a pnpm workspace, add `-w` to the `dogear-cli` install: pnpm 9 refuses to add a
-dependency there without it. `dogear init` prints the command with the flag when it applies.
+At the root of a pnpm workspace, add `-w`: pnpm 9 refuses to add a dependency there without
+it. `dogear init` prints the command with the flag when it applies.
+
+Then wire each app, where it lives.
+
+**Vite.** A dev dependency, and a `plugins` entry:
+
+```sh
+npm i -D dogear-vite
+```
 
 ```js
 import { dogear } from 'dogear-vite'
@@ -40,6 +48,23 @@ export default defineConfig({
   plugins: [dogear()],
 })
 ```
+
+**Next.js.** A regular dependency, because `next start` loads `next.config` in production
+too (it does nothing there), and the export wrapped:
+
+```sh
+npm i dogear-next
+```
+
+```js
+import { withDogear } from 'dogear-next'
+
+export default withDogear(nextConfig)
+```
+
+Next 16 with the App Router, under Turbopack or webpack. Options and the config file are on
+[dogear-vite's](https://www.npmjs.com/package/dogear-vite) and
+[dogear-next's](https://www.npmjs.com/package/dogear-next) pages.
 
 `dogear-cli` is installed twice on purpose. Globally, so `dogear` is on your PATH;
 locally, because the MCP server and prompt-hook entries `init` writes are **committed** and
@@ -156,12 +181,14 @@ they have no ids and nothing to resolve.
 | Package | |
 | --- | --- |
 | [`dogear-cli`](https://www.npmjs.com/package/dogear-cli) | `dogear` on PATH: `init`, `hook`, `mcp`, `prune`, `status` |
-| [`dogear-vite`](https://www.npmjs.com/package/dogear-vite) | The dev-only plugin. Stamps source attributes, injects the overlay, serves the endpoint |
-| [`dogear-core`](https://www.npmjs.com/package/dogear-core) | The overlay itself. Framework-agnostic, and installed as a dependency of the plugin rather than directly |
+| [`dogear-vite`](https://www.npmjs.com/package/dogear-vite) | The dev-only Vite plugin. Stamps source attributes, injects the overlay, serves the endpoint |
+| [`dogear-next`](https://www.npmjs.com/package/dogear-next) | The same three things for Next.js, as a `next.config` wrapper that does nothing outside `next dev` |
+| [`dogear-core`](https://www.npmjs.com/package/dogear-core) | The overlay itself. Framework-agnostic, and installed as a dependency of the host package rather than directly |
 
-A fourth workspace, `dogear-queue`, is private and never published. It holds the queue
-format and is inlined into the three above at build time, so an install stays three
-packages with no extra runtime dependency.
+Two more workspaces are private and never published. `dogear-queue` holds the queue format
+and `dogear-host` the code the two host packages share; both are inlined at build time, so an
+app's install stays three packages (the CLI, its host package and core) with no extra runtime
+dependency.
 
 The flow is **browser → HTTP POST → `<git-root>/.dogear/queue.json` → MCP server →
 agent**. The bridge is a file, never a socket, and one repository has one queue however
@@ -170,10 +197,12 @@ many dev servers are running against it.
 ## Not in production
 
 The plugin declares `apply: 'serve'`, so it does not exist during a build, which covers
-the injected script and the attribute transform together. Four further layers sit behind
-it, including export conditions that resolve to a noop module, a CI check that fails on a
-leaked sentinel string (a marker dogear plants in its own bundle so CI can prove none of it
-reached a production build), and a runtime hostname bail. See
+the injected script and the attribute transform together. Under Next, `withDogear` hands your
+config back untouched in every phase but `next dev`, which covers the stamps, the overlay's tag
+and the endpoint the same way. Four further layers sit behind those, including export
+conditions that resolve to a noop module, a CI check that fails on a leaked sentinel string (a
+marker dogear plants in its own bundle so CI can prove none of it reached a production build,
+Next's included), and a runtime hostname bail. See
 [the brief](./dogear-brief.md#keeping-it-out-of-production).
 
 ## Troubleshooting
@@ -183,13 +212,17 @@ prints starts with `[dogear]`, so that is the first place to look.
 
 **Nothing happens when I hold the modifier.** In rough order of likelihood:
 
-- **The plugin is not in your `vite.config`.** Adding `dogear-vite` to `package.json` is
-  half the wiring; the `plugins: [dogear()]` entry is the other half. `dogear init` prints
-  the snippet and will keep printing it until both are true.
+- **dogear is not in your config.** Adding `dogear-vite` or `dogear-next` to `package.json` is
+  half the wiring; the `plugins: [dogear()]` entry in `vite.config`, or the `withDogear` wrapper
+  around your `next.config` export, is the other half. `dogear init` prints the snippet and
+  will keep printing it until both are true.
+- **A Next app on the Pages Router.** The overlay arrives as a tag written into your root
+  layout's JSX `<html>`, which only the App Router has. `dogear init` says so when it finds no
+  `app/` or `src/app/` directory.
 - **`[dogear] no .git found above …`.** The queue resolves from the git root, so dogear
   disables itself outside a repository rather than guessing. `git init`, or start the dev
   server from inside the repository.
-- **`[dogear] disabled by …`.** Someone set `enabled: false`, either in `vite.config` or in
+- **`[dogear] disabled by …`.** Someone set `enabled: false`, either in your config or in
   `.dogear/config.json`. The message names which.
 - **You are not on an allowed hostname.** This one is silent by design: a warning here
   would fire on a deployed page in front of real users. The default list covers localhost,
@@ -219,7 +252,7 @@ that is checked too, and `dogear init` says so when it sees a PnP project. Set
 `nodeLinker: node-modules` in `.yarnrc.yml` if you need the MCP server.
 
 **My comments are not reaching the agent.** Check `.dogear/queue.json` at your **git
-root**, not your Vite root, which in a monorepo is a different directory. `dogear status`
+root**, not your app's directory, which in a monorepo is a different one. `dogear status`
 lists every repository you have run `init` in, what is pending in each, and which dev
 servers are live; it works from anywhere and never writes.
 
@@ -229,7 +262,8 @@ confirmation that it did.
 
 ## Requirements
 
-Node `^20.19.0 || >=22.12.0`, and Vite 7 or 8 for the plugin.
+Node `^20.19.0 || >=22.12.0`. Vite 7 or 8 for `dogear-vite`; Next.js 16 with the App Router
+for `dogear-next`, under Turbopack or webpack.
 
 Firefox, Chrome and Edge. Firefox is the point: every comparable click-to-annotate tool is
 a Chromium extension.
@@ -247,7 +281,7 @@ npm run verify       # the full gate
 Individual steps:
 
 ```sh
-npm run build          # the three published packages
+npm run build          # the four published packages
 npm run typecheck      # tsc --noEmit, per package
 npm test               # vitest
 npm run format         # prettier --write
@@ -263,7 +297,7 @@ actionlint                             # parse and lint .github/workflows/
 ```
 
 `test:packed` is the one thing that exercises what npm *publishes* rather than what this
-repository contains: everything else resolves the three packages through workspace symlinks,
+repository contains: everything else resolves the packages through workspace symlinks,
 so a tarball missing its `dist/` would pass all nine steps above. `actionlint` is a separate
 binary rather than an npm dependency; [CONTRIBUTING.md](./CONTRIBUTING.md) has the version
 and why shellcheck is worth having beside it.

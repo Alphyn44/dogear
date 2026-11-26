@@ -13,8 +13,8 @@ is the maintainer's own tracking format and expects a story ID from the brief.
 
 ## Getting set up
 
-Node `^20.19.0 || >=22.12.0`. One install at the root resolves all five workspaces: the
-three published packages, the private `dogear-queue` that the other three inline at build
+Node `^20.19.0 || >=22.12.0`. One install at the root resolves all seven workspaces: the four
+published packages, the private `dogear-queue` and `dogear-host` that they inline at build
 time, and the example app.
 
 ```sh
@@ -73,8 +73,8 @@ Two CI jobs run alongside that matrix and are **not** part of `npm run verify`:
   [actionlint](https://github.com/rhysd/actionlint) 1.7.12 and
   [shellcheck](https://github.com/koalaman/shellcheck) on your PATH and run `actionlint` from
   the repository root. Without shellcheck it still runs, and silently checks less.
-- **`npm run test:packed`** packs the three tarballs, installs them into a scratch project
-  outside the workspace, and runs the binary, `dogear init` and a real dev server against
+- **`npm run test:packed`** packs the four tarballs, installs the three a Vite app uses into a
+  scratch project outside the workspace, and runs the binary, `dogear init` and a real dev server against
   them. It needs `npm run build` first. It is out of `verify` because the install reaches the
   registry, and `verify` is what a release gates on.
 

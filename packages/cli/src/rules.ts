@@ -62,10 +62,11 @@ export function createRulesStep(wiring: Wiring): Step {
       // silence.
       if (wiring.agents.length === 0) return undefined
 
+      // Any candidate, not just the target: see {@link writtenAnywhere}.
+      if (writtenAnywhere(root)) return undefined
+
       const target = targetIn(root)
       const path = join(root, target.file)
-
-      if (target.contents !== undefined && written(target.contents)) return undefined
 
       const plan: Plan = {
         change: {
@@ -86,7 +87,7 @@ export function createRulesStep(wiring: Wiring): Step {
               )
             }
 
-            if (current !== undefined && written(current)) return
+            if (writtenAnywhere(root)) return
 
             writeFileSync(path, `${current ?? ''}${separator(current)}${STANZA}`, 'utf8')
           },
@@ -244,6 +245,23 @@ function targetIn(root: string): {
  */
 function written(contents: string): boolean {
   return contents.includes(START)
+}
+
+/**
+ * Does any candidate already hold dogear's stanza? J5 (#81).
+ *
+ * **Every candidate, not only the one {@link targetIn} would pick today**, because the pick can
+ * change under a repository that has not. A repository keeping its rules in `CLAUDE.md` gets the
+ * stanza there; then `next dev`, run by an agent, creates an `AGENTS.md` holding Next's own
+ * managed block, and the next init would append a second stanza to it, since `AGENTS.md` comes
+ * first. One stanza is the contract, wherever it went. Undo already examines both files, which
+ * is what keeps a repository that reached two stanzas before this fix cleanable.
+ */
+function writtenAnywhere(root: string): boolean {
+  return CANDIDATES.some((file) => {
+    const contents = readIfFile(join(root, file))
+    return contents !== undefined && written(contents)
+  })
 }
 
 /**

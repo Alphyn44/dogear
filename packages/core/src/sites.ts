@@ -21,9 +21,9 @@
  */
 
 /**
- * The stamped attributes, duplicated from `dogear-vite`'s ./stamp.ts rather than imported.
+ * The stamped attributes, duplicated from `dogear-host`'s ./stamp.ts rather than imported.
  *
- * Core is framework-agnostic and knows nothing about Vite — the same constraint that makes
+ * Core is framework-agnostic and knows nothing about either host — the same constraint that makes
  * ./submit.ts carry its own `PROTOCOL_VERSION`. The two halves cannot import each other, so
  * the copy is structural rather than lazy.
  *

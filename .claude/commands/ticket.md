@@ -92,8 +92,7 @@ Present the plan and **wait for my approval**.
 
 - Update `dogear-brief.md` **only** if this ticket changed a design decision — add or
   amend the Decisions log entry. Most tickets won't.
-- Update `CLAUDE.md` only if architecture, commands, or working rules changed. If this
-  is the ticket that creates `package.json` and the first scripts, fill in the
-  Commands section, which currently says there are none.
+- Update the `CLAUDE.md` nearest the code that changed (root, or a package/workflow/harness
+  folder's own) only if architecture, commands, or working rules changed.
 - **Do not commit** — I review and commit manually. End with a paste-ready commit
   message (headline + markdown body + the co-author trailer).

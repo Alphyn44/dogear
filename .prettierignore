@@ -4,11 +4,13 @@
 
 node_modules/
 dist/
+.next/
 coverage/
 package-lock.json
 
 .dogear/
 .codegraph/
+.scratch/
 
 # Markdown and YAML are hand-formatted. Prettier rewraps prose and re-indents YAML
 # aggressively, which turns a one-line change to the brief into a 200-line diff.

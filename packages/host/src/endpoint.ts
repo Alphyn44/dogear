@@ -8,7 +8,6 @@ import {
   readQueue,
   stampAnnotation,
 } from 'dogear-queue'
-import type { Connect } from 'vite'
 
 import { validateBatch } from './batch.js'
 import type { ClientDist } from './client.js'
@@ -68,7 +67,32 @@ export interface EndpointOptions {
    * one package has nothing to disambiguate and loses nothing by it.
    */
   readonly app?: string
+  /**
+   * Read `origin` from `x-forwarded-host` rather than `Host`. J3 (#79).
+   *
+   * Set by `dogear-next` and nothing else. Under Next the browser's request reaches this
+   * handler through a `beforeFiles` rewrite to a loopback server, and Next's proxy rewrites
+   * `Host` to that server's own `127.0.0.1:<port>` (`changeOrigin: true`) while copying the
+   * page's host into `x-forwarded-host`. Reading `Host` there would record a port nobody
+   * browsed.
+   *
+   * Off by default, so a Vite dev server, which the browser reaches directly, keeps ignoring
+   * a header any client could send. The trust is no wider under Next: the loopback server is
+   * reachable only from this machine, which is also everyone who could have sent `Host`.
+   */
+  readonly forwarded?: boolean
 }
+
+/**
+ * The handler {@link createEndpoint} returns: Connect's `NextHandleFunction` shape, spelled
+ * out so this package needs nothing from Vite. Vite mounts it as middleware, and
+ * `dogear-next` calls it from a plain `node:http` server with a 404 as `next`.
+ */
+export type EndpointHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void,
+) => void
 
 /**
  * Normalise a configured base path: leading slash, no trailing slash.
@@ -90,7 +114,7 @@ export interface EndpointOptions {
  * script tag off-host is a new shape of the same hole, and one rule closes both.
  */
 export function normaliseEndpoint(endpoint: string): string {
-  const trimmed = endpoint.trim().replace(/\/+$/, '')
+  const trimmed = withoutTrailingSlashes(endpoint.trim())
   const normalised = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
 
   if (normalised === '/') {
@@ -118,14 +142,28 @@ export function normaliseEndpoint(endpoint: string): string {
 }
 
 /**
- * Build the connect middleware.
+ * `path` with every trailing `/` removed (#89).
+ *
+ * A loop rather than `replace(/\/+$/, '')`, which is quadratic: on a long run of slashes that
+ * does not end the string, the engine retries the match from every slash in it. The value
+ * only ever comes from the developer's own config, so this was never reachable from outside,
+ * but a dev server should not be able to hang on a typo in its own config file.
+ */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path[end - 1] === '/') end -= 1
+  return path.slice(0, end)
+}
+
+/**
+ * Build the request handler.
  *
  * Requests under the base path are always answered here — 404 or 405 as appropriate —
  * rather than passed to `next()`. Falling through would hand them to Vite's SPA fallback,
  * which answers with `index.html` and a 200, so a typo'd path or a `GET` where a `POST`
  * belonged would look like a successful request that returned a web page.
  */
-export function createEndpoint(options: EndpointOptions): Connect.NextHandleFunction {
+export function createEndpoint(options: EndpointOptions): EndpointHandler {
   const annotationsPath = `${options.endpoint}/annotations`
   // The map's public name matches the bundle's, because the served file IS core's
   // `dist/client.js` and its trailing `//# sourceMappingURL=client.js.map` asks for exactly
@@ -185,12 +223,10 @@ export function createEndpoint(options: EndpointOptions): Connect.NextHandleFunc
       return
     }
 
-    handleSubmit(req, res, queuePath, options.gitRoot, options.app).catch(
-      (error: unknown) => {
-        // The catch-all exists so a throw cannot leave a dev server holding an open socket.
-        sendJson(res, 500, { ok: false, error: messageOf(error) })
-      },
-    )
+    handleSubmit(req, res, queuePath, options).catch((error: unknown) => {
+      // The catch-all exists so a throw cannot leave a dev server holding an open socket.
+      sendJson(res, 500, { ok: false, error: messageOf(error) })
+    })
   }
 }
 
@@ -198,8 +234,7 @@ async function handleSubmit(
   req: IncomingMessage,
   res: ServerResponse,
   queuePath: string,
-  gitRoot: string,
-  app: string | undefined,
+  { gitRoot, app, forwarded }: EndpointOptions,
 ): Promise<void> {
   let raw: string
   try {
@@ -248,7 +283,7 @@ async function handleSubmit(
             validation.batch.map((input) =>
               stampAnnotation(input, {
                 note: validation.note,
-                origin: originOf(req),
+                origin: forwarded === true ? forwardedOriginOf(req) : originOf(req),
                 app,
               }),
             ),
@@ -300,6 +335,35 @@ function originOf(req: IncomingMessage): string | undefined {
   const scheme =
     (req.socket as { encrypted?: boolean }).encrypted === true ? 'https' : 'http'
   return `${scheme}://${host}`
+}
+
+/**
+ * {@link originOf} for a request that arrived through Next's rewrite proxy, for J3 (#79). See
+ * {@link EndpointOptions.forwarded} for why `Host` is wrong there.
+ *
+ * **The first value only**, since a forwarded header may be a comma-separated chain and the
+ * first entry is the host the browser dialled.
+ *
+ * **No header means no origin**, never a fallback to `Host`, because under this flag `Host`
+ * is known to name the loopback server.
+ *
+ * **The scheme is `http` unless `x-forwarded-proto` says `https`.** Next 16's proxy sends no
+ * such header, so `next dev --experimental-https` records `http`. The socket cannot help
+ * either, since it is the proxy's plain connection to the loopback server. The field is
+ * descriptive, and a wrong scheme on a correct host still names the right dev server.
+ */
+function forwardedOriginOf(req: IncomingMessage): string | undefined {
+  const host = firstValue(req.headers['x-forwarded-host'])
+  if (host === undefined) return undefined
+
+  const proto = firstValue(req.headers['x-forwarded-proto'])
+  return `${proto === 'https' ? 'https' : 'http'}://${host}`
+}
+
+function firstValue(header: string | string[] | undefined): string | undefined {
+  const joined = Array.isArray(header) ? header.join(',') : header
+  const first = joined?.split(',')[0]?.trim()
+  return first === undefined || first === '' ? undefined : first
 }
 
 /** Thrown past the byte cap so the caller can answer 413 rather than guess. */

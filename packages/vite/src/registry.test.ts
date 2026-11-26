@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { UNBUILT_CORE_WARNING } from 'dogear-host'
 import { readRegistry, registryKey, registryPath } from 'dogear-queue'
 import type { Plugin, ViteDevServer } from 'vite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { UNBUILT_CORE_WARNING } from './client.js'
 import { dogear } from './index.js'
 
 /**

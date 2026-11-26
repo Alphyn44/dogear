@@ -27,9 +27,9 @@ import { execFileSync } from 'node:child_process'
 /**
  * Run git and report its exit status, or `undefined` if it could not be run at all.
  *
- * `stdio: 'ignore'` on all three: `check-ignore -q` is silent by contract but
- * `ls-files --error-unmatch` writes to stderr on the ordinary not-tracked path, and that
- * text is a diagnostic for a human running git by hand, not for someone running init.
+ * `stdio: 'ignore'` on all three: `ls-files --error-unmatch` writes to stderr on the
+ * ordinary not-tracked path, and that text is a diagnostic for a human running git by hand,
+ * not for someone running init. {@link ignored} reads stdout, so it spawns git itself.
  */
 function status(root: string, args: readonly string[]): number | undefined {
   try {
@@ -44,24 +44,53 @@ function status(root: string, args: readonly string[]): number | undefined {
 }
 
 /**
- * Would git ignore `path`? `undefined` when git could not answer.
+ * Which of `paths` would git ignore? `undefined` when git could not answer.
  *
- * `path` is repository-relative and **forward-slashed**, which git accepts on every
+ * Each path is repository-relative and **forward-slashed**, which git accepts on every
  * platform — `cwd` is the repository root, so a Windows-style path would still work, but
  * the same string is also written into `.gitignore`, where forward slashes are the only
  * correct form.
  *
- * `--` separates it from the flags. The paths involved are compile-time constants today,
- * so nothing can start with a dash; the separator is there so that stays true of a caller
- * this file has not met.
+ * **Several paths, one process** (#87). The `.gitignore` step asks about the queue and the
+ * config on every init, and a git process costs around 40ms on Windows, so the two
+ * questions share one. That was worth doing for the test suite, which runs init hundreds of
+ * times; for a user it is one process fewer.
+ *
+ * The paths go in on stdin, where git never reads one as a flag. The paths involved are
+ * compile-time constants today, so nothing can start with a dash, and that stays true of a
+ * caller this file has not met.
  */
+export function ignored(
+  root: string,
+  paths: readonly string[],
+): ReadonlySet<string> | undefined {
+  // Nothing to ask, so no process to start.
+  if (paths.length === 0) return new Set()
+
+  try {
+    // 0 = at least one path is ignored, and stdout lists which. `-z` separates the paths with
+    // NULs in both directions rather than quoting them, so the names come back exactly as they
+    // were given, and git accepts it only alongside `--stdin`: with the paths as arguments it
+    // exits 128. stderr stays ignored for the reason {@link status} gives.
+    const listed = execFileSync('git', ['check-ignore', '--stdin', '-z'], {
+      cwd: root,
+      input: paths.map((path) => `${path}\0`).join(''),
+      stdio: ['pipe', 'pipe', 'ignore'],
+      windowsHide: true,
+      encoding: 'utf8',
+    })
+
+    return new Set(listed.split('\0').filter((path) => path !== ''))
+  } catch (error) {
+    // 1 = none are ignored. 128 = fatal, and a git that could not be spawned has no status at
+    // all: both are "git could not answer", which is not the same as "no".
+    return (error as { status?: unknown }).status === 1 ? new Set() : undefined
+  }
+}
+
+/** Would git ignore `path`? {@link ignored} for one path. */
 export function isIgnored(root: string, path: string): boolean | undefined {
-  // 0 = at least one path is ignored, 1 = none are, 128 = fatal. `-q` suppresses the
-  // listing, which we would only throw away.
-  const code = status(root, ['check-ignore', '-q', '--', path])
-  if (code === 0) return true
-  if (code === 1) return false
-  return undefined
+  return ignored(root, [path])?.has(path)
 }
 
 /**
@@ -81,9 +110,12 @@ export function isTracked(root: string, path: string): boolean | undefined {
 
 /** What ./gitignore.ts needs from git, as a type, so a test can supply its own. */
 export interface GitQueries {
-  readonly isIgnored: (root: string, path: string) => boolean | undefined
+  readonly ignored: (
+    root: string,
+    paths: readonly string[],
+  ) => ReadonlySet<string> | undefined
   readonly isTracked: (root: string, path: string) => boolean | undefined
 }
 
 /** The real thing. Tests build a `GitQueries` by hand to reach the degraded path. */
-export const git: GitQueries = { isIgnored, isTracked }
+export const git: GitQueries = { ignored, isTracked }

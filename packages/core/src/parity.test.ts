@@ -3,17 +3,18 @@ import { describe, expect, it } from 'vitest'
 // The one place in this package allowed to reach into another package's source, for the
 // reason packages/cli/src/parity.test.ts states: test files are not a tsup entry and are
 // excluded from declaration emit, so the boundary that keeps src/ from importing across
-// packages does not apply here — and going through the package name would resolve to vite's
-// dist/ and make `npm test` depend on a prior build.
+// packages does not apply here. Since J2 (#78) the transform lives in dogear-host, which both
+// hosts inline, so this one copy is what each of them stamps.
 import {
-  COMPONENT_ATTRIBUTE as COMPONENT_ATTRIBUTE_IN_VITE,
-  SOURCE_ATTRIBUTE as SOURCE_ATTRIBUTE_IN_VITE,
-} from '../../vite/src/stamp.js'
+  COMPONENT_ATTRIBUTE as COMPONENT_ATTRIBUTE_IN_HOST,
+  SOURCE_ATTRIBUTE as SOURCE_ATTRIBUTE_IN_HOST,
+} from '../../host/src/stamp.js'
 import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE } from './sites.js'
 
 /**
- * The writer is `dogear-vite`'s JSX transform; the reader is this package's `collectSites`.
- * They cannot import each other — core is framework-agnostic and knows nothing about Vite,
+ * The writer is dogear-host's JSX transform, inlined into both hosts; the reader is this
+ * package's `collectSites`. They cannot import each other — core is framework-agnostic and
+ * knows nothing about either host,
  * which is the same constraint that makes ./submit.ts carry its own `PROTOCOL_VERSION`. So
  * the attribute names exist twice.
  *
@@ -27,8 +28,8 @@ import { COMPONENT_ATTRIBUTE, SOURCE_ATTRIBUTE } from './sites.js'
  */
 
 describe('the source attributes read by dogear-core', () => {
-  it('agree with the ones dogear-vite stamps', () => {
-    expect(SOURCE_ATTRIBUTE).toBe(SOURCE_ATTRIBUTE_IN_VITE)
-    expect(COMPONENT_ATTRIBUTE).toBe(COMPONENT_ATTRIBUTE_IN_VITE)
+  it('agree with the ones the hosts stamp', () => {
+    expect(SOURCE_ATTRIBUTE).toBe(SOURCE_ATTRIBUTE_IN_HOST)
+    expect(COMPONENT_ATTRIBUTE).toBe(COMPONENT_ATTRIBUTE_IN_HOST)
   })
 })

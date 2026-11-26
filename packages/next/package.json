@@ -1,0 +1,45 @@
+{
+  "name": "dogear-next",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "Dev-only Next.js config wrapper for dogear. Stamps source attributes, injects the overlay, serves the endpoint.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alphyn44/dogear.git",
+    "directory": "packages/next"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "next": "^16.0.0"
+  },
+  "devDependencies": {
+    "dogear-host": "*",
+    "dogear-queue": "*",
+    "next": "^16.4.6",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "dependencies": {
+    "dogear-core": "^0.2.0",
+    "magic-string": "^0.30.21",
+    "oxc-parser": "^0.152.0",
+    "picomatch": "^4.0.7"
+  }
+}
